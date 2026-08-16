@@ -1,0 +1,7 @@
+# 备用宿主挂载层：正常路径是 study preset 内的插件行
+# （工具注册进 preset 作用域，不污染其他 agent 的工具目录）。
+# 只有当 preset 行无法解析包名时，才把本包加入 profile 的 bundles，
+# 走这里的宿主行（代价：card_* 工具对所有 agent 全局可见）。
+- insert:
+    - id: dsh-study-buddy
+      name: dsh-study-buddy

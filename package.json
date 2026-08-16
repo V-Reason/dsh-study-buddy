@@ -1,0 +1,34 @@
+{
+  "name": "dsh-study-buddy",
+  "description": "DSH 通用学习 Agent 卡片库插件：Obsidian vault 全库检索、原子卡片落盘、增量更新、MOC 与学习进度",
+  "version": "0.2.0",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.21.0",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "dsh.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "pnpm run typecheck && pnpm run test && pnpm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

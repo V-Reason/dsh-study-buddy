@@ -1,0 +1,6 @@
+# 统一行尾：仓库内一律 LF
+* text=auto eol=lf
+
+# 二进制
+*.png binary
+*.jpg binary

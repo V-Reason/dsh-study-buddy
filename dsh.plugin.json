@@ -1,0 +1,9 @@
+{
+  "name": "dsh-study-buddy",
+  "description": "通用学习 Agent 卡片库插件：Obsidian vault 检索、原子卡片落盘、增量更新、MOC 与学习进度",
+  "version": "0.2.0",
+  "entry": {
+    "name": "dsh-study-buddy",
+    "inject": ["tools"]
+  }
+}
