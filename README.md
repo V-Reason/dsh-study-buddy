@@ -76,7 +76,7 @@ ID: 202608161430_ab12
 
 ```powershell
 # 1. 克隆并构建插件
-git clone https://github.com/<你的用户名>/dsh-study-buddy.git
+git clone https://github.com/V-Reason/dsh-study-buddy.git
 cd dsh-study-buddy
 pnpm install
 pnpm run check          # typecheck + 47 项测试 + 构建 lib/index.js
@@ -157,7 +157,7 @@ dsh-study-buddy/
 
 ## 致谢
 
-- 插件包结构与构建方式参考 [dsh-at-file](https://github.com/…)（MIT）
+- 插件包结构与构建方式参考 [dsh-at-file](https://github.com/omdsh-dev/dsh-at-file)（MIT）
 - 交互设计来自需求文档 `docs/DeepSeekHarness —— 通用学习 Agent.md`
 
 ## License
