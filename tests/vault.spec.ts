@@ -35,7 +35,8 @@ describe('vault', () => {
   test('withinRoot', () => {
     expect(withinRoot(dir, join(dir, 'a/b.md'))).toBe(true)
     expect(withinRoot(dir, join(dir, '..', 'escape.md'))).toBe(false)
-    expect(withinRoot(dir, 'T:/other.md')).toBe(false)
+    // 与根目录同级的文件（跨平台写法；Windows 盘符路径在 Linux 上不成立）
+    expect(withinRoot(dir, join(tmpdir(), 'other.md'))).toBe(false)
   })
 
   test('cardDirForMappingAndFallback', () => {

@@ -16,7 +16,8 @@ const base: CardInput = {
 
 describe('card', () => {
   test('generateIdFormatAndUniqueness', () => {
-    const now = new Date('2026-08-16T14:30:00+08:00')
+    // 用本地时间构造，避免 CI（UTC）与开发机时区差异导致时间戳偏移
+    const now = new Date(2026, 7, 16, 14, 30)
     const ids = new Set(Array.from({ length: 20 }, () => generateId(now)))
     expect(ids.size).toBe(20)
     for (const id of ids) {

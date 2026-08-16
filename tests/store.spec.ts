@@ -85,9 +85,10 @@ describe('VaultStore 端到端', () => {
     const file2 = await readFile(join(dir, '游戏开发/图形学/光栅化.md'), 'utf8')
     expect(file2).toContain('- 前置：')
 
-    // MOC
+    // MOC（日期不硬编码，避免跨时区 CI 漂移）
     const moc = await store.moc({ title: '本次学习目录', cardIds: [id, id2] })
-    expect(moc).toContain('MOC 已写入：目录/2026-08-16_本次学习目录.md')
+    expect(moc).toContain('MOC 已写入：目录/')
+    expect(moc).toContain('_本次学习目录.md')
     expect(moc).toContain('## 图形学与渲染')
     expect(moc).toContain('[[光栅化]]')
 
