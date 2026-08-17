@@ -112,7 +112,7 @@ export function indexNote(file: WalkedFile, raw: string): IndexedCard {
   }
 }
 
-const SNIPPET_MAX = 160
+const SNIPPET_MAX = 100
 
 function snippetOf(card: IndexedCard, queryTokens: string[]): string {
   const lines = card.body.split(/\r?\n/)
@@ -200,7 +200,7 @@ export class SearchIndex {
         scores.set(idx, (scores.get(idx) ?? 0) + 1)
       }
     }
-    const limit = opts.limit && opts.limit > 0 ? Math.min(opts.limit, 50) : 8
+    const limit = opts.limit && opts.limit > 0 ? Math.min(opts.limit, 50) : 5
     const hits: SearchHit[] = []
     for (const [idx, score] of scores) {
       if (score <= 0) continue

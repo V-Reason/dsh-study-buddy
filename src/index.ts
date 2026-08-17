@@ -82,13 +82,12 @@ function fmtHits(hits: SearchHit[]): string {
       h.domain ? `领域: ${h.domain}` : `目录: ${h.inferredDomain}`,
       h.status ? `状态: ${h.status}` : '',
       h.source ? `来源: ${h.source}` : '',
-      h.tags.length > 1 ? `标签: ${h.tags.join(' / ')}` : '',
     ].filter(Boolean).join('，')
+    const def = h.definition ? `- 定义：${h.definition.length > 40 ? `${h.definition.slice(0, 40)}…` : h.definition}` : ''
     return [
       `### ${h.title}${id}`,
       meta ? `- ${meta}` : '',
-      h.definition ? `- 定义：${h.definition}` : '',
-      `- 路径：${h.rel.replace(/\\/g, '/')}`,
+      def,
       `- 片段：${h.snippet}`,
     ].filter(Boolean).join('\n')
   })
@@ -149,9 +148,9 @@ export class VaultStore {
     const index = await this.refresh()
     const hits = index.search(query, opts)
     if (hits.length === 0) {
-      return `未命中任何卡片（共检索 vault 笔记 ${index.size} 篇）。可换关键词再试；若确为新概念，可直接进入讲解，归档时新建卡片。`
+      return `未命中（共检索 ${index.size} 篇）。可换词再试；新概念直接进入讲解，归档时新建卡片。`
     }
-    return `检索到 ${hits.length} 条候选（vault 共 ${index.size} 篇笔记）：\n\n${fmtHits(hits)}`
+    return `命中 ${hits.length}（共 ${index.size} 篇）：\n\n${fmtHits(hits)}`
   }
 
   async get(ref: string): Promise<string> {
@@ -249,31 +248,26 @@ export class VaultStore {
 }
 
 function fmtProgress(state: ProgressState): string {
-  const lines = [
-    `当前资料：${state.currentMaterial || '（未开始）'}`,
-    `当前小节：${state.currentSection || '（未记录）'}`,
-    `未答追问：${state.pendingQuestions?.length ? `\n${state.pendingQuestions.map((q) => `  - ${q}`).join('\n')}` : '（无）'}`,
-    `本次触及卡片：${state.touchedCardIds?.length ? state.touchedCardIds.join('、') : '（无）'}`,
-    `更新时间：${state.updatedAt || '（未记录）'}`,
-  ]
-  return lines.join('\n')
+  const pos = [state.currentMaterial || '（未开始）', state.currentSection || ''].filter(Boolean).join(' / ')
+  const q = state.pendingQuestions?.length ? state.pendingQuestions.join('；') : '无'
+  const c = state.touchedCardIds?.length ? state.touchedCardIds.join('、') : '无'
+  return `位置：${pos}\n追问：${q}\n卡片：${c}`
 }
 
-function buildToolDefs(store: VaultStore): ToolDef[] {
+export function buildToolDefs(store: VaultStore): ToolDef[] {
   return [
     {
       name: 'card_search',
       description:
-        '在用户的 Obsidian vault 全库检索卡片与笔记（含没有 frontmatter 的旧笔记，按标题/正文索引）。'
-        + '在【摄入新资料前】【引用现有卡片前】【判断是否需要增量更新前】必须先调用，检查重叠与冲突。'
-        + '返回候选卡片的标题/ID/领域/状态/来源/定义摘要/路径/命中片段；插件负责召回，语义判断由你完成。',
+        '全库检索 vault 卡片与笔记（含旧笔记）。摄入新资料、引用旧卡、增量更新判断前必查重叠。'
+        + '返回候选的标题/ID/领域/状态/来源/定义/片段；召回由插件做，语义判断由你完成。',
       parameters: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: '检索词：概念名、术语、标题片段（中文/英文均可）' },
-          domain: { type: 'string', description: '按领域过滤（如 图形学与渲染、数据结构与算法）' },
-          status: { type: 'string', description: '按状态过滤：草稿 / 已确认 / 需更新' },
-          limit: { type: 'number', description: '最多返回条数，默认 8' },
+          query: { type: 'string', description: '检索词（概念/术语/标题片段）' },
+          domain: { type: 'string', description: '领域过滤（如 图形学）' },
+          status: { type: 'string', description: '状态过滤：草稿/已确认/需更新' },
+          limit: { type: 'number', description: '返回条数，默认 5' },
         },
         required: ['query'],
       },
@@ -287,11 +281,11 @@ function buildToolDefs(store: VaultStore): ToolDef[] {
     },
     {
       name: 'card_get',
-      description: '按 ID、标题或相对路径读取 vault 中一张卡片的完整原文。需要贴整卡给用户或做增量更新前使用。',
+      description: '按 ID、标题或路径读取一张卡片的完整原文（贴整卡、增量更新前用）。',
       parameters: {
         type: 'object',
         properties: {
-          ref: { type: 'string', description: '卡片 ID（如 202608161430_ab12）、标题或相对路径/文件名' },
+          ref: { type: 'string', description: '卡片 ID、标题或相对路径/文件名' },
         },
         required: ['ref'],
       },
@@ -301,11 +295,11 @@ function buildToolDefs(store: VaultStore): ToolDef[] {
     },
     {
       name: 'card_id',
-      description: '生成原子卡片 ID（格式 YYYYMMDDHHmm_随机4位）。归档前可先取号，便于讲解正文中提前引用。',
+      description: '生成卡片 ID（YYYYMMDDHHmm_随机4位）。',
       parameters: {
         type: 'object',
         properties: {
-          count: { type: 'number', description: '生成数量，默认 1，上限 20' },
+          count: { type: 'number', description: '数量，默认 1，上限 20' },
         },
       },
       output,
@@ -318,29 +312,24 @@ function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'card_create',
       description:
-        '把一张原子卡片写入用户 Obsidian vault 的对应分类目录（按"领域→目录"映射；未映射领域落入未分类目录）。'
-        + '知识即卡片：卡片与普通笔记同库，不另设卡片库。自动生成唯一 ID、校验格式、写入 frontmatter'
-        + '（ID/标题/领域/来源/状态）；正文 = 一句话定义（裸引用块）+ 自由 ### 小节 + 关联卡片（前置/后续/易混淆）。'
-        + '返回整卡 Markdown 供聊天展示与用户复制替换。',
+        '把一张原子卡片写入 vault 对应分类目录（领域→目录映射；未映射落"未分类"）。知识即卡片：与旧笔记同库。'
+        + '自动生成唯一 ID、写 frontmatter（ID/标题/领域/来源/状态）；正文=裸引用块定义+自由 ### 小节+关联卡片（前置/后续/易混淆），格式见 card-format 技能。返回整卡。',
       parameters: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: '核心概念名称，如"光线与表面的两种交互：散射与吸收"' },
-          domain: { type: 'string', description: '领域键，决定落盘目录（见插件配置的领域映射表，如 图形学/操作系统/C++）' },
-          tags: {
-            type: 'array', items: { type: 'string' },
-            description: '额外中文领域标签（如 线性代数、URP），写入 frontmatter 领域行',
-          },
-          source: { type: 'string', description: '资料名称，如"《Unity Shader入门精要》6.1.2"或"用户上传截图"' },
-          status: { type: 'string', description: '草稿 / 已确认 / 需更新' },
-          definition: { type: 'string', description: '一句话定义，不超过 30 字，讲清概念本质' },
+          title: { type: 'string', description: '概念名称，如"光线与表面的两种交互：散射与吸收"' },
+          domain: { type: 'string', description: '领域键，决定落盘目录' },
+          tags: { type: 'array', items: { type: 'string' }, description: '额外中文领域标签' },
+          source: { type: 'string', description: '资料名称' },
+          status: { type: 'string', description: '草稿/已确认/需更新' },
+          definition: { type: 'string', description: '一句话定义 ≤30 字' },
           content: {
             type: 'string',
-            description: '正文（Markdown）：自由 ### 小节组织推导/公式/表格；代码块必须标注语言；公式用块级 LaTeX 并编号',
+            description: '正文 Markdown（### 小节/表格；公式块级 LaTeX 编号；代码标语言）',
           },
           links: {
             type: 'object',
-            description: '关联卡片（可选）。条目可为卡片 ID/标题，也可预格式化如"`漫反射模型`（Lambert）"',
+            description: '关联卡片（可预格式化，如"`漫反射模型`（Lambert）"）',
             properties: {
               prev: { type: 'array', items: { type: 'string' }, description: '前置' },
               next: { type: 'array', items: { type: 'string' }, description: '后续' },
@@ -371,23 +360,21 @@ function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'card_update',
       description:
-        '增量更新现有卡片（活笔记机制）。三种模式：append-version=内容补充不推翻旧结论时，尾部新增"版本更新（来源）"章节；'
-        + 'errata=新内容推翻旧结论时，保留旧内容并新增"勘误"章节（changes 需含纠正原因）；'
-        + 'replace=整卡替换（旧正文自动压入"历史版本"折叠块）。'
-        + '先给用户差异对比与建议，用户确认后再调用；最终更新决定权在用户。返回更新后整卡。',
+        '增量更新：append-version=尾部加"版本更新（来源）"（补充不推翻旧结论）；errata=保留旧内容加"勘误"（changes 含纠正原因）；'
+        + 'replace=整卡替换（旧版入历史折叠块）。先给用户新旧对比、确认后才调用；决定权在用户。返回整卡。',
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: '目标卡片 ID（或标题/路径）' },
-          mode: { type: 'string', description: 'append-version / errata / replace' },
-          changes: { type: 'string', description: 'append-version 或 errata 追加的 Markdown 内容（errata 需含纠正原因）' },
-          source: { type: 'string', description: '版本更新来源（append-version 用，如"GAMES101 L05"）' },
-          title: { type: 'string', description: 'replace 模式：新标题' },
-          domain: { type: 'string', description: 'replace 模式：领域键' },
-          tags: { type: 'array', items: { type: 'string' }, description: 'replace 模式：额外领域标签' },
-          status: { type: 'string', description: 'replace 模式：草稿 / 已确认 / 需更新' },
-          definition: { type: 'string', description: 'replace 模式：一句话定义 ≤30 字' },
-          content: { type: 'string', description: 'replace 模式：新核心内容 Markdown' },
+          id: { type: 'string', description: '卡片 ID/标题/路径' },
+          mode: { type: 'string', description: 'append-version/errata/replace' },
+          changes: { type: 'string', description: 'append/errata 的追加内容' },
+          source: { type: 'string', description: '版本更新来源（append-version 用）' },
+          title: { type: 'string', description: 'replace：新标题' },
+          domain: { type: 'string', description: 'replace：领域键' },
+          tags: { type: 'array', items: { type: 'string' }, description: 'replace：额外领域标签' },
+          status: { type: 'string', description: 'replace：草稿/已确认/需更新' },
+          definition: { type: 'string', description: 'replace：一句话定义 ≤30 字' },
+          content: { type: 'string', description: 'replace：新正文 Markdown' },
         },
         required: ['id', 'mode'],
       },
@@ -415,13 +402,13 @@ function buildToolDefs(store: VaultStore): ToolDef[] {
     },
     {
       name: 'card_link',
-      description: '维护卡片间关联（前置 / 后续 / 易混淆），双向更新两卡的"关联卡片"段。',
+      description: '双向维护两卡关联（前置/后续/易混淆）。',
       parameters: {
         type: 'object',
         properties: {
-          fromId: { type: 'string', description: '源卡片 ID/标题/路径' },
-          toId: { type: 'string', description: '目标卡片 ID/标题/路径' },
-          kind: { type: 'string', description: 'prev=toId 是 fromId 的前置；next=toId 是 fromId 的后续；conflict=易混淆' },
+          fromId: { type: 'string', description: '卡片 ID/标题/路径' },
+          toId: { type: 'string', description: '卡片 ID/标题/路径' },
+          kind: { type: 'string', description: 'prev=toId 是 fromId 的前置 / next=后续 / conflict=易混淆' },
         },
         required: ['fromId', 'toId', 'kind'],
       },
@@ -435,14 +422,13 @@ function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'card_moc',
       description:
-        '生成知识目录 MOC（按领域分组 + Obsidian wikilink 卡片列表），写入 vault 的 MOC 目录并返回文本。'
-        + '笔记归档收尾时调用：把本次会话新生成/更新的卡片 ID 传进来。',
+        '生成 MOC（领域分组 + Obsidian wikilink）写入"目录"目录并返回文本。归档收尾时用：传本次涉及的卡片 ID。',
       parameters: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: 'MOC 标题，默认"知识目录_日期"' },
-          cardIds: { type: 'array', items: { type: 'string' }, description: '本次涉及的卡片 ID/标题列表' },
-          domain: { type: 'string', description: '可选：只收录该领域的卡片' },
+          title: { type: 'string', description: 'MOC 标题（默认 知识目录_日期）' },
+          cardIds: { type: 'array', items: { type: 'string' }, description: '本次涉及的卡片 ID/标题' },
+          domain: { type: 'string', description: '可选：只收录该领域' },
         },
         required: ['cardIds'],
       },
@@ -456,17 +442,16 @@ function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'study_progress',
       description:
-        '读写学习进度（持久于 vault .study/progress.json，跨会话/重启有效）：当前资料名、当前小节、未答追问队列、本次会话触及的卡片。'
-        + '用户说"接着讲"时先 get 找回断点；新资料开始/小节推进时 set；'
-        + '归档（整理笔记）前必须检查 pendingQuestions——未答追问未清空时先完成问答再归档。',
+        '读写学习进度（持久，跨会话有效）：资料/小节/未答追问/触及卡片。'
+        + '"接着讲"前 get；小节推进 set；归档（整理笔记）前检查 pendingQuestions。',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', description: 'get=读取；set=更新；clear=清空' },
-          material: { type: 'string', description: 'set：当前资料名称' },
-          section: { type: 'string', description: 'set：当前小节' },
-          pendingQuestions: { type: 'array', items: { type: 'string' }, description: 'set：未答追问队列（整体替换）' },
-          touchedCardIds: { type: 'array', items: { type: 'string' }, description: 'set：本次会话触及的卡片 ID（整体替换）' },
+          action: { type: 'string', description: 'get/set/clear' },
+          material: { type: 'string', description: 'set：资料名' },
+          section: { type: 'string', description: 'set：小节' },
+          pendingQuestions: { type: 'array', items: { type: 'string' }, description: 'set：追问队列（整体替换）' },
+          touchedCardIds: { type: 'array', items: { type: 'string' }, description: 'set：触及卡片 ID（整体替换）' },
         },
         required: ['action'],
       },
