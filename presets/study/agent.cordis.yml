@@ -1,9 +1,9 @@
 # The `study` agent preset：苏格拉底式学习伙伴。
 #
-# 在 standard 的基础上裁剪：移除计划模式、子代理与工作流（学习是聊天驱动，
-# 不是工程任务）；保留文件读写、联网搜索、问询确认、目标、压缩与技能体系；
-# 新增 dsh-study-buddy 插件行（原子卡片库 + 学习进度，落盘到用户 Obsidian
-# vault，见插件行 config）与跨会话回忆工具。
+# 在 standard 的基础上裁剪：移除计划模式、子代理、工作流、目标工具与后台
+# 任务控制（学习是聊天驱动，不是工程任务）；保留文件读写、联网搜索、问询
+# 确认、压缩与技能体系；新增 dsh-study-buddy 插件行（原子卡片库 + 学习进度，
+# 落盘到用户 Obsidian vault，见插件行 config）。
 #
 # 学习闭环行为规范在 persona 正文；各阶段的完整模板与细则在
 # preset 自带 skills/（study-loop / card-format / incremental-update /
@@ -76,10 +76,7 @@
   config:
     sampleOverCapGlobResults: false
 
-# ── background jobs ────────────────────────────────────────────────────────
-
-- id: tool-jobs
-  name: '@deepseek-ai/dsh-tool-jobs'
+# 学习会话不需要后台任务与目标工具（T3 精简；/goal 命令与任务注册表仍在宿主）。
 
 # ── skills ──────────────────────────────────────────────────────────────────
 
@@ -92,11 +89,6 @@
 
 - id: tool-skill
   name: '@deepseek-ai/dsh-tool-skill'
-
-# ── goals ───────────────────────────────────────────────────────────────────
-
-- id: tool-goal
-  name: '@deepseek-ai/dsh-tool-goal'
 
 # ── compaction ──────────────────────────────────────────────────────────────
 
