@@ -3,7 +3,7 @@ import { indexNote, SearchIndex, tokenize, tokenizeQuery } from '../src/search.t
 import type { WalkedFile } from '../src/vault.ts'
 
 function file(rel: string): WalkedFile {
-  return { path: `T:/vault/${rel}`, rel, mtimeMs: 1, size: 10 }
+  return { path: `T:/vault/${rel}`, rel, mtimeMs: 1, ctimeMs: 1, size: 10 }
 }
 
 const LEGACY = `> 概念: 迭代器是一种设计模式, 任何类都可以成为迭代器, 其本质是一个指针

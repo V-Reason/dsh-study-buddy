@@ -82,7 +82,11 @@ describe('VaultStore 端到端', () => {
     const id2 = /ID: (\d{12}_[0-9a-f]{4})/.exec(created2.text)![1]
     const linked = await store.link(id, id2, 'next')
     expect(linked).toContain('已建立关联')
+    // 重复关联同一对（如标题变更后）：按 ID 判重，不重复添加
+    const linkedAgain = await store.link(id, id2, 'next')
+    expect(linkedAgain).toContain('已建立关联')
     const file1 = await readFile(join(dir, '游戏开发/图形学/透视投影矩阵的三步分解.md'), 'utf8')
+    expect(file1.match(/- 后续：/g)?.length).toBe(1)
     expect(file1).toContain(`- 后续：光栅化（${id2}）`)
     const file2 = await readFile(join(dir, '游戏开发/图形学/光栅化.md'), 'utf8')
     expect(file2).toContain('- 前置：')
@@ -136,6 +140,12 @@ describe('VaultStore 端到端', () => {
     // remove / clear
     expect(await store.memory('remove', { key: 'prefs' })).toContain('已删除')
     expect(await store.memory('get', { key: 'prefs' })).toContain('无此键')
+    // remove 不存在的键：明确提示，不写盘
+    expect(await store.memory('remove', { key: '不存在的键' })).toContain('无此键')
+    const memFile = join(dir, '.study', 'memory.json')
+    const before = await readFile(memFile, 'utf8')
+    await store.memory('remove', { key: '仍不存在' })
+    expect(await readFile(memFile, 'utf8')).toBe(before)
     await store.memory('clear', {})
     expect(await store.memory('get', {})).toBe('暂无记忆。')
   })
@@ -176,6 +186,35 @@ describe('VaultStore 端到端', () => {
   test('updateRejectsUnknownId', async () => {
     const store = new VaultStore(layout())
     await expect(store.update('不存在', { mode: 'append-version', changes: 'x' })).rejects.toThrow('找不到卡片')
+  })
+
+  test('updateReplacePreservesLinks', async () => {
+    const store = new VaultStore(layout())
+    const created = await store.create({
+      title: '红黑树插入',
+      domain: '数据结构与算法',
+      source: '课件',
+      status: '草稿',
+      definition: '红黑树插入通过变色与旋转维持平衡',
+      content: '插入流程',
+    })
+    const id = /ID: (\d{12}_[0-9a-f]{4})/.exec(created.text)![1]
+    const updated = await store.update(id, {
+      mode: 'replace',
+      card: {
+        title: '红黑树插入（修订版）',
+        domain: '数据结构与算法',
+        source: '课件',
+        status: '已确认',
+        definition: '修订后的定义',
+        content: '新正文',
+        links: { prev: ['二叉查找树'], conflict: ['AVL 树'] },
+      },
+    })
+    expect(updated).toContain('红黑树插入（修订版）')
+    expect(updated).toContain('- 前置：二叉查找树')
+    expect(updated).toContain('- 易混淆：AVL 树')
+    expect(updated).toContain('历史版本') // 旧版保留
   })
 
   test('searchOnMissingVaultThrowsClearError', async () => {

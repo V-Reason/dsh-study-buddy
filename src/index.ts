@@ -14,14 +14,14 @@
 import { promises as fsp } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
-  addLink, applyUpdate, generateId, renderCard, renderMoc, validateCard,
+  addLink, applyUpdate, generateId, renderCard, renderMoc, validateCard, VALID_STATUS,
   type CardInput, type LinkKind, type MocEntry, type UpdatePayload,
 } from './card.ts'
 import { checkMemoryValue, formatMemory, normalizeMemoryKey, readMemory, writeMemory, type MemoryState } from './memory.ts'
 import { indexNote, SearchIndex, type IndexedCard, type SearchHit } from './search.ts'
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
 import {
-  atomicWrite, cardDirFor, mocPathFor, uniqueCardPath, walk, withinRoot,
+  atomicWrite, cardDirFor, mocPathFor, skipSetFor, uniqueCardPath, walk, withinRoot,
   type VaultLayout,
 } from './vault.ts'
 
@@ -39,6 +39,8 @@ export interface StudyConfig {
   mocDir?: string
   /** 领域键 → 落盘目录（相对 vaultRoot），支持多个键别名映射同一目录 */
   domainFolders?: Record<string, string>
+  /** 额外跳过扫描的目录名（相对 vaultRoot 的顶层目录名；内置已跳过 .obsidian/.trash/.study/.git/node_modules） */
+  skipDirs?: string[]
 }
 
 interface ToolDef {
@@ -78,6 +80,7 @@ function normalizeConfig(config: StudyConfig | undefined): VaultLayout {
     fallbackDir: String(config.fallbackDir ?? '未分类').trim() || '未分类',
     mocDir: String(config.mocDir ?? '目录').trim() || '目录',
     domainFolders: config.domainFolders ?? {},
+    skipDirs: Array.isArray(config.skipDirs) ? config.skipDirs.map(String) : [],
   }
 }
 
@@ -127,11 +130,11 @@ export class VaultStore {
     }
   }
 
-  /** 目录 mtime/size 签名变化才重建索引（Obsidian 外部编辑后仍能查到最新内容） */
+  /** 目录 mtime/ctime/size 签名变化才重建索引（Obsidian 外部编辑后仍能查到最新内容） */
   private async refresh(): Promise<SearchIndex> {
     await this.assertVault()
-    const files = await walk(this.layout.vaultRoot)
-    const sig = files.map((f) => `${f.rel}|${f.mtimeMs}|${f.size}`).join('\n')
+    const files = await walk(this.layout.vaultRoot, skipSetFor(this.layout.skipDirs))
+    const sig = files.map((f) => `${f.rel}|${f.mtimeMs}|${f.ctimeMs}|${f.size}`).join('\n')
     if (this.index && sig === this.sig) return this.index
     const cards: IndexedCard[] = []
     for (const f of files) {
@@ -199,10 +202,10 @@ export class VaultStore {
     const from = await this.resolveCard(fromId)
     const to = await this.resolveCard(toId)
     const labelOf = (c: typeof from) => (c.card.id ? `${c.card.title}（${c.card.id}）` : `${c.card.title}（${c.card.rel.replace(/\\/g, '/')}）`)
-    const fromNext = addLink(from.raw, kind, labelOf(to))
+    const fromNext = addLink(from.raw, kind, labelOf(to), to.card.id ?? undefined)
     await atomicWrite(from.card.path, fromNext)
     const reverseKind: LinkKind = kind === 'prev' ? 'next' : kind === 'next' ? 'prev' : 'conflict'
-    const toNext = addLink(to.raw, reverseKind, labelOf(from))
+    const toNext = addLink(to.raw, reverseKind, labelOf(from), from.card.id ?? undefined)
     await atomicWrite(to.card.path, toNext)
     this.sig = null
     const map: Record<LinkKind, string> = { prev: '前置知识', next: '后续延伸', conflict: '冲突/易混淆' }
@@ -286,6 +289,9 @@ export class VaultStore {
     const key = normalizeMemoryKey(fields.key ?? '')
     const next: MemoryState = { notes: { ...current.notes } }
     if (action === 'remove') {
+      if (!Object.prototype.hasOwnProperty.call(next.notes, key)) {
+        return `（无此键：${key}，无需删除）`
+      }
       delete next.notes[key]
       await writeMemory(file, next)
       return `已删除记忆：${key}`
@@ -375,7 +381,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
           domain: { type: 'string', description: '领域键，决定落盘目录' },
           tags: { type: 'array', items: { type: 'string' }, description: '额外中文领域标签' },
           source: { type: 'string', description: '资料名称' },
-          status: { type: 'string', description: '草稿/已确认/需更新' },
+          status: { type: 'string', enum: [...VALID_STATUS], description: '草稿/已确认/需更新' },
           definition: { type: 'string', description: '一句话定义 ≤30 字' },
           content: {
             type: 'string',
@@ -415,7 +421,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       name: 'card_update',
       description:
         '增量更新：append-version=尾部加"版本更新（来源）"（补充不推翻旧结论）；errata=保留旧内容加"勘误"（changes 含纠正原因）；'
-        + 'replace=整卡替换（旧版入历史折叠块）。先给用户新旧对比、确认后才调用；决定权在用户。返回整卡。',
+        + 'replace=整卡替换（旧版入历史折叠块，可传 links 重建关联卡片）。先给用户新旧对比、确认后才调用；决定权在用户。返回整卡。',
       parameters: {
         type: 'object',
         properties: {
@@ -426,9 +432,18 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
           title: { type: 'string', description: 'replace：新标题' },
           domain: { type: 'string', description: 'replace：领域键' },
           tags: { type: 'array', items: { type: 'string' }, description: 'replace：额外领域标签' },
-          status: { type: 'string', description: 'replace：草稿/已确认/需更新' },
+          status: { type: 'string', enum: [...VALID_STATUS], description: 'replace：草稿/已确认/需更新' },
           definition: { type: 'string', description: 'replace：一句话定义 ≤30 字' },
           content: { type: 'string', description: 'replace：新正文 Markdown' },
+          links: {
+            type: 'object',
+            description: 'replace：新关联卡片（可选；不传则新卡无关联小节，旧关联留在历史折叠块）',
+            properties: {
+              prev: { type: 'array', items: { type: 'string' }, description: '前置' },
+              next: { type: 'array', items: { type: 'string' }, description: '后续' },
+              conflict: { type: 'array', items: { type: 'string' }, description: '易混淆' },
+            },
+          },
         },
         required: ['id', 'mode'],
       },
@@ -449,6 +464,13 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
             definition: String(args.definition ?? ''),
             content: String(args.content ?? ''),
             tags: Array.isArray(args.tags) ? args.tags.map(String) : undefined,
+            links: (args.links && typeof args.links === 'object'
+              ? {
+                prev: Array.isArray((args.links as Record<string, unknown>).prev) ? ((args.links as Record<string, unknown>).prev as unknown[]).map(String) : undefined,
+                next: Array.isArray((args.links as Record<string, unknown>).next) ? ((args.links as Record<string, unknown>).next as unknown[]).map(String) : undefined,
+                conflict: Array.isArray((args.links as Record<string, unknown>).conflict) ? ((args.links as Record<string, unknown>).conflict as unknown[]).map(String) : undefined,
+              }
+              : undefined),
           }
         }
         return store.update(String(args.id ?? ''), payload)

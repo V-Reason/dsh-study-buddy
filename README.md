@@ -52,6 +52,7 @@
 
 - 卡片不是数据库记录，就是带 frontmatter 的 Markdown 文件；你在 Obsidian 里改它，插件下次检索即重扫，互不打架
 - 学习进度存于 vault 的 `.study/progress.json`，跨会话、跨重启有效
+- 状态/记忆 JSON 损坏时工具直接报错（fail-loud，不静默降级）：报错含文件名与原因，可手动修复或删除该文件后继续
 - Agent 只能通过 `card_*` 工具操作 vault，写文件采用"临时文件 + rename"原子写，不会写坏一半
 - 插件挂在 preset 作用域内，不污染其他 Agent（standard/cordis 等）的工具目录
 
@@ -152,6 +153,7 @@ Copy-Item -Recurse presets/study "$env:DSH_HOME\.agent-presets\study"
 | `fallbackDir` | `未分类` | 未映射领域的落盘目录 |
 | `mocDir` | `目录` | MOC 知识目录的落盘位置 |
 | `domainFolders` | `{}` | 领域 → vault 内相对目录；支持多键别名指向同一目录 |
+| `skipDirs` | `[]` | 额外跳过扫描的顶层目录名（内置已跳过 `.obsidian`/`.trash`/`.study`/`.git`/`node_modules`） |
 
 预设内另有压缩配置（`compaction-basic` 组）：`thresholdRatio: 0.3`、`retainRatio: 0.15`、`maxTokens: 4096`，并带 `deepseek-v4-flash` / `deepseek-v4-pro` 模型策略。
 

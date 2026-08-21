@@ -52,7 +52,13 @@
 8. `tsconfig.json` 开启 `noUnusedLocals` / `noUnusedParameters`（通过，无存量问题）。
 9. `package.json` 补 `repository` / `engines`（node >=22）。
 
-## 三、后续建议（本期未改，需决策）
+## 三、后续建议（2026-08-21 已全部实施，见提交 health-check follow-ups）
+
+> **跟进**：8 项建议已全部落地——`card_update` replace 支持 `links` 重建关联、`status` schema 加 `enum`
+> 约束、`SKIP_DIRS` 中 `资源` 配置化为 `skipDirs` 键（内置默认移除 vault 特定目录）、`card_link`
+> 按卡片 ID 去重（标题变更后不重复添加）、索引签名加 `ctimeMs`、npm `files` 补 `presets`、
+> `study_memory remove` 对不存在的键不写盘并明确提示、进度/记忆损坏保持 fail-loud 并文档化。
+> 测试 70 → 81（新增 tests/tools.spec.ts 工具 schema 契约测试等）。
 
 | # | 建议 | 影响 | 备注 |
 | :-- | :-- | :-- | :-- |

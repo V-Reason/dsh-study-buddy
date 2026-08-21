@@ -8,8 +8,13 @@ import { randomBytes } from 'node:crypto'
 import { promises as fsp } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, basename } from 'node:path'
 
-/** 扫描时跳过的目录 */
-export const SKIP_DIRS = new Set(['.obsidian', '.trash', '.study', '.git', 'node_modules', '资源'])
+/** 扫描时跳过的通用目录（vault 特定目录如"资源"由 config.skipDirs 配置） */
+export const SKIP_DIRS = new Set(['.obsidian', '.trash', '.study', '.git', 'node_modules'])
+
+/** 合并内置通用目录与用户配置的额外跳过目录 */
+export function skipSetFor(extra?: string[]): Set<string> {
+  return new Set([...SKIP_DIRS, ...(extra ?? [])])
+}
 
 /** Windows 非法文件名字符清洗 + 长度上限 */
 export function sanitizeFilename(title: string): string {
@@ -56,11 +61,13 @@ export interface WalkedFile {
   path: string
   rel: string
   mtimeMs: number
+  /** inode 变更时间（rename/元数据变更也触发；与 mtime 互补防同毫秒同大小漏检） */
+  ctimeMs: number
   size: number
 }
 
-/** 递归收集 vault 下所有 .md（跳过 SKIP_DIRS） */
-export async function walk(root: string): Promise<WalkedFile[]> {
+/** 递归收集 vault 下所有 .md（跳过 skip 集合，默认内置通用目录） */
+export async function walk(root: string, skip: Set<string> = skipSetFor()): Promise<WalkedFile[]> {
   const out: WalkedFile[] = []
   async function rec(dir: string): Promise<void> {
     let entries
@@ -72,12 +79,12 @@ export async function walk(root: string): Promise<WalkedFile[]> {
     for (const ent of entries) {
       const full = join(dir, ent.name)
       if (ent.isDirectory()) {
-        if (SKIP_DIRS.has(ent.name)) continue
+        if (skip.has(ent.name)) continue
         await rec(full)
       } else if (ent.isFile() && ent.name.toLowerCase().endsWith('.md')) {
         try {
           const st = await fsp.stat(full)
-          out.push({ path: full, rel: relative(root, full), mtimeMs: st.mtimeMs, size: st.size })
+          out.push({ path: full, rel: relative(root, full), mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, size: st.size })
         } catch {
           // 文件在遍历中被删/锁定：跳过
         }
@@ -94,6 +101,8 @@ export interface VaultLayout {
   fallbackDir: string
   mocDir: string
   domainFolders?: Record<string, string>
+  /** 额外跳过扫描的顶层目录名（与内置通用目录合并） */
+  skipDirs?: string[]
 }
 
 /** 解析某领域卡片的落盘目录：优先映射表，未映射落入 fallbackDir/<领域名> */

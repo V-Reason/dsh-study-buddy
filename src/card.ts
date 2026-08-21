@@ -148,11 +148,15 @@ const LINK_LABELS: Record<LinkKind, string> = {
   conflict: '易混淆',
 }
 
-/** 在卡片正文维护关联卡片：新增 `- 标签：目标` 行；目标已存在则跳过。保留原 frontmatter。 */
-export function addLink(raw: string, kind: LinkKind, targetLabel: string): string {
+/**
+ * 在卡片正文维护关联卡片：新增 `- 标签：目标` 行；目标已存在则跳过。保留原 frontmatter。
+ * 去重规则：有 targetId 时按 `（ID）` 判重（标题变更后仍能识别已关联）；
+ * 旧笔记无 ID 时回退为按目标标签文本判重。
+ */
+export function addLink(raw: string, kind: LinkKind, targetLabel: string, targetId?: string): string {
   const label = LINK_LABELS[kind]
   // 目标已出现过（无论挂在哪个标签下）就不再重复
-  if (raw.includes(targetLabel)) return raw
+  if (targetId ? raw.includes(`（${targetId}）`) : raw.includes(targetLabel)) return raw
 
   const parsed = parseFrontmatter(raw)
   const fm = raw.slice(0, raw.length - parsed.body.length)

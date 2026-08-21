@@ -79,12 +79,19 @@ describe('card', () => {
     const raw = renderCard({ ...base, id: 'y' })
     const result = applyUpdate(raw, 'y', {
       mode: 'replace',
-      card: { ...base, title: '透视投影矩阵（修订版）', status: '已确认', definition: '修订后的三十字内定义' },
+      card: {
+        ...base, title: '透视投影矩阵（修订版）', status: '已确认',
+        definition: '修订后的三十字内定义', links: { prev: ['正交投影'], next: ['光栅化'] },
+      },
     })
     expect(result.text).toContain('透视投影矩阵（修订版）')
     expect(result.text).toContain('历史版本')
     expect(result.text).toContain('透视投影矩阵可拆解') // 旧正文进折叠块
     expect(result.text).toContain('状态: 已确认')
+    // replace 可重建关联卡片（links 透传渲染）
+    expect(result.text).toContain('### 关联卡片')
+    expect(result.text).toContain('- 前置：正交投影')
+    expect(result.text).toContain('- 后续：光栅化')
   })
 
   test('applyUpdateReplaceRejectsInvalidCard', () => {
@@ -121,6 +128,21 @@ describe('card', () => {
     const raw = '# 标题\n- 前置：已有（id3）'
     const text = addLink(raw, 'prev', '已有（id3）')
     expect(text.match(/已有（id3）/g)?.length).toBe(1)
+  })
+
+  test('addLinkDedupesByIdAcrossTitleChanges', () => {
+    const raw = '# 标题\n\n### 关联卡片\n- 后续：旧标题（202608161430_ab12）\n'
+    // 目标卡标题已改，但 ID 相同：按 ID 判重，不重复添加
+    const text = addLink(raw, 'next', '新标题（202608161430_ab12）', '202608161430_ab12')
+    expect(text.match(/- 后续：/g)?.length).toBe(1)
+    expect(text).toContain('旧标题（202608161430_ab12）')
+  })
+
+  test('addLinkFallsBackToLabelDedupWithoutId', () => {
+    // 旧笔记无 ID：回退为按标签文本判重
+    const raw = '# 标题\n\n### 关联卡片\n- 后续：旧笔记（计算机/图形学/旧.md）\n'
+    const text = addLink(raw, 'next', '旧笔记（计算机/图形学/旧.md）')
+    expect(text.match(/- 后续：/g)?.length).toBe(1)
   })
 
   test('addLinkPreservesFrontmatter', () => {

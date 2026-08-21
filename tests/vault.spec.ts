@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import {
-  atomicWrite, cardDirFor, mocPathFor, sanitizeFilename, uniqueCardPath, walk, withinRoot,
+  atomicWrite, cardDirFor, mocPathFor, sanitizeFilename, skipSetFor, uniqueCardPath, walk, withinRoot,
   type VaultLayout,
 } from '../src/vault.ts'
 
@@ -74,6 +74,24 @@ describe('vault', () => {
     await writeFile(join(dir, '计算机/图形学/卡片.md'), 'x')
     const files = await walk(dir)
     expect(files.map((f) => f.rel.replace(/\\/g, '/'))).toEqual(['计算机/图形学/卡片.md'])
+  })
+
+  test('walkSkipsCustomDirsViaConfig', async () => {
+    await mkdir(join(dir, '资源'), { recursive: true })
+    await mkdir(join(dir, '计算机'), { recursive: true })
+    await writeFile(join(dir, '资源/素材说明.md'), 'x')
+    await writeFile(join(dir, '计算机/卡片.md'), 'x')
+    // 默认不再跳过"资源"（vault 特定目录由 config.skipDirs 决定）
+    const def = await walk(dir)
+    expect(def.map((f) => f.rel.replace(/\\/g, '/'))).toEqual(expect.arrayContaining(['资源/素材说明.md']))
+    // 配置 skipDirs 后跳过
+    const custom = await walk(dir, skipSetFor(['资源']))
+    expect(custom.map((f) => f.rel.replace(/\\/g, '/'))).toEqual(['计算机/卡片.md'])
+    // 内置通用目录始终跳过
+    await mkdir(join(dir, 'node_modules'), { recursive: true })
+    await writeFile(join(dir, 'node_modules/x.md'), 'x')
+    const merged = await walk(dir, skipSetFor(['资源']))
+    expect(merged.map((f) => f.rel.replace(/\\/g, '/'))).toEqual(['计算机/卡片.md'])
   })
 
   test('mocPathForUnderMocDir', () => {
