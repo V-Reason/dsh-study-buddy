@@ -106,6 +106,46 @@ describe('VaultStore 端到端', () => {
     expect(await store.progress('get', {})).toContain('（未开始）')
   })
 
+  test('memory 与 progress 相互独立：清空进度不影响记忆', async () => {
+    const store = new VaultStore(layout())
+
+    // 记忆：set → get → append → remove → clear
+    expect(await store.memory('get', {})).toBe('暂无记忆。')
+    const set = await store.memory('set', { key: 'prefs', value: '讲解多用 C++ 例子' })
+    expect(set).toContain('已记忆 prefs')
+    expect(set).toContain('记忆（1 条）')
+    await store.memory('set', { key: 'lastSummary', value: '讲了透视投影矩阵' })
+    const full = await store.memory('get', {})
+    expect(full).toContain('上次小结：讲了透视投影矩阵')
+    expect(full.indexOf('上次小结')).toBeLessThan(full.indexOf('prefs'))
+    expect(await store.memory('get', { key: 'prefs' })).toBe('prefs：讲解多用 C++ 例子')
+    expect(await store.memory('get', { key: '不存在' })).toContain('无此键')
+
+    // append 追加新行
+    await store.memory('append', { key: 'prefs', value: '公式少放' })
+    expect(await store.memory('get', { key: 'prefs' })).toContain('讲解多用 C++ 例子\n公式少放')
+
+    // 清空进度（study_progress clear）不动记忆
+    await store.progress('set', { material: 'GAMES101 L04' })
+    await store.progress('clear', {})
+    expect(await store.progress('get', {})).toContain('（未开始）')
+    expect(await store.memory('get', {})).toContain('上次小结：讲了透视投影矩阵')
+
+    // remove / clear
+    expect(await store.memory('remove', { key: 'prefs' })).toContain('已删除')
+    expect(await store.memory('get', { key: 'prefs' })).toContain('无此键')
+    await store.memory('clear', {})
+    expect(await store.memory('get', {})).toBe('暂无记忆。')
+  })
+
+  test('memory 拒绝非法键与超长值', async () => {
+    const store = new VaultStore(layout())
+    await expect(store.memory('set', { key: '  ', value: 'x' })).rejects.toThrow('不能为空')
+    await expect(store.memory('set', { key: 'k'.repeat(65), value: 'x' })).rejects.toThrow('过长')
+    await expect(store.memory('set', { key: 'prefs', value: 'x'.repeat(4001) })).rejects.toThrow('过长')
+    await expect(store.memory('bogus', {})).rejects.toThrow('未知 action')
+  })
+
   test('createFallsBackForUnmappedDomain', async () => {
     const store = new VaultStore(layout())
     const created = await store.create({

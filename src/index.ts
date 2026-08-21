@@ -16,6 +16,7 @@ import {
   addLink, applyUpdate, generateId, renderCard, renderMoc, validateCard,
   type CardInput, type LinkKind, type MocEntry, type UpdatePayload,
 } from './card.ts'
+import { checkMemoryValue, formatMemory, normalizeMemoryKey, readMemory, writeMemory, type MemoryState } from './memory.ts'
 import { indexNote, SearchIndex, type IndexedCard, type SearchHit } from './search.ts'
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
 import {
@@ -52,7 +53,8 @@ interface ToolDef {
 }
 
 interface PluginContext {
-  tools?: { register: (def: ToolDef) => unknown }
+  tools?: { register: (def: ToolDef) => () => void }
+  effect?: (callback: () => () => unknown, label?: string) => unknown
 }
 
 const renderText = (_args: unknown, value: string) => [{ type: 'text', text: value }]
@@ -63,8 +65,11 @@ function normalizeConfig(config: StudyConfig | undefined): VaultLayout {
     throw new Error('dsh-study-buddy 需要 config.vaultRoot（Obsidian vault 根目录）')
   }
   const vaultRoot = resolve(String(config.vaultRoot))
-  if (vaultRoot === resolve('/') || vaultRoot === resolve('.')) {
-    throw new Error(`vaultRoot 不能是文件系统根或当前目录：${vaultRoot}`)
+  // 注意：不再拒绝 vaultRoot === 工作目录。launcher 通常以 vault 目录为 cwd
+  // 启动 DSH，vault 即工作目录是受支持的部署形态（曾因此误伤导致 9 个工具
+  // 静默不注册）。只保留"文件系统根"这一真正危险的落盘目标。
+  if (vaultRoot === resolve('/')) {
+    throw new Error(`vaultRoot 不能是文件系统根：${vaultRoot}`)
   }
   return {
     vaultRoot,
@@ -103,6 +108,12 @@ export class VaultStore {
   private stateFile(): string {
     const p = join(this.layout.vaultRoot, this.layout.stateDir, 'progress.json')
     if (!withinRoot(this.layout.vaultRoot, p)) throw new Error('进度文件路径越界')
+    return p
+  }
+
+  private memoryFile(): string {
+    const p = join(this.layout.vaultRoot, this.layout.stateDir, 'memory.json')
+    if (!withinRoot(this.layout.vaultRoot, p)) throw new Error('记忆文件路径越界')
     return p
   }
 
@@ -244,6 +255,41 @@ export class VaultStore {
     if (fields.touchedCardIds !== undefined) next.touchedCardIds = fields.touchedCardIds
     await writeProgress(file, next)
     return fmtProgress(next)
+  }
+
+  async memory(action: string, fields: { key?: string; value?: string }): Promise<string> {
+    const file = this.memoryFile()
+    if (action === 'clear') {
+      await writeMemory(file, { notes: {} })
+      return '记忆已清空。'
+    }
+    const current = await readMemory(file)
+    if (action === 'get') {
+      if (fields.key !== undefined) {
+        const key = normalizeMemoryKey(fields.key)
+        const value = current.notes[key]
+        return value !== undefined ? `${key}：${value}` : `（无此键：${key}）`
+      }
+      return formatMemory(current)
+    }
+    if (action !== 'set' && action !== 'append' && action !== 'remove') {
+      throw new Error(`study_memory 未知 action "${action}"（可用 get/set/append/remove/clear）`)
+    }
+    const key = normalizeMemoryKey(fields.key ?? '')
+    const next: MemoryState = { notes: { ...current.notes } }
+    if (action === 'remove') {
+      delete next.notes[key]
+      await writeMemory(file, next)
+      return `已删除记忆：${key}`
+    }
+    const value = checkMemoryValue(fields.value ?? '')
+    if (action === 'append' && next.notes[key] !== undefined) {
+      next.notes[key] = checkMemoryValue(`${next.notes[key]}\n${value}`)
+    } else {
+      next.notes[key] = value
+    }
+    await writeMemory(file, next)
+    return `已记忆 ${key}：${value}\n\n${formatMemory(next)}`
   }
 }
 
@@ -463,6 +509,27 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         touchedCardIds: Array.isArray(args.touchedCardIds) ? args.touchedCardIds.map(String) : undefined,
       }),
     },
+    {
+      name: 'study_memory',
+      description:
+        '读写跨会话记忆（vault .study/memory.json，持久有效，重启不丢）：键值笔记。'
+        + '新会话开场先 get（配合 study_progress(get) 给衔接提示）；用户偏好/约定存 prefs；'
+        + '告一段落或归档时 set lastSummary=本次小结。清空进度（study_progress clear）不影响记忆。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', description: 'get（key 可选，默认全量）/set/append/remove/clear' },
+          key: { type: 'string', description: '记忆键名（≤64 字符；lastSummary=上次小结，置顶显示）' },
+          value: { type: 'string', description: 'set/append：记忆内容（≤4000 字符）' },
+        },
+        required: ['action'],
+      },
+      output,
+      execute: (args) => store.memory(String(args.action ?? 'get'), {
+        key: args.key !== undefined && args.key !== null ? String(args.key) : undefined,
+        value: args.value !== undefined && args.value !== null ? String(args.value) : undefined,
+      }),
+    },
   ]
 }
 
@@ -472,17 +539,27 @@ export function apply(ctx: PluginContext, config?: StudyConfig): void {
     store = new VaultStore(normalizeConfig(config))
   } catch (error) {
     console.error(`[dsh-study-buddy] ${(error as Error).message}`)
-    return
+    // fail-loud：静默 return 曾让"行已挂载、工具全无"的故障潜伏数天。
+    // 抛错会让 preset 挂载失败（agent-preset-invalid），原因立即可见。
+    throw error
   }
-  if (typeof ctx?.tools?.register !== 'function') {
+  const tools = ctx?.tools
+  if (typeof tools?.register !== 'function') {
     console.error('[dsh-study-buddy] tools 注册表不可用，插件未挂载工具')
-    return
+    throw new Error('dsh-study-buddy: ctx.tools.register 不可用，无法注册卡片工具')
   }
+  const disposers: Array<() => void> = []
   for (const def of buildToolDefs(store)) {
     try {
-      ctx.tools.register(def)
+      disposers.push(tools.register(def))
     } catch (error) {
       console.error(`[dsh-study-buddy] 工具 ${def.name} 注册失败：${(error as Error).message}`)
+      throw error
     }
   }
+  // 注册随 preset 作用域注销；disposer 由 ctx.effect 持有（ctx 无 effect 时
+  // 退化为不持有——standing 挂载生命周期即进程生命周期，无泄漏）。
+  ctx?.effect?.(() => () => {
+    for (const dispose of disposers) dispose()
+  }, 'dsh-study-buddy tools')
 }
