@@ -2,8 +2,9 @@
  * dsh-study-buddy 插件入口。
  *
  * 设计：preset 行挂载（`name: dsh-study-buddy`），工具注册进 preset 的
- * 工具作用域层，不污染其他 agent。插件不发布 Cordis 服务——工具共享
- * 模块级 VaultStore 实例，因此不需要 isolate realm。
+ * 工具作用域层，不污染其他 agent。插件不发布 Cordis 服务——每次 apply
+ * 创建独立 VaultStore 实例（索引缓存在实例内，不跨挂载共享），
+ * 因此不需要 isolate realm。
  *
  * vault 读写全部走 node:fs 直写（插件是可信 preset 代码，不经沙箱 fs）：
  * 用户在会话里永远拿不到 vault 的沙箱 fs 权限，只能通过本插件的工具操作。
@@ -253,6 +254,13 @@ export class VaultStore {
     if (fields.section !== undefined) next.currentSection = String(fields.section).trim()
     if (fields.pendingQuestions !== undefined) next.pendingQuestions = fields.pendingQuestions
     if (fields.touchedCardIds !== undefined) next.touchedCardIds = fields.touchedCardIds
+    if (
+      fields.material === undefined && fields.section === undefined
+      && fields.pendingQuestions === undefined && fields.touchedCardIds === undefined
+    ) {
+      // set 无任何字段：不产生无效写（不 bump updatedAt），直接返回当前状态
+      return fmtProgress(current)
+    }
     await writeProgress(file, next)
     return fmtProgress(next)
   }
@@ -549,13 +557,15 @@ export function apply(ctx: PluginContext, config?: StudyConfig): void {
     throw new Error('dsh-study-buddy: ctx.tools.register 不可用，无法注册卡片工具')
   }
   const disposers: Array<() => void> = []
-  for (const def of buildToolDefs(store)) {
-    try {
+  try {
+    for (const def of buildToolDefs(store)) {
       disposers.push(tools.register(def))
-    } catch (error) {
-      console.error(`[dsh-study-buddy] 工具 ${def.name} 注册失败：${(error as Error).message}`)
-      throw error
     }
+  } catch (error) {
+    // 半途失败：先卸掉已注册的工具再抛，避免残留无主注册
+    for (const dispose of disposers) dispose()
+    console.error(`[dsh-study-buddy] 工具注册失败：${(error as Error).message}`)
+    throw error
   }
   // 注册随 preset 作用域注销；disposer 由 ctx.effect 持有（ctx 无 effect 时
   // 退化为不持有——standing 挂载生命周期即进程生命周期，无泄漏）。

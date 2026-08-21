@@ -11,6 +11,7 @@ const LEGACY = `> 概念: 迭代器是一种设计模式, 任何类都可以成�
 - vector.begin() // 返回vector首个元素**本位**的迭代器
 `
 
+// 与 renderCard 产物一致的 v0.3.0 定稿格式：frontmatter 后首行为裸引用块定义
 const CARD = `---
 ID: 202608161430_ab12
 标题: 透视投影矩阵的三步分解
@@ -19,10 +20,9 @@ ID: 202608161430_ab12
 状态: 草稿
 ---
 
-### 定义（一句话总结）
 > 透视投影矩阵可拆解为缩放、平移与齐次除三步
 
-### 核心内容
+### 核心机制
 投影矩阵的平移部分只在第三行……
 `
 
@@ -64,6 +64,8 @@ describe('SearchIndex', () => {
     expect(card.domain).toBe('图形学与渲染')
     expect(card.tags).toEqual(['图形学与渲染', '线性代数'])
     expect(card.status).toBe('草稿')
+    // 定稿格式的裸引用块定义可被索引（extractDefinition 回退分支）
+    expect(card.definition).toBe('透视投影矩阵可拆解为缩放、平移与齐次除三步')
   })
 
   test('searchFindsLegacyByConcept', () => {

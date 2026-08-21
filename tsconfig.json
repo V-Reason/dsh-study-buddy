@@ -2,6 +2,8 @@
   "compilerOptions": {
     "strict": true,
     "noImplicitAny": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",

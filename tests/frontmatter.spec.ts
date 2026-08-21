@@ -66,6 +66,17 @@ describe('frontmatter', () => {
     expect(extractDefinition('普通正文')).toBeNull()
   })
 
+  test('extractDefinitionBareQuoteFormat', () => {
+    // v0.3.0 定稿格式：renderCard 输出的裸引用块定义（frontmatter 后第一行）
+    const body = '> 透视投影矩阵可拆解为缩放、平移与齐次除三步\n\n### 核心机制\n正文'
+    expect(extractDefinition(body)).toBe('透视投影矩阵可拆解为缩放、平移与齐次除三步')
+    // 首行前有空白也提取；只取正文首个引用块
+    expect(extractDefinition('\n\n> 光栅化把图元离散为屏幕像素\n\n> 正文中的其他引用')).toBe('光栅化把图元离散为屏幕像素')
+    // 旧约定优先级不变：`> 概念:` 与 `### 定义` 仍优先于裸引用块
+    expect(extractDefinition('> 概念: 旧笔记定义\n> 裸引用')).toBe('旧笔记定义')
+    expect(extractDefinition('### 定义\n> 小节定义\n> 裸引用')).toBe('小节定义')
+  })
+
   test('firstHeading', () => {
     expect(firstHeading('# 标题一\n## 二级')).toBe('标题一')
     expect(firstHeading('没有标题')).toBeNull()

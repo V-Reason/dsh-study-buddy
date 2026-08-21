@@ -13,7 +13,7 @@
 - **指令驱动（听指挥）**：读取 ≠ 讲解——"读取 X"只输出读取报告，说"讲解"才开始讲；读取 PDF/PNG/PPT 等文件走内置 `file-reading` 技能，不摸索工具
 - **MOC 知识目录**：归档时自动生成按领域分组的知识地图
 - **轻量**：每次请求固定开销约 15KB（比标准模式低 ~30%）；技能按需加载；会话早期自动压缩历史（阈值 30%）
-- 63 项单元测试覆盖卡片渲染、检索索引、增量更新、进度与记忆持久化、原子写与路径安全
+- 69 项单元测试覆盖卡片渲染、检索索引、增量更新、进度与记忆持久化、原子写与路径安全
 
 ## 性能与成本（2026-08 实测估算）
 
@@ -24,7 +24,7 @@
 | 标准模式 | ~21.3 KB | ~26 个 |
 | 学习伙伴 | ~15.0 KB\* | 21 个 |
 
-\* 实测基线（2026-08）；新增 `study_memory` 与记忆小节后为估算（约 +0.5KB，未重新实测）。
+\* 实测基线（2026-08）；新增 `study_memory` 与记忆小节后为估算（约 +0.5KB，未重新实测）。工具数为模型可见工具合计（插件注册 9 个：`card_search`/`card_get`/`card_id`/`card_create`/`card_update`/`card_link`/`card_moc`/`study_progress`/`study_memory`）。
 
 日常成本（V4-Flash、约 60 轮/天、2 小时学习；[2026-08-17 峰谷定价](http://www.nbd.com.cn/articles/2026-08-17/4543868.html)）：
 
@@ -41,7 +41,7 @@
 ## 原理
 
 ```
-你说的话 → 「学习」会话（persona + 8 个卡片工具）
+你说的话 → 「学习」会话（persona + 9 个卡片工具）
                   │ card_search / card_create / card_update / study_progress …
                   ▼
        插件直连你的 Obsidian vault（node:fs 直写，不经沙箱）
@@ -106,7 +106,7 @@ ID: 202608161430_ab12
 git clone https://github.com/V-Reason/dsh-study-buddy.git
 cd dsh-study-buddy
 pnpm install
-pnpm run check          # typecheck + 63 项测试 + 构建 lib/index.js
+pnpm run check          # typecheck + 69 项测试 + 构建 lib/index.js
 
 # 2. 把插件装进你的 DSH profile（<profileDir> 通常是 %DSH_HOME%\profiles\web）
 #    在 <profileDir>\package.json 的 dependencies 里加入：
@@ -161,7 +161,7 @@ Copy-Item -Recurse presets/study "$env:DSH_HOME\.agent-presets\study"
 
 ```bash
 pnpm install
-pnpm run check     # typecheck + vitest（63 项）+ esbuild 构建
+pnpm run check     # typecheck + vitest（69 项）+ esbuild 构建
 ```
 
 - 源码在 `src/`（零运行时依赖，仅 Node 内置模块），构建产物 `lib/index.js`（`@deepseek-ai/*` 保持 external）
@@ -173,7 +173,7 @@ pnpm run check     # typecheck + vitest（63 项）+ esbuild 构建
 ```
 dsh-study-buddy/
 ├── src/                 # 插件源码（vault 适配 / 检索索引 / 卡片渲染 / 进度与记忆 / 入口）
-├── tests/               # 63 项单元与端到端测试
+├── tests/               # 69 项单元与端到端测试
 ├── presets/study/       # 「学习」Agent 预设（persona + 工具行 + 5 个技能）
 │   └── skills/          # file-reading / study-loop / card-format / incremental-update / domain-adaptation
 ├── docs/                # 需求与设计文档

@@ -5,6 +5,13 @@
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/V-Reason/dsh-study-buddy.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "main": "lib/index.js",
   "exports": {
     ".": {

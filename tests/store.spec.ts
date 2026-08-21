@@ -51,6 +51,8 @@ describe('VaultStore 端到端', () => {
       '> 概念: 迭代器是一种设计模式\n# 迭代器主要方法\n- vector.begin()\n')
     const search = await store.search('投影矩阵')
     expect(search).toContain('透视投影矩阵的三步分解')
+    // 定稿格式卡片检索结果展示一句话定义（extractDefinition 裸引用块回退）
+    expect(search).toContain('- 定义：透视投影矩阵可拆解为缩放、平移与齐次除三步')
     const legacy = await store.search('迭代器')
     expect(legacy).toContain('迭代器主要方法')
     expect(legacy).toContain('目录: 计算机')

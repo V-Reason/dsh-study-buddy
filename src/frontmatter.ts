@@ -54,12 +54,20 @@ export function renderFrontmatter(meta: CardMeta): string {
   return lines.join('\n')
 }
 
-/** 从正文提取一句话概念：优先 `> 概念:` 块引用，其次 `### 定义` 下的首行引用 */
+/**
+ * 从正文提取一句话概念，按格式优先级：
+ * 1. `> 概念:` 块引用（旧笔记约定）；
+ * 2. `### 定义` 小节下的首行引用（旧卡片格式）；
+ * 3. 正文首个裸 `> ` 引用块（v0.3.0 定稿格式：renderCard 输出，
+ *    frontmatter 后第一行即一句话定义）。
+ */
 export function extractDefinition(body: string): string | null {
   const concept = /^>\s*概念[:：]\s*(.+)$/m.exec(body)
   if (concept) return concept[1].trim()
   const section = /###\s*定义(?:（[^）]*）)?\s*[\r\n]+>\s*(.+)/.exec(body)
   if (section) return section[1].trim()
+  const bare = /^>\s*([^\n]+)/.exec(body.trimStart())
+  if (bare) return bare[1].trim()
   return null
 }
 

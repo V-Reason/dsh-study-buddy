@@ -150,7 +150,8 @@
 - id: study
   name: dsh-study-buddy
   config:
-    vaultRoot: 'T:\杂七杂八\2.笔记\碎语札'
+    # ⚠ 必改：换成你自己的 Obsidian vault 绝对路径（部署时编辑，勿提交真实路径）
+    vaultRoot: '<你的vault绝对路径>'
     stateDir: .study
     fallbackDir: 未分类
     mocDir: 目录

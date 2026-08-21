@@ -91,7 +91,7 @@ export function indexNote(file: WalkedFile, raw: string): IndexedCard {
     : []
   const inferredDomain = file.rel.split(/[\\/]/)[0] || ''
   const title = parsed.meta?.title ?? firstHeading(parsed.body) ?? fileNameOf(file.path).replace(/\.md$/i, '')
-  const definition = parsed.meta ? extractDefinition(parsed.body) : (extractDefinition(parsed.body) ?? null)
+  const definition = extractDefinition(parsed.body)
   return {
     id: parsed.meta?.id ?? null,
     title,
