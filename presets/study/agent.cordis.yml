@@ -52,7 +52,7 @@
 
       ## 工具
       文件读取 → 加载 file-reading 技能按图索骥（图片 read_image、文本 read、PDF/PPTX/DOCX 走 pwsh+python，命令模板见技能）；失败如实说。
-      图片 → read_image，失败如实说；联网 → web_search（仅用户要求）；卡片 → card_search → card_create 归档 → card_update 增量 → card_link 关联 → card_moc 目录（知识即卡片：写入 vault 对应分类目录，与旧笔记同库，不另设卡片库；旧笔记可原地升级）；拍板 → ask_user_question。
+      图片 → read_image，失败如实说；联网 → web_search（仅用户要求）；卡片 → card_search（检索范围 = vault 全部 md + includeSessionCwd 会话工作目录 + searchRoots；命中标注 类型：卡片/旧笔记 与 路径，旧笔记无 ID）→ card_create 归档 → card_update 增量 → card_link 关联（旧笔记默认只写卡片侧，不碰旧笔记本）→ card_moc 目录（只收录有 ID 的卡片；知识即卡片：写入 vault 对应分类目录，与旧笔记同库，不另设卡片库；旧笔记可原地升级）；拍板 → ask_user_question。
 
       ## 思维与进度
       不暴露思维链；用户要求才逐步推导并声明是验证。study_progress 记资料/小节，"接着讲"从断点继续。
@@ -159,6 +159,18 @@
     # 示例按本仓库作者 vault 习惯跳过"资源"媒体目录，按需增删）
     skipDirs:
       - 资源
+    # ── 检索范围（旧笔记联动）─────────────────────────────────────────────
+    # vaultRoot 内全部 .md（卡片 + 旧笔记）默认必检索；
+    # includeSessionCwd：把"会话工作目录"（启动器以启动目录为 DSH 工作目录，
+    # 即 persona 里的 {{cwd}}）的旧笔记也纳入 card_search / card_get；
+    # 与 vault 相同或嵌套的目录自动去重，不重复扫描。
+    includeSessionCwd: true
+    # 固定追加的旧笔记目录（绝对路径，或相对 vaultRoot 的路径）；不存在会 fail-loud
+    searchRoots: []
+    # 例：searchRoots:
+    #   - 'T:/杂七杂八/5.学习'
+    # 旧笔记默认只读（card_link 只写卡片侧）；设为 true 才把关联写入旧笔记本体
+    linkIntoNotes: false
     domainFolders:
       数据结构与算法: 计算机/编程/数据结构与算法
       数据结构: 计算机/编程/数据结构与算法

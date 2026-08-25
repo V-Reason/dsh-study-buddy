@@ -1,9 +1,10 @@
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import {
-  atomicWrite, cardDirFor, mocPathFor, sanitizeFilename, skipSetFor, uniqueCardPath, walk, withinRoot,
+  atomicWrite, cardDirFor, containsRoot, dedupeFiles, dedupeRoots, mocPathFor, resolveSearchRoots,
+  sanitizeFilename, skipSetFor, uniqueCardPath, walk, withinRoot,
   type VaultLayout,
 } from '../src/vault.ts'
 
@@ -97,5 +98,50 @@ describe('vault', () => {
   test('mocPathForUnderMocDir', () => {
     const p = mocPathFor(layout(), '知识目录', '2026-08-16')
     expect(p).toBe(join(dir, '目录', '2026-08-16_知识目录.md'))
+  })
+
+  test('containsRoot 判定包含关系', () => {
+    expect(containsRoot(dir, join(dir, '子目录'))).toBe(true)
+    expect(containsRoot(dir, dir)).toBe(true)
+    expect(containsRoot(join(dir, '子目录'), dir)).toBe(false)
+    expect(containsRoot(dir, join(tmpdir(), '其他/目录'))).toBe(false)
+    // 相似前缀不是包含（/a/bc 不包含 /a/b）
+    expect(containsRoot(join(dir, 'ab'), join(dir, 'a'))).toBe(false)
+  })
+
+  test('dedupeRoots 裁剪被覆盖的根（vault 优先）', () => {
+    const vault = { path: dir, label: 'vault' }
+    const inside = { path: join(dir, '子目录'), label: '工作目录' }
+    const outside = { path: join(tmpdir(), '外部笔记'), label: '外部笔记' }
+    // cwd 在 vault 内：丢弃（vault 已覆盖）
+    expect(dedupeRoots([vault, inside, outside]).map((r) => r.label)).toEqual(['vault', '外部笔记'])
+    // vault 在 cwd 内：两者都保留（cwd 可能有 vault 之外的笔记）
+    const cwd = { path: tmpdir(), label: '工作目录' }
+    expect(dedupeRoots([vault, cwd]).map((r) => r.label)).toEqual(['vault', '工作目录'])
+    // 完全相同的根：只留首个
+    expect(dedupeRoots([vault, { path: dir, label: 'dup' }]).map((r) => r.label)).toEqual(['vault'])
+  })
+
+  test('dedupeFiles 同文件只留首个（嵌套根重复扫描防重）', () => {
+    const a = { path: join(dir, 'a.md'), rel: 'a.md', root: 'vault', mtimeMs: 1, ctimeMs: 1, size: 1 }
+    const b = { path: join(dir, 'a.md'), rel: 'a.md', root: '工作目录', mtimeMs: 1, ctimeMs: 1, size: 1 }
+    const c = { path: join(dir, 'b.md'), rel: 'b.md', root: 'vault', mtimeMs: 2, ctimeMs: 2, size: 2 }
+    const out = dedupeFiles([a, b, c])
+    expect(out.map((f) => f.root)).toEqual(['vault', 'vault'])
+  })
+
+  test('resolveSearchRoots 解析绝对/相对路径并生成唯一标签', async () => {
+    await mkdir(join(dir, 'ext-note-a'), { recursive: true })
+    const roots = resolveSearchRoots(dir, ['ext-note-a', 'ext-note-a'])
+    expect(roots.map((r) => r.label)).toEqual(['ext-note-a', 'ext-note-a(2)'])
+    expect(roots[0].path.endsWith('ext-note-a')).toBe(true)
+    // 与保留标签冲突时加序号
+    await mkdir(join(dir, 'vault'), { recursive: true })
+    const cwdLike = resolveSearchRoots(dir, ['vault'])
+    expect(cwdLike[0].label).toBe('vault(2)')
+    // 不存在 → fail-loud
+    expect(() => resolveSearchRoots(dir, [join(tmpdir(), '不存在')])).toThrow(/不存在或不可读/)
+    // 文件系统根被拒绝
+    expect(() => resolveSearchRoots(dir, [resolve('/')])).toThrow(/文件系统根/)
   })
 })

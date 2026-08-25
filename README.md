@@ -1,11 +1,14 @@
 # dsh-study-buddy
 
 > 给 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeekHarness)（DSH）的「通用学习 Agent」模式：一个**苏格拉底式学习伙伴**插件 + Agent 预设。快节奏讲解、四步学习闭环、原子卡片（Zettelkasten 风格）直接写入你的 Obsidian vault——**知识即卡片，卡片即知识**。
+>
+> 📖 完整上手请读 [docs/用户使用指南.md](docs/用户使用指南.md)：安装部署、逐键配置详解、全部 9 个工具参考、卡片格式规范、Obsidian 配合、检索技巧与故障排查手册。
 
 ## 特性
 
 - **四步学习闭环**：资料摄入 → 讲解拓展 → 问答反诘（三明治原则）→ 笔记归档，每步都有明确模板与检查清单
 - **原子卡片落盘 Obsidian vault**：卡片就是普通 `.md` 文件，与你的旧笔记同库同目录，Obsidian 可直接打开、编辑、git 管理；插件做全库索引，旧笔记（无 frontmatter）同样可被检索
+- **多根检索（卡片 ↔ 旧笔记联动）**：`card_search` 不止检索 vault 卡片，还覆盖**会话工作目录**（`includeSessionCwd`）与配置的 `searchRoots` 旧笔记；命中标注「类型：卡片/旧笔记」与「路径」；`card_get` 可读旧笔记全文，`card_link` 默认只写卡片侧（旧笔记零改动），关联用根限定路径寻址
 - **增量更新（活笔记）**：补充加"版本更新"、推翻加"勘误"、无关则新卡关联——旧内容永不丢失，更新决定权永远在你
 - **全库检索与重叠预警**：摄入新资料前自动检索已有卡片，提示重叠与差异
 - **跨会话进度与记忆**：当前资料/小节/未答追问持久化，重启后"接着讲"从断点继续；新会话开场自动读回进度与记忆，首行衔接提示不脱节；偏好/约定/小结可"记住"
@@ -13,7 +16,7 @@
 - **指令驱动（听指挥）**：读取 ≠ 讲解——"读取 X"只输出读取报告，说"讲解"才开始讲；读取 PDF/PNG/PPT 等文件走内置 `file-reading` 技能，不摸索工具
 - **MOC 知识目录**：归档时自动生成按领域分组的知识地图
 - **轻量**：每次请求固定开销约 15KB（比标准模式低 ~30%）；技能按需加载；会话早期自动压缩历史（阈值 30%）
-- 69 项单元测试覆盖卡片渲染、检索索引、增量更新、进度与记忆持久化、原子写与路径安全
+- 96 项单元测试覆盖卡片渲染、检索索引（含多根旧笔记）、增量更新、进度与记忆持久化、原子写与路径安全
 
 ## 性能与成本（2026-08 实测估算）
 
@@ -47,7 +50,8 @@
        插件直连你的 Obsidian vault（node:fs 直写，不经沙箱）
                   │ 卡片 = vault 里普通的 .md 文件，与旧笔记同库
                   ▼
-       内存索引（标题/标签/正文，mtime 签名缓存）——磁盘变了自动重扫
+       多根索引（vault + 会话工作目录 + searchRoots；标题/标签/正文，
+       mtime 签名缓存）——磁盘变了自动重扫；命中标注 卡片/旧笔记
 ```
 
 - 卡片不是数据库记录，就是带 frontmatter 的 Markdown 文件；你在 Obsidian 里改它，插件下次检索即重扫，互不打架
@@ -68,7 +72,7 @@
 | 写到哪里 | 领域→目录映射表自由配置；未映射的落"未分类" |
 | 改不改旧卡 | 永远先给"旧 vs 新"对比，你确认才改（补充 / 勘误 / 整卡替换） |
 | 旧笔记 | 不碰不动；说"把这篇改成卡片"才原地升级，旧版本进历史折叠块 |
-| 找知识 | 直接问"我笔记里有没有讲过 X"，全库检索含旧笔记 |
+| 找知识 | 直接问"我笔记里有没有讲过 X"，全库检索含旧笔记（vault + 工作目录 + searchRoots）；命中标注 卡片/旧笔记 与 路径 |
 | 进度 | "接着讲"续讲；"清空进度"重来（只清进度位置，记忆保留；彻底重来再"清空记忆"） |
 | 兜底 | Obsidian 手改、git 回滚永远有效——磁盘是唯一真相 |
 
@@ -107,7 +111,7 @@ ID: 202608161430_ab12
 git clone https://github.com/V-Reason/dsh-study-buddy.git
 cd dsh-study-buddy
 pnpm install
-pnpm run check          # typecheck + 69 项测试 + 构建 lib/index.js
+pnpm run check          # typecheck + 96 项测试 + 构建 lib/index.js
 
 # 2. 把插件装进你的 DSH profile（<profileDir> 通常是 %DSH_HOME%\profiles\web）
 #    在 <profileDir>\package.json 的 dependencies 里加入：
@@ -121,6 +125,8 @@ Copy-Item -Recurse presets/study "$env:DSH_HOME\.agent-presets\study"
 # 4. 必改：编辑 $env:DSH_HOME\.agent-presets\study\agent.cordis.yml
 #    - vaultRoot：换成你自己的 Obsidian vault 绝对路径
 #    - domainFolders：按你的 vault 分类调整"领域 → 目录"映射
+#    - （可选）includeSessionCwd: true 把会话工作目录旧笔记纳入检索；
+#      searchRoots 追加固定旧笔记目录；linkIntoNotes 决定能否写入旧笔记
 
 # 5. 重启 DSH，新建会话，选择「学习」预设
 ```
@@ -154,16 +160,19 @@ Copy-Item -Recurse presets/study "$env:DSH_HOME\.agent-presets\study"
 | `mocDir` | `目录` | MOC 知识目录的落盘位置 |
 | `domainFolders` | `{}` | 领域 → vault 内相对目录；支持多键别名指向同一目录 |
 | `skipDirs` | `[]` | 额外跳过扫描的顶层目录名（内置已跳过 `.obsidian`/`.trash`/`.study`/`.git`/`node_modules`） |
+| `includeSessionCwd` | `false` | 把会话工作目录（DSH 启动目录即 `{{cwd}}`）的旧笔记纳入检索；与 vault 相同/嵌套自动去重 |
+| `searchRoots` | `[]` | 额外检索根（绝对路径或相对 vaultRoot）：旧笔记库，只读；不存在即挂载失败（fail-loud） |
+| `linkIntoNotes` | `false` | 是否把 `card_link` 关联写入无 ID 的旧笔记本体（默认只写卡片侧，旧笔记不碰不动） |
 
 预设内另有压缩配置（`compaction-basic` 组）：`thresholdRatio: 0.3`、`retainRatio: 0.15`、`maxTokens: 4096`，并带 `deepseek-v4-flash` / `deepseek-v4-pro` 模型策略。
 
-插件工具一览：`card_search` / `card_get` / `card_id` / `card_create` / `card_update`（append-version · errata · replace）/ `card_link` / `card_moc` / `study_progress` / `study_memory`（跨会话记忆：键值笔记 + 上次小结 lastSummary，与进度相互独立）。
+插件工具一览：`card_search`（多根：vault + 会话工作目录 + searchRoots；标注 类型：卡片/旧笔记 与 路径）/ `card_get`（卡片与旧笔记均可）/ `card_id` / `card_create` / `card_update`（append-version · errata · replace）/ `card_link`（旧笔记默认只写卡片侧）/ `card_moc`（只收录有 ID 的卡片）/ `study_progress` / `study_memory`（跨会话记忆：键值笔记 + 上次小结 lastSummary，与进度相互独立）。
 
 ## 开发
 
 ```bash
 pnpm install
-pnpm run check     # typecheck + vitest（69 项）+ esbuild 构建
+pnpm run check     # typecheck + vitest（96 项）+ esbuild 构建
 ```
 
 - 源码在 `src/`（零运行时依赖，仅 Node 内置模块），构建产物 `lib/index.js`（`@deepseek-ai/*` 保持 external）
@@ -175,7 +184,7 @@ pnpm run check     # typecheck + vitest（69 项）+ esbuild 构建
 ```
 dsh-study-buddy/
 ├── src/                 # 插件源码（vault 适配 / 检索索引 / 卡片渲染 / 进度与记忆 / 入口）
-├── tests/               # 69 项单元与端到端测试
+├── tests/               # 96 项单元与端到端测试
 ├── presets/study/       # 「学习」Agent 预设（persona + 工具行 + 5 个技能）
 │   └── skills/          # file-reading / study-loop / card-format / incremental-update / domain-adaptation
 ├── docs/                # 需求与设计文档

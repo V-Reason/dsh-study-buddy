@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { VaultStore } from '../src/index.ts'
 import type { VaultLayout } from '../src/vault.ts'
@@ -232,6 +232,146 @@ describe('VaultStore 端到端', () => {
     await writeFile(file, '# 外部改名概念\n正文内容更长以保证签名变化')
     expect(await store.search('外部改名概念')).toContain('外部改名概念')
     expect(await store.search('新建')).toContain('未命中')
+  })
+})
+
+describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', () => {
+  let extra: string
+  let cwdDir: string
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'study-buddy-e2e-'))
+    extra = await mkdtemp(join(tmpdir(), 'study-buddy-extra-'))
+    cwdDir = await mkdtemp(join(tmpdir(), 'study-buddy-cwd-'))
+  })
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true })
+    await rm(extra, { recursive: true, force: true })
+    await rm(cwdDir, { recursive: true, force: true })
+  })
+
+  test('search 覆盖 searchRoots 与 sessionCwd 旧笔记，标注类型与根路径', async () => {
+    await mkdir(join(extra, '图形学'), { recursive: true })
+    await writeFile(join(extra, '图形学/投影矩阵旧笔记.md'), '# 投影矩阵旧笔记\n透视投影讲解\n')
+    await mkdir(join(cwdDir, 'CS'), { recursive: true })
+    await writeFile(join(cwdDir, 'CS/迭代器旧笔记.md'), '> 概念: 迭代器设计模式\n# 迭代器\nvector.begin()\n')
+    await mkdir(join(dir, '计算机/图形学'), { recursive: true })
+    await writeFile(join(dir, '计算机/图形学/透视卡片.md'),
+      '---\nID: 202608161430_ab12\n标题: 透视投影矩阵的三步分解\n领域: #图形学与渲染\n来源: GAMES101 L04\n状态: 草稿\n---\n\n> 透视投影矩阵可拆解为三步\n\n正文')
+    const store = new VaultStore({ ...layout(), searchRoots: [extra], includeSessionCwd: true })
+
+    const mixed = await store.search('投影矩阵', {}, { sessionCwd: cwdDir })
+    expect(mixed).toContain('类型：卡片')
+    expect(mixed).toContain('类型：旧笔记')
+    expect(mixed).toContain(`- 路径：${basename(extra)}/图形学/投影矩阵旧笔记.md`)
+    expect(mixed).toContain(`来源：vault / ${basename(extra)} / 工作目录`)
+
+    const iter = await store.search('迭代器', {}, { sessionCwd: cwdDir })
+    expect(iter).toContain('类型：旧笔记')
+    expect(iter).toContain('- 路径：工作目录/CS/迭代器旧笔记.md')
+
+    // 不传 cwd：工作目录不可见（vault 无此笔记）
+    expect(await store.search('迭代器', {}, {})).toContain('未命中')
+    // kind 过滤：只找卡片
+    const onlyCards = await store.search('投影矩阵', { kind: 'card' }, { sessionCwd: cwdDir })
+    expect(onlyCards).toContain('类型：卡片')
+    expect(onlyCards).not.toContain('类型：旧笔记')
+  })
+
+  test('get 跨根读取旧笔记全文（根限定路径与唯一文件名）', async () => {
+    await mkdir(join(extra, '图形学'), { recursive: true })
+    await writeFile(join(extra, '图形学/投影矩阵旧笔记.md'), '# 投影矩阵旧笔记\n透视投影讲解\n')
+    const store = new VaultStore({ ...layout(), searchRoots: [extra] })
+    expect(await store.get('投影矩阵旧笔记.md')).toContain('透视投影讲解')
+    expect(await store.get(`${basename(extra)}/图形学/投影矩阵旧笔记.md`)).toContain('# 投影矩阵旧笔记')
+  })
+
+  test('cwd 与 vault 相同或嵌套时不重复索引', async () => {
+    await mkdir(join(dir, '计算机/图形学'), { recursive: true })
+    await writeFile(join(dir, '计算机/图形学/卡片.md'), '# 卡片\n内容')
+    const store = new VaultStore({ ...layout(), includeSessionCwd: true })
+    const same = await store.search('卡片', {}, { sessionCwd: dir })
+    expect(same).toContain('命中 1')
+    // cwd 在 vault 内：为 vault 子集，同样不重复（vault 标签优先）
+    const nested = await store.search('卡片', {}, { sessionCwd: join(dir, '计算机') })
+    expect(nested).toContain('命中 1')
+  })
+
+  test('同名文件跨根产生路径歧义时明确报错', async () => {
+    await mkdir(join(dir, '笔记'), { recursive: true })
+    await writeFile(join(dir, '笔记/同名.md'), '# vault 同名')
+    await mkdir(join(extra, '笔记'), { recursive: true })
+    await writeFile(join(extra, '笔记/同名.md'), '# extra 同名')
+    const store = new VaultStore({ ...layout(), searchRoots: [extra] })
+    await expect(store.get('同名.md')).rejects.toThrow(/路径歧义/)
+    expect(await store.get('vault/笔记/同名.md')).toContain('vault 同名')
+    expect(await store.get(`${basename(extra)}/笔记/同名.md`)).toContain('extra 同名')
+  })
+
+  test('searchRoots 不存在时构造即抛错（fail-loud）', () => {
+    expect(() => new VaultStore({ ...layout(), searchRoots: [join(tmpdir(), '不存在')] })).toThrow(/不存在或不可读/)
+  })
+
+  test('card_link：卡↔旧笔记默认只写卡片侧；linkIntoNotes 时两侧都写；旧笔记↔旧笔记默认拒绝', async () => {
+    await mkdir(join(extra, 'CS'), { recursive: true })
+    const noteFile = join(extra, 'CS/迭代器笔记.md')
+    await writeFile(noteFile, '> 概念: 迭代器是一种设计模式\n# 迭代器主要方法\n- vector.begin()\n')
+    const store = new VaultStore({ ...layout(), searchRoots: [extra] })
+    const created = await store.create({
+      title: '红黑树插入',
+      domain: '数据结构与算法',
+      source: '课件',
+      status: '草稿',
+      definition: '红黑树插入通过变色与旋转维持平衡',
+      content: '插入流程',
+    })
+    const id = /ID: (\d{12}_[0-9a-f]{4})/.exec(created.text)![1]
+    const noteRef = `${basename(extra)}/CS/迭代器笔记.md`
+
+    // 默认：旧笔记字节不变，卡片侧出现关联
+    const before = await readFile(noteFile, 'utf8')
+    const linked = await store.link(id, noteRef, 'next')
+    expect(linked).toContain('单侧写入')
+    expect(linked).toContain('未修改旧笔记')
+    expect(await readFile(noteFile, 'utf8')).toBe(before)
+    const cardFile = join(dir, '未分类/数据结构与算法/红黑树插入.md')
+    expect(await readFile(cardFile, 'utf8')).toContain(`- 后续：迭代器主要方法（${basename(extra)}/CS/迭代器笔记.md）`)
+
+    // 开启 linkIntoNotes：两侧都写
+    const noteOnly = await mkdtemp(join(tmpdir(), 'study-buddy-note-'))
+    try {
+      await writeFile(join(noteOnly, 'AVL笔记.md'), '# AVL 笔记\n平衡因子\n')
+      const store2 = new VaultStore({ ...layout(), linkIntoNotes: true, searchRoots: [noteOnly] })
+      const linked2 = await store2.link(id, `${basename(noteOnly)}/AVL笔记.md`, 'prev')
+      expect(linked2).toContain('已写入 2 侧')
+      expect(await readFile(join(noteOnly, 'AVL笔记.md'), 'utf8')).toContain('### 关联卡片')
+
+      // 旧笔记↔旧笔记：默认拒绝并给替代方案（两个旧笔记在同一批根内才能解析到）
+      const store3 = new VaultStore({ ...layout(), searchRoots: [extra, noteOnly] })
+      await expect(store3.link(noteRef, `${basename(noteOnly)}/AVL笔记.md`, 'next')).rejects.toThrow(/linkIntoNotes/)
+    } finally {
+      await rm(noteOnly, { recursive: true, force: true })
+    }
+  })
+
+  test('card_moc 只收录卡片，旧笔记跳过并提示', async () => {
+    await mkdir(join(extra, 'CS'), { recursive: true })
+    await writeFile(join(extra, 'CS/迭代器笔记.md'), '# 迭代器主要方法\n正文')
+    const store = new VaultStore({ ...layout(), searchRoots: [extra] })
+    const created = await store.create({
+      title: '红黑树插入',
+      domain: '数据结构与算法',
+      source: '课件',
+      status: '草稿',
+      definition: '红黑树插入通过变色与旋转维持平衡',
+      content: '插入流程',
+    })
+    const id = /ID: (\d{12}_[0-9a-f]{4})/.exec(created.text)![1]
+    const moc = await store.moc({ title: '本次学习目录', cardIds: [id, `${basename(extra)}/CS/迭代器笔记.md`] })
+    expect(moc).toContain('旧笔记不收录')
+    expect(moc).toContain('[[红黑树插入]]')
+    expect(moc).not.toContain('[[迭代器主要方法]]')
   })
 })
 

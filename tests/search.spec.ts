@@ -2,8 +2,8 @@ import { describe, expect, test } from 'vitest'
 import { indexNote, SearchIndex, tokenize, tokenizeQuery } from '../src/search.ts'
 import type { WalkedFile } from '../src/vault.ts'
 
-function file(rel: string): WalkedFile {
-  return { path: `T:/vault/${rel}`, rel, mtimeMs: 1, ctimeMs: 1, size: 10 }
+function file(rel: string, root = 'vault'): WalkedFile {
+  return { path: `T:/vault/${rel}`, rel, root, mtimeMs: 1, ctimeMs: 1, size: 10 }
 }
 
 const LEGACY = `> 概念: 迭代器是一种设计模式, 任何类都可以成为迭代器, 其本质是一个指针
@@ -102,5 +102,52 @@ describe('SearchIndex', () => {
     index.rebuild([indexNote(file('计算机/图形学/透视投影矩阵.md'), CARD)])
     expect(index.byRel('计算机/图形学/透视投影矩阵.md')?.id).toBe('202608161430_ab12')
     expect(index.byRel('透视投影矩阵.md')?.id).toBe('202608161430_ab12')
+  })
+
+  test('indexNote 标记根与类型（card=有 ID，note=无 ID）', () => {
+    const note = indexNote(file('CS/迭代器.md', '工作目录'), LEGACY)
+    expect(note.root).toBe('工作目录')
+    expect(note.kind).toBe('note')
+    expect(note.fullRel).toBe('工作目录/CS/迭代器.md')
+    const card = indexNote(file('计算机/图形学/透视投影矩阵.md', 'vault'), CARD)
+    expect(card.kind).toBe('card')
+    expect(card.fullRel).toBe('vault/计算机/图形学/透视投影矩阵.md')
+  })
+
+  test('多根检索：fullRel 带根标签、kind 过滤、按分数降序', () => {
+    const index = new SearchIndex()
+    index.rebuild([
+      indexNote(file('计算机/图形学/透视投影矩阵.md', 'vault'), CARD),
+      indexNote(file('图形学/投影矩阵草稿.md', '工作目录'), '> 概念: 投影矩阵草稿\n\n# 投影矩阵草稿\n正文\n'),
+    ], true)
+    const hits = index.search('投影矩阵')
+    expect(hits.map((h) => h.kind)).toEqual(expect.arrayContaining(['card', 'note']))
+    expect(hits.length).toBe(2)
+    // 分数降序（同分兜底：卡片优先于旧笔记，且 fullRel 字典序）
+    for (let i = 1; i < hits.length; i++) expect(hits[i - 1].score).toBeGreaterThanOrEqual(hits[i].score)
+    const noteHit = hits.find((h) => h.kind === 'note')!
+    expect(noteHit.fullRel).toBe('工作目录/图形学/投影矩阵草稿.md')
+    expect(index.search('投影矩阵', { kind: 'note' }).length).toBe(1)
+    expect(index.search('投影矩阵', { kind: 'card' })[0].id).toBe('202608161430_ab12')
+  })
+
+  test('单根重建时 fullRel 不带根前缀（向后兼容展示）', () => {
+    const index = new SearchIndex()
+    index.rebuild([indexNote(file('计算机/图形学/透视投影矩阵.md'), CARD)])
+    expect(index.search('投影矩阵')[0].fullRel).toBe('计算机/图形学/透视投影矩阵.md')
+  })
+
+  test('candidatesForRef 支持根限定路径与歧义', () => {
+    const index = new SearchIndex()
+    index.rebuild([
+      indexNote(file('笔记/迭代器.md', 'vault'), LEGACY),
+      indexNote(file('笔记/迭代器.md', '工作目录'), LEGACY),
+    ], true)
+    expect(index.candidatesForRef('工作目录/笔记/迭代器.md').map((c) => c.root)).toEqual(['工作目录'])
+    expect(index.candidatesForRef('vault/笔记/迭代器.md').map((c) => c.root)).toEqual(['vault'])
+    // 未限定路径跨根歧义：返回两个候选
+    expect(index.candidatesForRef('笔记/迭代器.md').length).toBe(2)
+    // 文件名唯一时也可命
+    expect(index.candidatesForRef('迭代器.md').length).toBe(2)
   })
 })

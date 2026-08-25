@@ -21,8 +21,8 @@ import { checkMemoryValue, formatMemory, normalizeMemoryKey, readMemory, writeMe
 import { indexNote, SearchIndex, type IndexedCard, type SearchHit } from './search.ts'
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
 import {
-  atomicWrite, cardDirFor, mocPathFor, skipSetFor, uniqueCardPath, walk, withinRoot,
-  type VaultLayout,
+  atomicWrite, canonicalRootKey, cardDirFor, dedupeFiles, dedupeRoots, mocPathFor, resolveSearchRoots, skipSetFor, uniqueCardPath, walkRoots, withinRoot,
+  type SearchRoot, type VaultLayout,
 } from './vault.ts'
 
 export const name = 'study-buddy'
@@ -41,6 +41,12 @@ export interface StudyConfig {
   domainFolders?: Record<string, string>
   /** 额外跳过扫描的目录名（相对 vaultRoot 的顶层目录名；内置已跳过 .obsidian/.trash/.study/.git/node_modules） */
   skipDirs?: string[]
+  /** 额外检索根（绝对路径，或相对 vaultRoot 的路径）：旧笔记库，只读；不存在即挂载失败（fail-loud） */
+  searchRoots?: string[]
+  /** 是否把会话工作目录（工具调用方会话 cwd）纳入检索，默认 false */
+  includeSessionCwd?: boolean
+  /** 是否允许把关联写入无 ID 的旧笔记，默认 false（旧笔记不碰不动；只写卡片侧） */
+  linkIntoNotes?: boolean
 }
 
 interface ToolDef {
@@ -52,7 +58,13 @@ interface ToolDef {
     render: (_args: unknown, value: string) => Array<{ type: string; text: string }>
   }
   isConcurrencySafe?: () => boolean
-  execute: (args: Record<string, unknown>) => Promise<string> | string
+  /** exec 由 DSH 工具注册表注入：调用方会话信息（agent.session.header.cwd） */
+  execute: (args: Record<string, unknown>, exec?: ToolExecLike) => Promise<string> | string
+}
+
+/** 工具方会话信息的最小结构类型（不引入 @deepseek-ai 类型，保持构建 external） */
+interface ToolExecLike {
+  agent?: { session?: { header?: { cwd?: string } } }
 }
 
 interface PluginContext {
@@ -81,7 +93,25 @@ function normalizeConfig(config: StudyConfig | undefined): VaultLayout {
     mocDir: String(config.mocDir ?? '目录').trim() || '目录',
     domainFolders: config.domainFolders ?? {},
     skipDirs: Array.isArray(config.skipDirs) ? config.skipDirs.map(String) : [],
+    searchRoots: Array.isArray(config.searchRoots) ? config.searchRoots.map(String) : [],
+    includeSessionCwd: config.includeSessionCwd === true,
+    linkIntoNotes: config.linkIntoNotes === true,
   }
+}
+
+function sessionCwdOf(exec?: ToolExecLike): string | undefined {
+  const cwd = exec?.agent?.session?.header?.cwd
+  return cwd && String(cwd).trim() ? String(cwd) : undefined
+}
+
+/** 引用解析：按路径/文件名取唯一候选；多个候选报歧义（提示根限定路径） */
+function byUniqueRef(index: SearchIndex, ref: string): IndexedCard | undefined {
+  const candidates = index.candidatesForRef(ref)
+  if (candidates.length === 0) return undefined
+  if (candidates.length > 1) {
+    throw new Error(`路径歧义："${ref}" 命中多篇（${candidates.map((c) => c.fullRel).join('、')}），请用根限定路径（如 "vault/xxx.md"）`)
+  }
+  return candidates[0]
 }
 
 function fmtHits(hits: SearchHit[]): string {
@@ -95,6 +125,8 @@ function fmtHits(hits: SearchHit[]): string {
     const def = h.definition ? `- 定义：${h.definition.length > 40 ? `${h.definition.slice(0, 40)}…` : h.definition}` : ''
     return [
       `### ${h.title}${id}`,
+      `- 类型：${h.kind === 'card' ? '卡片' : '旧笔记'}`,
+      `- 路径：${h.fullRel}`,
       meta ? `- ${meta}` : '',
       def,
       `- 片段：${h.snippet}`,
@@ -106,8 +138,12 @@ function fmtHits(hits: SearchHit[]): string {
 export class VaultStore {
   private index: SearchIndex | null = null
   private sig: string | null = null
+  private extraRoots: SearchRoot[] = []
 
-  constructor(private readonly layout: VaultLayout) {}
+  constructor(private readonly layout: VaultLayout) {
+    // fail-loud：searchRoots 配置错误在挂载时立即可见（而不是首次搜索才暴露）
+    this.extraRoots = resolveSearchRoots(layout.vaultRoot, layout.searchRoots)
+  }
 
   private stateFile(): string {
     const p = join(this.layout.vaultRoot, this.layout.stateDir, 'progress.json')
@@ -130,11 +166,28 @@ export class VaultStore {
     }
   }
 
-  /** 目录 mtime/ctime/size 签名变化才重建索引（Obsidian 外部编辑后仍能查到最新内容） */
-  private async refresh(): Promise<SearchIndex> {
+  /** 当前会话的检索根：vault 优先，随后配置的 searchRoots，最后（可选）会话工作目录 */
+  private rootsFor(sessionCwd?: string): SearchRoot[] {
+    const roots: SearchRoot[] = [{ path: this.layout.vaultRoot, label: 'vault' }, ...this.extraRoots]
+    const cwd = sessionCwd && sessionCwd.trim() ? String(sessionCwd).trim() : undefined
+    if (this.layout.includeSessionCwd && cwd) {
+      // 文件系统根是真正的危险目标（会整盘递归扫描），跳过并保持 vault/searchRoots 可用
+      if (canonicalRootKey(cwd) !== canonicalRootKey(resolve('/'))) {
+        roots.push({ path: resolve(cwd), label: '工作目录' })
+      }
+    }
+    // 去重：cwd == vaultRoot / cwd 在 vault 内 / searchRoots 被覆盖时只保留贡献新文件的根
+    return dedupeRoots(roots)
+  }
+
+  /** 目录签名（含各根文件 mtime/ctime/size 与 cwd）变化才重建索引（Obsidian 外部编辑后仍能查到最新内容） */
+  private async refresh(sessionCwd?: string): Promise<SearchIndex> {
     await this.assertVault()
-    const files = await walk(this.layout.vaultRoot, skipSetFor(this.layout.skipDirs))
-    const sig = files.map((f) => `${f.rel}|${f.mtimeMs}|${f.ctimeMs}|${f.size}`).join('\n')
+    const roots = this.rootsFor(sessionCwd)
+    const walked = await walkRoots(roots, skipSetFor(this.layout.skipDirs))
+    // 嵌套根（如 vault ⊆ cwd）会重复扫到同一文件：按规范化路径去重，vault 标签优先
+    const files = dedupeFiles(walked)
+    const sig = `${sessionCwd ?? ''}\n` + files.map((f) => `${f.root}|${f.rel}|${f.mtimeMs}|${f.ctimeMs}|${f.size}`).join('\n')
     if (this.index && sig === this.sig) return this.index
     const cards: IndexedCard[] = []
     for (const f of files) {
@@ -146,31 +199,38 @@ export class VaultStore {
       }
     }
     this.index = new SearchIndex()
-    this.index.rebuild(cards)
+    this.index.rebuild(cards, roots.length > 1)
     this.sig = sig
     return this.index
   }
 
-  private async resolveCard(ref: string): Promise<{ card: IndexedCard; raw: string }> {
-    const index = await this.refresh()
-    const card = index.byId(ref) ?? index.byTitle(ref) ?? index.byRel(ref)
-    if (!card) throw new Error(`找不到卡片 "${ref}"（可传 ID、标题或相对路径/文件名）`)
+  private async resolveCard(ref: string, sessionCwd?: string): Promise<{ card: IndexedCard; raw: string }> {
+    const index = await this.refresh(sessionCwd)
+    const card = index.byId(ref) ?? index.byTitle(ref) ?? byUniqueRef(index, ref)
+    if (!card) {
+      throw new Error(`找不到卡片 "${ref}"（可传 ID、标题、根限定路径 如 "工作目录/子目录/笔记.md"、相对路径或文件名）`)
+    }
     const raw = await fsp.readFile(card.path, 'utf8')
     return { card, raw }
   }
 
-  async search(query: string, opts: { domain?: string; status?: string; limit?: number }): Promise<string> {
-    const index = await this.refresh()
+  async search(query: string, opts: { domain?: string; status?: string; kind?: 'card' | 'note'; limit?: number } = {}, call?: { sessionCwd?: string }): Promise<string> {
+    const index = await this.refresh(call?.sessionCwd)
     const hits = index.search(query, opts)
     if (hits.length === 0) {
-      return `未命中（共检索 ${index.size} 篇）。可换词再试；新概念直接进入讲解，归档时新建卡片。`
+      return `未命中（共检索 ${index.size} 篇${this.indexScopes(index)}）。可换词再试；新概念直接进入讲解，归档时新建卡片。`
     }
-    return `命中 ${hits.length}（共 ${index.size} 篇）：\n\n${fmtHits(hits)}`
+    return `命中 ${hits.length}（共 ${index.size} 篇${this.indexScopes(index)}）：\n\n${fmtHits(hits)}`
   }
 
-  async get(ref: string): Promise<string> {
-    const { card, raw } = await this.resolveCard(ref)
-    return `路径：${card.rel.replace(/\\/g, '/')}\n\n${raw}`
+  private indexScopes(index: SearchIndex): string {
+    const roots = new Set(index.all().map((c) => c.root))
+    return roots.size > 0 ? `，来源：${[...roots].join(' / ')}` : ''
+  }
+
+  async get(ref: string, call?: { sessionCwd?: string }): Promise<string> {
+    const { card, raw } = await this.resolveCard(ref, call?.sessionCwd)
+    return `路径：${card.fullRel}\n\n${raw}`
   }
 
   async create(input: CardInput): Promise<{ text: string; rel: string }> {
@@ -198,36 +258,67 @@ export class VaultStore {
     return `已更新：${rel}\nID：${card.id ?? id}${warn}\n\n${result.text}`
   }
 
-  async link(fromId: string, toId: string, kind: LinkKind): Promise<string> {
-    const from = await this.resolveCard(fromId)
-    const to = await this.resolveCard(toId)
-    const labelOf = (c: typeof from) => (c.card.id ? `${c.card.title}（${c.card.id}）` : `${c.card.title}（${c.card.rel.replace(/\\/g, '/')}）`)
-    const fromNext = addLink(from.raw, kind, labelOf(to), to.card.id ?? undefined)
-    await atomicWrite(from.card.path, fromNext)
+  async link(fromId: string, toId: string, kind: LinkKind, call?: { sessionCwd?: string }): Promise<string> {
+    const from = await this.resolveCard(fromId, call?.sessionCwd)
+    const to = await this.resolveCard(toId, call?.sessionCwd)
+    const labelOf = (c: typeof from) => (c.card.id ? `${c.card.title}（${c.card.id}）` : `${c.card.title}（${c.card.fullRel}）`)
+    const allowNoteWrite = this.layout.linkIntoNotes === true
     const reverseKind: LinkKind = kind === 'prev' ? 'next' : kind === 'next' ? 'prev' : 'conflict'
-    const toNext = addLink(to.raw, reverseKind, labelOf(from), from.card.id ?? undefined)
-    await atomicWrite(to.card.path, toNext)
+    const noteSkipped: string[] = []
+    const written: string[] = []
+    // 每一侧：卡片总是写入；旧笔记仅在 linkIntoNotes 时写入（默认不碰旧笔记）
+    const applySide = async (
+      side: typeof from, sideKind: LinkKind, targetLabel: string, targetId: string | null,
+    ): Promise<void> => {
+      if (side.card.id === null && !allowNoteWrite) {
+        noteSkipped.push(labelOf(side))
+        return
+      }
+      const next = addLink(side.raw, sideKind, targetLabel, targetId ?? undefined)
+      if (next !== side.raw) {
+        await atomicWrite(side.card.path, next)
+        written.push(labelOf(side))
+      }
+    }
+    if (from.card.id === null && to.card.id === null && !allowNoteWrite) {
+      throw new Error(
+        '两侧都是旧笔记（无 ID）：默认不写入旧笔记。请开启 config.linkIntoNotes 由插件双向写入，'
+        + '或在 Obsidian 中用 [[ ]] 内链手动连接。',
+      )
+    }
+    await applySide(from, kind, labelOf(to), to.card.id)
+    await applySide(to, reverseKind, labelOf(from), from.card.id)
     this.sig = null
     const map: Record<LinkKind, string> = { prev: '前置知识', next: '后续延伸', conflict: '冲突/易混淆' }
-    return `已建立关联：${labelOf(from)} ←${map[kind]}→ ${labelOf(to)}（两卡已双向更新）`
+    const basis = `已建立关联：${labelOf(from)} ←${map[kind]}→ ${labelOf(to)}`
+    if (noteSkipped.length > 0) {
+      return `${basis}（单侧写入；未修改旧笔记：${noteSkipped.join('、')}。开启 config.linkIntoNotes 可双向写入，或用 Obsidian 内链）`
+    }
+    return written.length > 0 ? `${basis}（已写入 ${written.length} 侧）` : `${basis}（关联已存在，无改动）`
   }
 
-  async moc(opts: { title?: string; cardIds: string[]; domain?: string }): Promise<string> {
-    const index = await this.refresh()
+  async moc(opts: { title?: string; cardIds: string[]; domain?: string }, call?: { sessionCwd?: string }): Promise<string> {
+    const index = await this.refresh(call?.sessionCwd)
     const entries: MocEntry[] = []
     const missing: string[] = []
+    const skippedNotes: string[] = []
     for (const ref of opts.cardIds) {
-      const card = index.byId(ref) ?? index.byTitle(ref) ?? index.byRel(ref)
+      const card = (index.byId(ref) ?? index.byTitle(ref)) ?? byUniqueRef(index, ref)
       if (!card) {
         missing.push(ref)
         continue
       }
+      if (card.id === null) {
+        // MOC 是卡片知识目录；旧笔记不收录（提示但不算缺失）
+        skippedNotes.push(card.fullRel)
+        continue
+      }
       const domain = card.domain ?? card.inferredDomain
       if (opts.domain && domain !== opts.domain) continue
-      entries.push({ id: card.id ?? ref, title: card.title, domain, fileName: card.fileName })
+      entries.push({ id: card.id, title: card.title, domain, fileName: card.fileName })
     }
     if (entries.length === 0) {
-      throw new Error(`MOC 没有可收录的卡片（未解析到任何目标卡片${missing.length ? `，缺失：${missing.join('、')}` : ''}）`)
+      throw new Error(`MOC 没有可收录的卡片（未解析到任何目标卡片${missing.length ? `，缺失：${missing.join('、')}` : ''}${skippedNotes.length ? `；跳过的旧笔记：${skippedNotes.join('、')}` : ''}）`)
     }
     const date = new Date().toISOString().slice(0, 10)
     const title = opts.title?.trim() || `知识目录_${date}`
@@ -235,7 +326,7 @@ export class VaultStore {
     const file = mocPathFor(this.layout, title, date)
     await atomicWrite(file, text)
     const rel = file.slice(this.layout.vaultRoot.length + 1).replace(/\\/g, '/')
-    return `MOC 已写入：${rel}\n\n${text}`
+    return `MOC 已写入：${rel}${skippedNotes.length ? `\n（旧笔记不收录：${skippedNotes.join('、')}）` : ''}\n\n${text}`
   }
 
   async progress(action: string, fields: {
@@ -319,39 +410,42 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'card_search',
       description:
-        '全库检索 vault 卡片与笔记（含旧笔记）。摄入新资料、引用旧卡、增量更新判断前必查重叠。'
-        + '返回候选的标题/ID/领域/状态/来源/定义/片段；召回由插件做，语义判断由你完成。',
+        '全库检索 vault 卡片与旧笔记（含配置 searchRoots 与工作目录旧笔记——旧笔记=无 ID 的 .md）。'
+        + '摄入新资料、引用旧卡、增量更新判断前必查重叠。'
+        + '返回候选的标题/ID/类型（卡片或旧笔记）/路径/领域/状态/来源/定义/片段；召回由插件做，语义判断由你完成。',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string', description: '检索词（概念/术语/标题片段）' },
           domain: { type: 'string', description: '领域过滤（如 图形学）' },
           status: { type: 'string', description: '状态过滤：草稿/已确认/需更新' },
+          kind: { type: 'string', enum: ['card', 'note'], description: '类型过滤：card=卡片，note=旧笔记' },
           limit: { type: 'number', description: '返回条数，默认 5' },
         },
         required: ['query'],
       },
       output,
       isConcurrencySafe: () => true,
-      execute: (args) => store.search(String(args.query ?? ''), {
+      execute: (args, exec) => store.search(String(args.query ?? ''), {
         domain: args.domain ? String(args.domain) : undefined,
         status: args.status ? String(args.status) : undefined,
+        kind: args.kind === 'card' || args.kind === 'note' ? args.kind : undefined,
         limit: Number(args.limit) > 0 ? Number(args.limit) : undefined,
-      }),
+      }, { sessionCwd: sessionCwdOf(exec) }),
     },
     {
       name: 'card_get',
-      description: '按 ID、标题或路径读取一张卡片的完整原文（贴整卡、增量更新前用）。',
+      description: '按 ID、标题、根限定路径（如 "工作目录/子目录/笔记.md"）、相对路径或文件名读取一篇文档的完整原文（卡片或旧笔记）。',
       parameters: {
         type: 'object',
         properties: {
-          ref: { type: 'string', description: '卡片 ID、标题或相对路径/文件名' },
+          ref: { type: 'string', description: '卡片 ID、标题或路径/文件名（跨根路径歧义时用"根/相对路径"）' },
         },
         required: ['ref'],
       },
       output,
       isConcurrencySafe: () => true,
-      execute: (args) => store.get(String(args.ref ?? '')),
+      execute: (args, exec) => store.get(String(args.ref ?? ''), { sessionCwd: sessionCwdOf(exec) }),
     },
     {
       name: 'card_id',
@@ -478,27 +572,30 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     },
     {
       name: 'card_link',
-      description: '双向维护两卡关联（前置/后续/易混淆）。',
+      description:
+        '维护两篇文档的关联（前置/后续/易混淆），双向写入卡片侧。'
+        + '无 ID 的旧笔记默认不写入（旧笔记不碰不动）：卡片↔旧笔记只写卡片侧；旧笔记↔旧笔记需 config.linkIntoNotes 开启。',
       parameters: {
         type: 'object',
         properties: {
-          fromId: { type: 'string', description: '卡片 ID/标题/路径' },
+          fromId: { type: 'string', description: '卡片 ID/标题/路径（旧笔记用"工作目录/相对路径"）' },
           toId: { type: 'string', description: '卡片 ID/标题/路径' },
           kind: { type: 'string', description: 'prev=toId 是 fromId 的前置 / next=后续 / conflict=易混淆' },
         },
         required: ['fromId', 'toId', 'kind'],
       },
       output,
-      execute: (args) => {
+      execute: (args, exec) => {
         const kind = String(args.kind ?? '') as LinkKind
         if (!['prev', 'next', 'conflict'].includes(kind)) throw new Error('kind 必须是 prev / next / conflict')
-        return store.link(String(args.fromId ?? ''), String(args.toId ?? ''), kind)
+        return store.link(String(args.fromId ?? ''), String(args.toId ?? ''), kind, { sessionCwd: sessionCwdOf(exec) })
       },
     },
     {
       name: 'card_moc',
       description:
-        '生成 MOC（领域分组 + Obsidian wikilink）写入"目录"目录并返回文本。归档收尾时用：传本次涉及的卡片 ID。',
+        '生成 MOC（领域分组 + Obsidian wikilink）写入"目录"目录并返回文本。归档收尾时用：传本次涉及的卡片 ID。'
+        + '只收录有 ID 的卡片，旧笔记自动跳过。',
       parameters: {
         type: 'object',
         properties: {
@@ -509,11 +606,11 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         required: ['cardIds'],
       },
       output,
-      execute: (args) => store.moc({
+      execute: (args, exec) => store.moc({
         title: args.title ? String(args.title) : undefined,
         cardIds: Array.isArray(args.cardIds) ? args.cardIds.map(String) : [],
         domain: args.domain ? String(args.domain) : undefined,
-      }),
+      }, { sessionCwd: sessionCwdOf(exec) }),
     },
     {
       name: 'study_progress',

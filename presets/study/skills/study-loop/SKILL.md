@@ -45,7 +45,7 @@ description: 四步学习闭环执行细则：指令驱动状态机、阶段模�
 ```
 
 - 先加载 file-reading 技能，按其工具链读取（图片 → read_image；PDF/PPTX/DOCX → pwsh+python 命令模板）。
-- `card_search` 查一次重叠，只作为报告中的一行预警，不展开。
+- `card_search` 查一次重叠（范围 = vault 全部 .md + 会话工作目录 + searchRoots 配置目录，卡片与旧笔记都命中），只作为报告中的一行预警，不展开；命中里注意 `类型：卡片/旧笔记` 与 `路径`（旧笔记无 ID，不能用卡片引用格式）。
 - **只输出报告，不做任何讲解**；讲解等用户命令。
 
 ## 阶段二·讲解（仅用户命令触发）
@@ -58,13 +58,14 @@ description: 四步学习闭环执行细则：指令驱动状态机、阶段模�
 ## 阶段三·问答（三明治）
 
 - [ ] ①直击 ≤3 句 ②底层逻辑一两句 ③反诘收尾（喊停才不带）
-- [ ] 引用旧卡标 `（详见卡片：ID）`
+- [ ] 引用旧卡标 `（详见卡片：ID）`；引用旧笔记标 `（详见旧笔记：<根>/<相对路径>）`
 - [ ] 问题暴露旧卡盲区/过时 → 触发增量更新（见 incremental-update 技能）
 
 ## 阶段四·归档
 
 - [ ] 先 `study_progress(get)` 查 pendingQuestions，未闭环先提示
 - [ ] 1~3 张卡按 card-format 规范 `card_create` 落盘（只重组去重，不加新知识）
+- [ ] 新卡与检索命中的旧笔记相关 → `card_link`（默认只写卡片侧，不碰旧笔记；旧笔记↔旧笔记提示用 Obsidian `[[]]` 内链）
 - [ ] `card_moc` 出目录；`study_progress(set)` 更新 touchedCardIds、清已答追问
 - [ ] 收尾：`study_memory(set lastSummary=…)` 写 1~2 句本次小结
 

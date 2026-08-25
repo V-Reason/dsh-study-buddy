@@ -13,7 +13,13 @@ export interface IndexedCard {
   title: string
   path: string
   rel: string
+  /** 来源根标签（vault / 工作目录 / searchRoots 目录名） */
+  root: string
+  /** 展示/寻址路径：多根时为 root/rel，单根时无前缀 */
+  fullRel: string
   fileName: string
+  /** 卡片=有 frontmatter ID；旧笔记=无 ID */
+  kind: 'card' | 'note'
   /** frontmatter 领域首个标签（去 #） */
   domain: string | null
   /** frontmatter 领域全部标签（去 #） */
@@ -42,7 +48,10 @@ export interface SearchHit {
   definition: string | null
   path: string
   rel: string
+  root: string
+  fullRel: string
   fileName: string
+  kind: 'card' | 'note'
   inferredDomain: string
   score: number
   snippet: string
@@ -92,12 +101,16 @@ export function indexNote(file: WalkedFile, raw: string): IndexedCard {
   const inferredDomain = file.rel.split(/[\\/]/)[0] || ''
   const title = parsed.meta?.title ?? firstHeading(parsed.body) ?? fileNameOf(file.path).replace(/\.md$/i, '')
   const definition = extractDefinition(parsed.body)
+  const root = file.root
   return {
     id: parsed.meta?.id ?? null,
     title,
     path: file.path,
     rel: file.rel,
+    root,
+    fullRel: `${root}/${file.rel.replace(/\\/g, '/')}`,
     fileName: fileNameOf(file.path),
+    kind: parsed.meta?.id ? 'card' : 'note',
     domain: tags[0] ?? null,
     tags,
     status: parsed.meta?.status ?? null,
@@ -128,6 +141,8 @@ function snippetOf(card: IndexedCard, queryTokens: string[]): string {
 export interface SearchOptions {
   domain?: string
   status?: string
+  /** 只返回卡片或只返回旧笔记 */
+  kind?: 'card' | 'note'
   limit?: number
 }
 
@@ -138,13 +153,13 @@ export class SearchIndex {
   private defInverted = new Map<string, number[]>()
   private tagInverted = new Map<string, number[]>()
 
-  rebuild(cards: IndexedCard[]): void {
-    this.cards = cards
+  rebuild(cards: IndexedCard[], multiRoot = false): void {
+    this.cards = cards.map((c) => ({ ...c, fullRel: multiRoot ? c.fullRel : c.rel.replace(/\\/g, '/') }))
     this.inverted.clear()
     this.titleInverted.clear()
     this.defInverted.clear()
     this.tagInverted.clear()
-    cards.forEach((card, idx) => {
+    this.cards.forEach((card, idx) => {
       for (const t of card.bodyTokens.keys()) this.push(this.inverted, t, idx)
       for (const t of card.titleTokens.keys()) this.push(this.titleInverted, t, idx)
       for (const t of card.defTokens.keys()) this.push(this.defInverted, t, idx)
@@ -175,12 +190,24 @@ export class SearchIndex {
     return this.cards.find((c) => c.title.toLowerCase() === wanted)
   }
 
-  byRel(rel: string): IndexedCard | undefined {
-    const norm = rel.replace(/\\/g, '/')
-    return this.cards.find((c) => {
-      const cnorm = c.rel.replace(/\\/g, '/')
-      return cnorm === norm || c.fileName === rel || c.fileName.toLowerCase() === rel.toLowerCase()
+  /**
+   * 按引用串找候选：优先完整展示路径（root/rel，多根时）、各根内 rel，最后（仅当引用是纯文件名时）按文件名。
+   * 返回全部候选（0/1/多个），由调用方决定唯一或报歧义。
+   */
+  candidatesForRef(ref: string): IndexedCard[] {
+    const q = ref.replace(/\\/g, '/')
+    const pureName = !q.includes('/')
+    const wanted = q.toLowerCase()
+    return this.cards.filter((c) => {
+      const cRel = c.rel.replace(/\\/g, '/')
+      const cFull = `${c.root}/${cRel}`
+      if (cFull === q || cRel === q || c.fullRel === q) return true
+      return pureName && c.fileName.toLowerCase() === wanted
     })
+  }
+
+  byRel(rel: string): IndexedCard | undefined {
+    return this.candidatesForRef(rel)[0]
   }
 
   search(query: string, opts: SearchOptions = {}): SearchHit[] {
@@ -207,6 +234,7 @@ export class SearchIndex {
       const card = this.cards[idx]
       if (opts.domain && card.domain !== opts.domain && card.inferredDomain !== opts.domain) continue
       if (opts.status && card.status !== opts.status) continue
+      if (opts.kind && card.kind !== opts.kind) continue
       hits.push({
         id: card.id,
         title: card.title,
@@ -217,13 +245,16 @@ export class SearchIndex {
         definition: card.definition,
         path: card.path,
         rel: card.rel,
+        root: card.root,
+        fullRel: card.fullRel,
         fileName: card.fileName,
+        kind: card.kind,
         inferredDomain: card.inferredDomain,
         score,
         snippet: snippetOf(card, tokens),
       })
     }
-    hits.sort((a, b) => b.score - a.score)
+    hits.sort((a, b) => b.score - a.score || (a.kind === b.kind ? 0 : a.kind === 'card' ? -1 : 1) || a.fullRel.localeCompare(b.fullRel))
     return hits.slice(0, limit)
   }
 }
