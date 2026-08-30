@@ -17,7 +17,14 @@ import {
   addLink, applyUpdate, generateId, renderCard, renderMoc, validateCard, VALID_STATUS,
   type CardInput, type LinkKind, type MocEntry, type UpdatePayload,
 } from './card.ts'
-import { checkMemoryValue, formatMemory, normalizeMemoryKey, readMemory, writeMemory, type MemoryState } from './memory.ts'
+import {
+  AUTO_PREFS_KEY, checkMemoryValue, formatAutoPrefs, formatMemory,
+  normalizeAutoPrefsValue, normalizeMemoryKey, readMemory, writeMemory, type MemoryState,
+} from './memory.ts'
+import {
+  MANDATE, OPENER_SECTION_NAME, OPENER_SECTION_ORDER,
+  applyOpenerDecision, buildOpenerReminder, hasPriorUserMessage, shouldInjectOpener,
+} from './opener.ts'
 import { indexNote, SearchIndex, type IndexedCard, type SearchHit } from './search.ts'
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
 import {
@@ -70,6 +77,10 @@ interface ToolExecLike {
 interface PluginContext {
   tools?: { register: (def: ToolDef) => () => void }
   effect?: (callback: () => () => unknown, label?: string) => unknown
+  /** Cordis 事件订阅（预步门禁用；返回 disposer） */
+  on?: (event: string, listener: (payload: unknown, next: () => Promise<unknown>) => Promise<unknown>) => () => void
+  /** Cordis 服务读取（systemPrompt 用；可选服务一律特性探测） */
+  get?: (key: string) => unknown
 }
 
 const renderText = (_args: unknown, value: string) => [{ type: 'text', text: value }]
@@ -362,20 +373,42 @@ export class VaultStore {
   async memory(action: string, fields: { key?: string; value?: string }): Promise<string> {
     const file = this.memoryFile()
     if (action === 'clear') {
+      // 彻底重来：清空全部记忆，包括自迭代开关（回到默认关闭）
       await writeMemory(file, { notes: {} })
       return '记忆已清空。'
     }
     const current = await readMemory(file)
     if (action === 'get') {
       if (fields.key !== undefined) {
-        const key = normalizeMemoryKey(fields.key)
-        const value = current.notes[key]
-        return value !== undefined ? `${key}：${value}` : `（无此键：${key}）`
+        const key = String(fields.key).trim()
+        if (key === AUTO_PREFS_KEY) return formatAutoPrefs(current.notes[AUTO_PREFS_KEY])
+        const normalized = normalizeMemoryKey(key)
+        const value = current.notes[normalized]
+        return value !== undefined ? `${normalized}：${value}` : `（无此键：${normalized}）`
       }
       return formatMemory(current)
     }
     if (action !== 'set' && action !== 'append' && action !== 'remove') {
       throw new Error(`study_memory 未知 action "${action}"（可用 get/set/append/remove/clear）`)
+    }
+    // 自迭代开关（保留控制键）：独占校验，不接受 append
+    if (String(fields.key ?? '').trim() === AUTO_PREFS_KEY) {
+      if (action === 'append') throw new Error('自迭代开关不支持 append；用 set 切换 on/off，或用 remove 删除（回到默认关闭）')
+      if (action === 'remove') {
+        if (!Object.prototype.hasOwnProperty.call(current.notes, AUTO_PREFS_KEY)) {
+          return '（无此键：_autoPrefs，无需删除；当前为默认关闭）'
+        }
+        const next: MemoryState = { notes: { ...current.notes } }
+        delete next.notes[AUTO_PREFS_KEY]
+        await writeMemory(file, next)
+        return '已关闭自迭代记忆（开关键已删除，回到默认关闭）。'
+      }
+      const value = normalizeAutoPrefsValue(fields.value ?? '')
+      const next: MemoryState = { notes: { ...current.notes, [AUTO_PREFS_KEY]: value } }
+      await writeMemory(file, next)
+      return value === 'on'
+        ? '已开启自迭代记忆：无需再说"请记住"，偏好/约定会自动写入 prefs.* 键（每次写入会在回复中标注）。'
+        : '已关闭自迭代记忆：回到"记住…"手动模式。'
     }
     const key = normalizeMemoryKey(fields.key ?? '')
     const next: MemoryState = { notes: { ...current.notes } }
@@ -394,7 +427,7 @@ export class VaultStore {
       next.notes[key] = value
     }
     await writeMemory(file, next)
-    return `已记忆 ${key}：${value}\n\n${formatMemory(next)}`
+    return `已记忆 ${key}：${next.notes[key]}\n\n${formatMemory(next)}`
   }
 }
 
@@ -479,7 +512,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
           definition: { type: 'string', description: '一句话定义 ≤30 字' },
           content: {
             type: 'string',
-            description: '正文 Markdown（### 小节/表格；公式块级 LaTeX 编号；代码标语言）',
+            description: '正文 Markdown（阶梯式解剖模板五小节：### 核心思想 / ### 阶梯式解剖 / ### 实例走查 / ### 易错点 / ### 自测题，缺一警告；公式块级 LaTeX 编号；代码标语言）',
           },
           links: {
             type: 'object',
@@ -528,7 +561,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
           tags: { type: 'array', items: { type: 'string' }, description: 'replace：额外领域标签' },
           status: { type: 'string', enum: [...VALID_STATUS], description: 'replace：草稿/已确认/需更新' },
           definition: { type: 'string', description: 'replace：一句话定义 ≤30 字' },
-          content: { type: 'string', description: 'replace：新正文 Markdown' },
+          content: { type: 'string', description: 'replace：新正文 Markdown（同 card_create：阶梯式解剖模板五小节）' },
           links: {
             type: 'object',
             description: 'replace：新关联卡片（可选；不传则新卡无关联小节，旧关联留在历史折叠块）',
@@ -640,13 +673,15 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       name: 'study_memory',
       description:
         '读写跨会话记忆（vault .study/memory.json，持久有效，重启不丢）：键值笔记。'
-        + '新会话开场先 get（配合 study_progress(get) 给衔接提示）；用户偏好/约定存 prefs；'
-        + '告一段落或归档时 set lastSummary=本次小结。清空进度（study_progress clear）不影响记忆。',
+        + '新会话开场先 get（配合 study_progress(get) 给衔接提示）；用户偏好/约定存 prefs 键；'
+        + '告一段落或归档时 set lastSummary=本次小结。清空进度（study_progress clear）不影响记忆。'
+        + '保留控制键 _autoPrefs（自迭代记忆开关，值 on/off，默认关闭）：set 切换、remove 回默认、不支持 append；'
+        + '开启后无需用户"请记住"，按 memory-auto 技能把持久偏好/约定自动写入 prefs.* 键（每类约定一个键、覆盖更新）。',
       parameters: {
         type: 'object',
         properties: {
           action: { type: 'string', description: 'get（key 可选，默认全量）/set/append/remove/clear' },
-          key: { type: 'string', description: '记忆键名（≤64 字符；lastSummary=上次小结，置顶显示）' },
+          key: { type: 'string', description: '记忆键名（≤64 字符；lastSummary=上次小结，置顶显示；_autoPrefs=自迭代开关，值 on/off）' },
           value: { type: 'string', description: 'set/append：记忆内容（≤4000 字符）' },
         },
         required: ['action'],
@@ -686,6 +721,42 @@ export function apply(ctx: PluginContext, config?: StudyConfig): void {
     console.error(`[dsh-study-buddy] 工具注册失败：${(error as Error).message}`)
     throw error
   }
+
+  // ── 开场门禁（需求 3）：系统提示段 + 预步提醒，双层强制「首条消息先读记忆再办事」。
+  // 一律特性探测：宿主任何一环缺失都不影响工具注册（fail-loud 只针对工具与配置）。
+  const systemPrompt = typeof (ctx as PluginContext | undefined)?.get === 'function'
+    ? (ctx as PluginContext).get?.('systemPrompt') as { section?: (entry: unknown) => () => void } | undefined
+    : undefined
+  if (typeof systemPrompt?.section === 'function') {
+    const disposeSection = systemPrompt.section({
+      name: OPENER_SECTION_NAME,
+      order: OPENER_SECTION_ORDER,
+      text: MANDATE,
+    })
+    if (typeof disposeSection === 'function') disposers.push(disposeSection)
+  }
+  const on = (ctx as PluginContext | undefined)?.on
+  if (typeof on === 'function') {
+    const disposeListener = on(
+      'agent/pre-step',
+      async (payload: unknown, next: () => Promise<unknown>): Promise<unknown> => {
+        const downstream = await next()
+        const p = payload as {
+          turn?: unknown
+          step?: unknown
+          agent?: { session?: { events?: Array<{ type?: string }> } }
+        }
+        const turn = Number(p?.turn)
+        const step = Number(p?.step)
+        if (!shouldInjectOpener(turn, step, hasPriorUserMessage(p))) return downstream
+        const decision = downstream as { kind?: string; messages?: unknown[] }
+        if (decision?.kind !== 'enter' || !Array.isArray(decision.messages)) return downstream
+        return applyOpenerDecision(decision as { kind: 'enter'; messages: unknown[] }, buildOpenerReminder())
+      },
+    )
+    disposers.push(disposeListener)
+  }
+
   // 注册随 preset 作用域注销；disposer 由 ctx.effect 持有（ctx 无 effect 时
   // 退化为不持有——standing 挂载生命周期即进程生命周期，无泄漏）。
   ctx?.effect?.(() => () => {

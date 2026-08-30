@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import {
-  checkMemoryValue, formatMemory, normalizeMemoryKey, readMemory, writeMemory,
+  checkMemoryValue, formatAutoPrefs, formatMemory, normalizeAutoPrefsValue, normalizeMemoryKey,
+  readMemory, writeMemory,
 } from '../src/memory.ts'
 
 let dir: string
@@ -86,5 +87,37 @@ describe('memory', () => {
 
   test('formatMemoryEmpty', () => {
     expect(formatMemory({ notes: {} })).toBe('暂无记忆。')
+  })
+
+  test('normalizeAutoPrefsValue accepts on/off only', () => {
+    expect(normalizeAutoPrefsValue(' on ')).toBe('on')
+    expect(normalizeAutoPrefsValue('off')).toBe('off')
+    expect(() => normalizeAutoPrefsValue('yes')).toThrow('on/off')
+    expect(() => normalizeAutoPrefsValue('')).toThrow('on/off')
+    expect(() => normalizeAutoPrefsValue('开启')).toThrow('on/off')
+  })
+
+  test('formatAutoPrefs: default / on / off / invalid', () => {
+    expect(formatAutoPrefs(undefined)).toContain('默认')
+    expect(formatAutoPrefs('on')).toContain('开启')
+    expect(formatAutoPrefs('off')).toContain('关闭')
+    expect(formatAutoPrefs('weird')).toContain('异常值')
+  })
+
+  test('formatMemory renders switch line on top and excludes it from count', () => {
+    const text = formatMemory({ notes: { _autoPrefs: 'on', prefs: 'C++', lastSummary: '讲了投影矩阵' } })
+    expect(text.startsWith('自迭代记忆：开启')).toBe(true)
+    expect(text).toContain('记忆（2 条）')
+    expect(text).not.toContain('_autoPrefs：')
+    expect(text).toContain('上次小结：讲了投影矩阵')
+  })
+
+  test('formatMemory switch-only memory is not "暂无记忆"', () => {
+    expect(formatMemory({ notes: { _autoPrefs: 'on' } })).toBe('自迭代记忆：开启（自动记录偏好）')
+  })
+
+  test('formatMemory tolerates hand-edited invalid switch value', () => {
+    const text = formatMemory({ notes: { _autoPrefs: 'yes-please' } })
+    expect(text).toContain('异常值（yes-please）')
   })
 })

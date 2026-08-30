@@ -9,6 +9,15 @@ import { parseFrontmatter, renderFrontmatter } from './frontmatter.ts'
 
 export const VALID_STATUS = ['草稿', '已确认', '需更新'] as const
 
+/** 阶梯式解剖模板必需小节（缺失出 warning 提示，不阻塞落盘；硬强制在 persona/归档清单） */
+export const TEMPLATE_SECTIONS = [
+  { title: '核心思想', hint: '一句话讲清 + 为什么重要 + 记忆锚点' },
+  { title: '阶梯式解剖', hint: '第 1 层直觉 → 第 2 层机制 → 第 3 层细节推导 → 第 4 层边界反例' },
+  { title: '实例走查', hint: '代入具体数字/代码逐步走完' },
+  { title: '易错点', hint: '坑 + 为什么错' },
+  { title: '自测题', hint: '2~3 题，先答再看答案' },
+] as const
+
 export interface CardLinks {
   prev?: string[]
   next?: string[]
@@ -61,6 +70,13 @@ export function validateCard(input: CardInput): ValidateResult {
   if (!input.definition?.trim()) errors.push('definition（一句话定义）不能为空')
   else if (input.definition.length > 30) warnings.push(`定义 ${input.definition.length} 字，超过 30 字建议精简`)
   if (!input.content?.trim()) errors.push('content（核心内容）不能为空')
+  if (String(input.content ?? '').trim()) {
+    for (const section of TEMPLATE_SECTIONS) {
+      if (!String(input.content).includes(`### ${section.title}`)) {
+        warnings.push(`正文缺少 "### ${section.title}" 小节（阶梯式解剖模板必需：${section.hint}）`)
+      }
+    }
+  }
   return { errors, warnings }
 }
 

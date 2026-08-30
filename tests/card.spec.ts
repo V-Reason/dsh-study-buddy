@@ -10,7 +10,29 @@ const base: CardInput = {
   source: 'GAMES101 L04',
   status: '草稿',
   definition: '透视投影矩阵可拆解为缩放、平移与齐次除三步',
-  content: '推导正文\n\n```hlsl\nfloat4x4 m;\n```',
+  content: [
+    '### 核心思想',
+    '**一句话讲清**：先缩放后平移，最后齐次除，三步把透视世界变成矩形视口。',
+    '**为什么**：透视投影的关键是 w 除，其余都是仿射铺垫。',
+    '**记忆锚点**：先裁窗后贴到屏幕。',
+    '',
+    '### 阶梯式解剖',
+    '**第 1 层 · 直觉**：近大远小 = 对 w 做除法。',
+    '**第 2 层 · 机制**：矩阵乘法（见下）。',
+    '**第 3 层 · 细节与推导**：齐次坐标代入后展开，第三行以 -1 填 w。',
+    '**第 4 层 · 边界与反例**：w=0 对应无穷远点，透视除失效。',
+    '',
+    '### 实例走查',
+    '输入 (0,0,1,1)：缩放 → 平移 → w 除 → 屏幕坐标。',
+    '',
+    '### 易错点',
+    '- 忘记 w 归一化：四维坐标不能直接当三维用。',
+    '',
+    '### 自测题',
+    '- **Q1**：平移为什么放进矩阵？ → 齐次坐标把平移变成线性变换。',
+    '',
+    '```hlsl\nfloat4x4 m;\n```',
+  ].join('\n'),
   tags: ['线性代数'],
 }
 
@@ -37,6 +59,23 @@ describe('card', () => {
 
     const missing = { ...base, content: '' }
     expect(validateCard(missing).errors.join()).toContain('content')
+  })
+
+  test('validateCard 警告缺失的阶梯式解剖模板小节（不阻塞）', () => {
+    // 少了 实例走查 / 易错点 / 自测题
+    const partial = { ...base, content: '### 核心思想\n一句话。\n\n### 阶梯式解剖\n第 1 层。' }
+    const result = validateCard(partial)
+    expect(result.errors).toEqual([])
+    const warnings = result.warnings.join()
+    expect(warnings).toContain('"### 实例走查"')
+    expect(warnings).toContain('"### 易错点"')
+    expect(warnings).toContain('"### 自测题"')
+    expect(warnings).not.toContain('"### 核心思想"')
+    expect(warnings).not.toContain('"### 阶梯式解剖"')
+    // 五小节齐全则不产生模板警告
+    expect(validateCard(base).warnings.filter(w => w.includes('模板必需'))).toEqual([])
+    // content 为空时已有 error，不再叠加模板警告
+    expect(validateCard({ ...base, content: '' }).warnings.join()).not.toContain('模板必需')
   })
 
   test('renderCardMatchesFinalFormat', () => {

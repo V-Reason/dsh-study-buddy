@@ -158,6 +158,56 @@ describe('VaultStore 端到端', () => {
     await expect(store.memory('bogus', {})).rejects.toThrow('未知 action')
   })
 
+  test('memory 自迭代开关：默认关闭、set 切换、get 显示、非法值 fail-loud', async () => {
+    const store = new VaultStore(layout())
+    // 缺省：无键即关闭，且不占用"记忆（N 条）"
+    expect(await store.memory('get', { key: '_autoPrefs' })).toContain('默认')
+    expect(await store.memory('get', {})).toBe('暂无记忆。')
+
+    // 开启后：get 单键/全量置顶显示；开关不计入条数
+    expect(await store.memory('set', { key: '_autoPrefs', value: 'on' })).toContain('已开启自迭代记忆')
+    expect(await store.memory('get', { key: '_autoPrefs' })).toContain('开启')
+    await store.memory('set', { key: 'prefs', value: '讲解多用 C++ 例子' })
+    const full = await store.memory('get', {})
+    expect(full.startsWith('自迭代记忆：开启')).toBe(true)
+    expect(full).toContain('记忆（1 条）')
+
+    // 关闭（值允许周围空白）
+    expect(await store.memory('set', { key: '_autoPrefs', value: ' off ' })).toContain('已关闭自迭代记忆')
+    expect(await store.memory('get', { key: '_autoPrefs' })).toContain('关闭')
+
+    // 非法值 fail-loud；append 无意义直接拒绝
+    await expect(store.memory('set', { key: '_autoPrefs', value: 'yes' })).rejects.toThrow('on/off')
+    await expect(store.memory('append', { key: '_autoPrefs', value: 'on' })).rejects.toThrow('不支持 append')
+  })
+
+  test('memory 自迭代开关：remove 回默认、clear 彻底重置', async () => {
+    const store = new VaultStore(layout())
+    await store.memory('set', { key: '_autoPrefs', value: 'on' })
+    await store.memory('set', { key: 'prefs', value: 'x' })
+    // remove 开关键：回到默认关闭，其余记忆保留
+    expect(await store.memory('remove', { key: '_autoPrefs' })).toContain('已关闭')
+    expect(await store.memory('get', { key: '_autoPrefs' })).toContain('默认')
+    expect(await store.memory('get', {})).toContain('prefs')
+    // remove 不存在的开关键：明确提示，不写盘
+    expect(await store.memory('remove', { key: '_autoPrefs' })).toContain('无需删除')
+    // clear 连开关一起清
+    await store.memory('set', { key: '_autoPrefs', value: 'on' })
+    await store.memory('clear', {})
+    expect(await store.memory('get', {})).toBe('暂无记忆。')
+    expect(await store.memory('get', { key: '_autoPrefs' })).toContain('默认')
+  })
+
+  test('memory 容忍手改的异常开关键值：读不炸、set 可修复', async () => {
+    const store = new VaultStore(layout())
+    await mkdir(join(dir, '.study'), { recursive: true })
+    await writeFile(join(dir, '.study', 'memory.json'), JSON.stringify({ notes: { _autoPrefs: 'yes-please' } }), 'utf8')
+    expect(await store.memory('get', {})).toContain('异常值')
+    expect(await store.memory('get', { key: '_autoPrefs' })).toContain('异常值')
+    await store.memory('set', { key: '_autoPrefs', value: 'on' })
+    expect(await store.memory('get', { key: '_autoPrefs' })).toContain('开启')
+  })
+
   test('createFallsBackForUnmappedDomain', async () => {
     const store = new VaultStore(layout())
     const created = await store.create({

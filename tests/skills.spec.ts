@@ -67,11 +67,32 @@ describe('study preset skills', () => {
     expect(unique.size).toBe(names.length)
   })
 
-  test('技能集合恰为 5 个既有技能 + file-reading', () => {
+  test('技能集合恰为 6 个既有技能', () => {
     const names = listSkills().map(({ skill }) => skill.name).sort()
     expect(names).toEqual(
-      ['card-format', 'domain-adaptation', 'file-reading', 'incremental-update', 'study-loop'].sort(),
+      ['card-format', 'domain-adaptation', 'file-reading', 'incremental-update', 'memory-auto', 'study-loop'].sort(),
     )
+  })
+
+  test('memory-auto 技能含自迭代要点', () => {
+    const skill = listSkills().find(({ dir }) => dir === 'memory-auto')
+    expect(skill).toBeDefined()
+    const body = skill!.skill.body
+    expect(body).toContain('prefs.')
+    expect(body).toContain('已自动记入偏好')
+    expect(body).toContain('_autoPrefs')
+  })
+
+  test('card-format 技能含阶梯式解剖模板五小节', () => {
+    const skill = listSkills().find(({ dir }) => dir === 'card-format')
+    expect(skill).toBeDefined()
+    const body = skill!.skill.body
+    for (const section of ['核心思想', '阶梯式解剖', '实例走查', '易错点', '自测题']) {
+      expect(body, `card-format 应包含小节：${section}`).toContain(section)
+    }
+    expect(body).toContain('第 1 层 · 直觉')
+    expect(body).toContain('四层顺序')
+    expect(body).toContain('存量旧卡')
   })
 
   test('file-reading 技能含已验证的工具链要点', () => {
@@ -83,5 +104,23 @@ describe('study preset skills', () => {
     expect(body).toContain('pptx')
     // 铁律：读取 ≠ 讲解
     expect(body).toContain('读取 ≠ 讲解')
+  })
+
+  test('file-reading 技能含内嵌图片提取要点（pdf/pptx/docx）', () => {
+    const skill = listSkills().find(({ dir }) => dir === 'file-reading')
+    expect(skill).toBeDefined()
+    const body = skill!.skill.body
+    // PDF：含图页检测与渲染
+    expect(body).toContain('get_image_info')
+    expect(body).toContain('get_pixmap')
+    // PPTX：图片 shape 与 zipfile 兜底
+    expect(body).toContain('PICTURE')
+    expect(body).toContain('ppt/media')
+    // DOCX：media 提取
+    expect(body).toContain('word/media')
+    // 报告模板与失败链
+    expect(body).toContain('图片：')
+    expect(body).toContain('需转换')
+    expect(body).toContain('不假装理解')
   })
 })

@@ -7,13 +7,14 @@
 ## 特性
 
 - **四步学习闭环**：资料摄入 → 讲解拓展 → 问答反诘（三明治原则）→ 笔记归档，每步都有明确模板与检查清单
-- **原子卡片落盘 Obsidian vault**：卡片就是普通 `.md` 文件，与你的旧笔记同库同目录，Obsidian 可直接打开、编辑、git 管理；插件做全库索引，旧笔记（无 frontmatter）同样可被检索
+- **原子卡片落盘 Obsidian vault**：阶梯式解剖模板（核心思想/四层解剖/实例走查/易错点/自测题 五小节缺一不归档），二次复习先抓核心思想再逐层下钻；卡片就是普通 `.md` 文件，与你的旧笔记同库同目录，Obsidian 可直接打开、编辑、git 管理；插件做全库索引，旧笔记（无 frontmatter）同样可被检索
 - **多根检索（卡片 ↔ 旧笔记联动）**：`card_search` 不止检索 vault 卡片，还覆盖**会话工作目录**（`includeSessionCwd`）与配置的 `searchRoots` 旧笔记；命中标注「类型：卡片/旧笔记」与「路径」；`card_get` 可读旧笔记全文，`card_link` 默认只写卡片侧（旧笔记零改动），关联用根限定路径寻址
 - **增量更新（活笔记）**：补充加"版本更新"、推翻加"勘误"、无关则新卡关联——旧内容永不丢失，更新决定权永远在你
 - **全库检索与重叠预警**：摄入新资料前自动检索已有卡片，提示重叠与差异
-- **跨会话进度与记忆**：当前资料/小节/未答追问持久化，重启后"接着讲"从断点继续；新会话开场自动读回进度与记忆，首行衔接提示不脱节；偏好/约定/小结可"记住"
+- **跨会话进度与记忆**：当前资料/小节/未答追问持久化，重启后"接着讲"从断点继续；新会话开场**硬门禁**（首条消息先读记忆与进度，读取结果返回前不响应），首行衔接提示不脱节；偏好/约定/小结可"记住"
+- **自迭代记忆开关（默认关）**：`study_memory` 保留控制键 `_autoPrefs`（on/off）；开启后无需"请记住"，Agent 按 memory-auto 技能自动把偏好/约定写入 `prefs.*`（每类一个键、覆盖更新），回复标注"（已自动记入偏好）"——下个会话不再犯"资料在哪/讲解风格"这类经验性错误；"忘了…"随时删
 - **快节奏 + 用户主动权**：默认精简回答，深入研究（联网/超纲推导）由你开口才做
-- **指令驱动（听指挥）**：读取 ≠ 讲解——"读取 X"只输出读取报告，说"讲解"才开始讲；读取 PDF/PNG/PPT 等文件走内置 `file-reading` 技能，不摸索工具
+- **指令驱动（听指挥）**：读取 ≠ 讲解——"读取 X"只输出读取报告，说"讲解"才开始讲；读取 PDF/PNG/PPT 等文件走内置 `file-reading` 技能（PDF/PPTX/DOCX 的**内嵌图片自动提取**并逐张 `read_image`，不漏掉课件里的图），不摸索工具
 - **MOC 知识目录**：归档时自动生成按领域分组的知识地图
 - **轻量**：每次请求固定开销约 15KB（比标准模式低 ~30%）；技能按需加载；会话早期自动压缩历史（阈值 30%）
 - 96 项单元测试覆盖卡片渲染、检索索引（含多根旧笔记）、增量更新、进度与记忆持久化、原子写与路径安全
@@ -76,7 +77,7 @@
 | 进度 | "接着讲"续讲；"清空进度"重来（只清进度位置，记忆保留；彻底重来再"清空记忆"） |
 | 兜底 | Obsidian 手改、git 回滚永远有效——磁盘是唯一真相 |
 
-## 卡片格式（定稿）
+## 卡片格式（定稿 · 阶梯式解剖）
 
 ```markdown
 ---
@@ -84,14 +85,31 @@ ID: 202608161430_ab12
 标题: 光线与表面的两种交互：散射与吸收
 领域: #图形学
 来源: 《Unity Shader入门精要》6.1.2
-状态: 草稿 / 已确认 / 需更新
+状态: 已确认
 ---
 
 > 一句话定义（30 字左右，直接引用块，不加标题）。
 
-### 自由小节
+### 核心思想
 
-推导、表格、公式（块级 LaTeX 编号）、代码（标注语言）自由组织。
+**一句话讲清**：… / **为什么**：… / **记忆锚点**：…
+
+### 阶梯式解剖（第 1 层 → 第 4 层）
+
+**第 1 层 · 直觉**：… → **第 2 层 · 机制**：… → **第 3 层 · 细节与推导**：…
+→ **第 4 层 · 边界与反例**：…
+
+### 实例走查
+
+代入具体数字/代码，标注步骤。
+
+### 易错点
+
+- 坑：为什么错
+
+### 自测题
+
+- **Q1**：问题 → 答案要点一行
 
 ### 关联卡片
 
@@ -100,7 +118,7 @@ ID: 202608161430_ab12
 - 易混淆：漫反射 vs 高光反射（物理来源不同）
 ```
 
-完整规范与样张见 `presets/study/skills/card-format/SKILL.md`。
+五小节缺一不归档（校验警告 + persona 硬强制）；单卡正文 ≥~500 字（目标 600~1500）；存量旧卡不强迁，下次整卡替换时按新模板重写。完整规范与样张见 `presets/study/skills/card-format/SKILL.md`。
 
 ## 快速开始
 
@@ -139,13 +157,14 @@ Copy-Item -Recurse presets/study "$env:DSH_HOME\.agent-presets\study"
 
 | 你说 | 发生什么 |
 | :-- | :-- |
-| 新会话第一条消息 | 自动读回记忆与进度：`study_memory(get)` + `study_progress(get)`，首行衔接提示（上次学到/未答追问/上次小结）并问"接着讲？" |
-| 给文件路径 / "读取 X" | 阶段一·读取：按 `file-reading` 技能读取（PDF/PNG/PPT/文本…），只输出读取报告，待命 |
+| 新会话第一条消息 | 硬门禁：先 `study_memory(get)` + `study_progress(get)`（读取结果返回前不响应），首行衔接提示（上次学到/未答追问/上次小结）并问"接着讲？" |
+| 给文件路径 / "读取 X" | 阶段一·读取：按 `file-reading` 技能读取（PDF/PNG/PPT/Word/文本…，PDF/PPTX/DOCX 自动提取内嵌图片逐张读图），只输出读取报告，待命 |
 | 上传/粘贴截图 | 图片读取：`read_image`，只输出读取报告，不讲解 |
 | "讲解 / 讲吧 / 开始讲解" | 阶段二·讲解：一次一个原子点，每点结尾问"清晰？细化/跳过？"，讲完待命 |
 | 提问 | 三明治回答：直击 ≤3 句 → 底层逻辑 → 反诘追问 |
 | 查一下 / 详细讲讲 / 深入研究 | 联网补充（标注 [联网补充]）或展开讲解 |
 | "记住…" / "忘了…" | 写/删跨会话记忆（偏好、约定；告一段落自动记 lastSummary 小结） |
+| 开启自迭代 / 关闭自迭代 | 切换 `_autoPrefs`（on/off，默认关）；开启后偏好/约定自动记录，无需"请记住" |
 | 整理笔记 / 生成笔记 / 归档 | 1~3 张卡片落盘 + MOC 目录 |
 | 接着讲 | 从上次断点继续 |
 | 别问了 | 停止反诘追问 |
@@ -166,7 +185,7 @@ Copy-Item -Recurse presets/study "$env:DSH_HOME\.agent-presets\study"
 
 预设内另有压缩配置（`compaction-basic` 组）：`thresholdRatio: 0.3`、`retainRatio: 0.15`、`maxTokens: 4096`，并带 `deepseek-v4-flash` / `deepseek-v4-pro` 模型策略。
 
-插件工具一览：`card_search`（多根：vault + 会话工作目录 + searchRoots；标注 类型：卡片/旧笔记 与 路径）/ `card_get`（卡片与旧笔记均可）/ `card_id` / `card_create` / `card_update`（append-version · errata · replace）/ `card_link`（旧笔记默认只写卡片侧）/ `card_moc`（只收录有 ID 的卡片）/ `study_progress` / `study_memory`（跨会话记忆：键值笔记 + 上次小结 lastSummary，与进度相互独立）。
+插件工具一览：`card_search`（多根：vault + 会话工作目录 + searchRoots；标注 类型：卡片/旧笔记 与 路径）/ `card_get`（卡片与旧笔记均可）/ `card_id` / `card_create` / `card_update`（append-version · errata · replace）/ `card_link`（旧笔记默认只写卡片侧）/ `card_moc`（只收录有 ID 的卡片）/ `study_progress` / `study_memory`（跨会话记忆：键值笔记 + 上次小结 lastSummary + 自迭代开关 `_autoPrefs`，与进度相互独立）。
 
 ## 开发
 
@@ -185,8 +204,8 @@ pnpm run check     # typecheck + vitest（96 项）+ esbuild 构建
 dsh-study-buddy/
 ├── src/                 # 插件源码（vault 适配 / 检索索引 / 卡片渲染 / 进度与记忆 / 入口）
 ├── tests/               # 96 项单元与端到端测试
-├── presets/study/       # 「学习」Agent 预设（persona + 工具行 + 5 个技能）
-│   └── skills/          # file-reading / study-loop / card-format / incremental-update / domain-adaptation
+├── presets/study/       # 「学习」Agent 预设（persona + 工具行 + 6 个技能）
+│   └── skills/          # file-reading / study-loop / card-format / incremental-update / domain-adaptation / memory-auto
 ├── docs/                # 需求与设计文档
 ├── build.mjs            # esbuild 构建脚本
 └── cordis.patch.yml     # 备用：宿主平面挂载层（默认走 preset 行）

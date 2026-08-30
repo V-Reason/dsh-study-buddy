@@ -15,6 +15,12 @@ export const MAX_MEMORY_VALUE = 4000
 export const MAX_MEMORY_KEY = 64
 /** 保留键：上次会话小结（get 时置顶显示） */
 export const SUMMARY_KEY = 'lastSummary'
+/** 保留控制键：自迭代记忆开关（on/off，缺省关闭）。「_」前缀键为控制键，不参与普通计数。 */
+export const AUTO_PREFS_KEY = '_autoPrefs'
+/** 自迭代开关的合法值 */
+export const AUTO_PREFS_VALUES = ['on', 'off'] as const
+/** 自迭代开关的缺省值（键不存在即视为该值） */
+export const AUTO_PREFS_DEFAULT = 'off'
 
 export interface MemoryState {
   notes: Record<string, string>
@@ -65,13 +71,40 @@ export function checkMemoryValue(value: string): string {
   return v
 }
 
-/** 格式化整份记忆：lastSummary 置顶为"上次小结"，其余键按名排序 */
+/** 是否为保留控制键（「_」前缀）；控制键由插件维护，不计入普通记忆条数 */
+export function isControlKey(key: string): boolean {
+  return key.startsWith('_')
+}
+
+/** 校验自迭代开关值：trim 后必须为 on/off */
+export function normalizeAutoPrefsValue(value: string): string {
+  const v = String(value).trim()
+  if (v !== 'on' && v !== 'off') {
+    throw new Error(`自迭代开关只接受 on/off（收到 "${v.slice(0, 20)}"）；用 "开启自迭代" / "关闭自迭代" 切换`)
+  }
+  return v
+}
+
+/** 格式化开关状态行（供 get 单键与 formatMemory 复用） */
+export function formatAutoPrefs(value: string | undefined): string {
+  if (value === undefined) return `自迭代记忆：关闭（默认；"开启自迭代"打开）`
+  if (!AUTO_PREFS_VALUES.includes(value as (typeof AUTO_PREFS_VALUES)[number])) {
+    return `自迭代记忆：异常值（${value.slice(0, 40)}）——请重新设置为 on/off`
+  }
+  return `自迭代记忆：${value === 'on' ? '开启（自动记录偏好）' : '关闭'}`
+}
+
+/** 格式化整份记忆：开关状态行置顶（如有），lastSummary 置顶为"上次小结"，其余键按名排序 */
 export function formatMemory(state: MemoryState): string {
-  const entries = Object.entries(state.notes).sort(([a], [b]) => (a === SUMMARY_KEY ? -1 : b === SUMMARY_KEY ? 1 : a.localeCompare(b)))
-  if (entries.length === 0) return '暂无记忆。'
-  const lines = entries.map(([key, value]) => {
-    if (key === SUMMARY_KEY) return `上次小结：${value}`
-    return `- ${key}：${value}`
-  })
-  return `记忆（${entries.length} 条）\n${lines.join('\n')}`
+  const entries = Object.entries(state.notes)
+    .filter(([key]) => !isControlKey(key))
+    .sort(([a], [b]) => (a === SUMMARY_KEY ? -1 : b === SUMMARY_KEY ? 1 : a.localeCompare(b)))
+  const lines: string[] = []
+  if (state.notes[AUTO_PREFS_KEY] !== undefined) lines.push(formatAutoPrefs(state.notes[AUTO_PREFS_KEY]))
+  if (entries.length === 0) return lines.length > 0 ? lines.join('\n') : '暂无记忆。'
+  lines.push(`记忆（${entries.length} 条）`)
+  for (const [key, value] of entries) {
+    lines.push(key === SUMMARY_KEY ? `上次小结：${value}` : `- ${key}：${value}`)
+  }
+  return lines.join('\n')
 }
