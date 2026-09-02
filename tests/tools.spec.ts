@@ -41,15 +41,38 @@ describe('buildToolDefs（工具 schema 契约）', () => {
     expect(required).toEqual(expect.arrayContaining(['title', 'domain', 'source', 'status', 'definition', 'content']))
   })
 
-  test('card_update：required=[id,mode]，replace 支持 links 与 status enum', () => {
+  test('card_update：required=[id,mode]，definition 模式参数存在', () => {
     const def = defOf('card_update')
     expect(def.parameters.required).toEqual(['id', 'mode'])
-    const props = def.parameters.properties as Record<string, { type?: string; enum?: string[]; properties?: Record<string, unknown> }>
+    const props = def.parameters.properties as Record<string, { type?: string; enum?: string[]; properties?: Record<string, unknown>; description?: string }>
     expect(props.status?.enum).toEqual(['草稿', '已确认', '需更新'])
     expect(props.links?.type).toBe('object')
     expect(props.links?.properties?.prev).toBeTruthy()
     expect(props.links?.properties?.next).toBeTruthy()
     expect(props.links?.properties?.conflict).toBeTruthy()
+    // definition 模式（字段级修定义，不产生历史折叠）
+    expect(props.definition?.description).toContain('definition/replace')
+    expect(def.description).toContain('definition=')
+  })
+
+  test('card_id 工具描述注明"card_create 不消费预取值"', () => {
+    expect(defOf('card_id').description).toContain('不消费')
+    expect(defOf('card_id').description).toContain('card_create')
+  })
+
+  test('card_moc 工具描述注明"title 只传主题名、日期自动生成"', () => {
+    const desc = defOf('card_moc').description
+    expect(desc).toContain('title 只传主题名')
+    expect(desc).toContain('日期前缀与文件名由工具自动生成')
+    const titleParam = (defOf('card_moc').parameters.properties as Record<string, { description?: string }>).title
+    expect(titleParam?.description).toContain('只写主题')
+  })
+
+  test('card_create 定义参数注明 60 字硬上限；description 含领域映射回显', () => {
+    const def = defOf('card_create')
+    const props = def.parameters.properties as Record<string, { description?: string }>
+    expect(props.definition?.description).toContain('60')
+    expect(def.description).toContain('领域映射')
   })
 
   test('card_id execute：count 上限 20、下限 1', async () => {

@@ -95,6 +95,24 @@ describe('study preset skills', () => {
     expect(body).toContain('存量旧卡')
   })
 
+  test('card-format 技能含定义长度终局规则与完整领域键名表', () => {
+    const body = listSkills().find(({ dir }) => dir === 'card-format')!.skill.body
+    // 定义长度：≤60 硬上限、31~60 允许放行（不再让 agent 纠结改不改）
+    expect(body).toContain('≤60 字硬上限')
+    expect(body).toContain('允许放行')
+    // 键名表：含易错键"图形学-动画特效"（无"与"）与映射目录
+    expect(body).toContain('图形学-动画特效')
+    expect(body).toContain('动画与特效')
+    expect(body).toContain('近似')
+  })
+
+  test('domain-adaptation 技能覆盖数学/数值分析条目', () => {
+    const body = listSkills().find(({ dir }) => dir === 'domain-adaptation')!.skill.body
+    expect(body).toContain('数学/数值分析')
+    expect(body).toContain('数值稳定性')
+    expect(body).toContain('收敛')
+  })
+
   test('file-reading 技能含已验证的工具链要点', () => {
     const skill = listSkills().find(({ dir }) => dir === 'file-reading')
     expect(skill).toBeDefined()
@@ -122,5 +140,15 @@ describe('study preset skills', () => {
     expect(body).toContain('图片：')
     expect(body).toContain('需转换')
     expect(body).toContain('不假装理解')
+  })
+
+  test('file-reading 技能：pymupdf 化、>10 页硬约束与 get_toc 定位', () => {
+    const body = listSkills().find(({ dir }) => dir === 'file-reading')!.skill.body
+    expect(body).toContain('import pymupdf')
+    expect(body).not.toContain('import fitz,')
+    expect(body).toContain('单次调用页数上限 10 页')
+    expect(body).toContain('必须分次调用')
+    expect(body).toContain('get_toc')
+    expect(body).toContain('文本层噪声')
   })
 })

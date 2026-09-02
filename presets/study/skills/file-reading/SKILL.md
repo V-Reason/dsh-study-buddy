@@ -27,12 +27,12 @@ description: 按用户给的路径读取资料文件（PDF/PPT/PPTX/PNG/JPG/图�
 
 路径含空格/中文均可直接传参；输出用 `-X utf8` 防中文乱码；`python -c` 后**不要加 `--`**，直接跟路径。三张/提取命令统一用 PowerShell here-string（`$code = @'…'@`），多行可读、注释不干扰执行。
 
-**PDF 提取文本（页数上限，默认 10 页，超长可续读）**：
+**PDF 提取文本（单次调用页数上限 10 页；>10 页必须分次调用，每次 ≤10 页）**——全书单 PDF 先按下方 get_toc 定位章节，再按页段分次提取：
 
 ```powershell
 $code = @'
-import fitz, sys
-d = fitz.open(sys.argv[1])
+import pymupdf, sys
+d = pymupdf.open(sys.argv[1])
 n = len(d)
 print("pages:", n)
 limit = int(sys.argv[2]) if len(sys.argv) > 2 else 10
@@ -42,12 +42,48 @@ for i in range(min(n, limit)):
 python -X utf8 -c $code "文件绝对路径" 10
 ```
 
+> 若 `import pymupdf` 报 ModuleNotFoundError（旧版 PyMuPDF < 1.24），把 `import pymupdf` 改回 `import fitz` 即可。
+
+**PDF 目录定位（全书单 PDF 先跑这个，章节→页码一次命中）**：
+
+```powershell
+$code = @'
+import pymupdf, sys
+d = pymupdf.open(sys.argv[1])
+toc = d.get_toc()
+print("toc entries:", len(toc))
+limit = int(sys.argv[2]) if len(sys.argv) > 2 else 60
+for lvl, title, page in toc[:limit]:
+    print("[%d] %s -> p%d" % (lvl, title, page))
+'@
+python -X utf8 -c $code "文件绝对路径" 60
+```
+
+> - 章节直接按目录条目标定：`第 18 章 … -> p359`。目录页码可能有 1~2 页偏差，提取前先用目标页的文本（章标题页）验证再开始。
+> - 无目录或目录不可靠时再退回关键词扫页：正则 `第\s*(\d+)\s*章`（容忍换行/拆行，如 `第16\n章` 要按行拼接后匹配）。
+
+**PDF 整份转储 .txt（>10 页长文件防截断；写入后改用 `read` 工具补读，不要重跑提取命令）**：
+
+```powershell
+$code = @'
+import pymupdf, sys
+d = pymupdf.open(sys.argv[1])
+with open(sys.argv[2], "w", encoding="utf-8") as f:
+    for i, page in enumerate(d):
+        f.write("[page %d]\n%s\n" % (i + 1, page.get_text()))
+print("pages:", len(d), "->", sys.argv[2])
+'@
+python -X utf8 -c $code "文件绝对路径" "工作区内临时目录\pdf_text.txt"
+```
+
+> 输出若被截断：优先用本命令转储 .txt 后 `read`（带 offset 继续读），而不是重跑提取命令（等价但多花一轮且仍可能截断）。
+
 **PDF 找含图页并渲染 PNG（默认前 12 个含图页，输出清单）**——文本近空时同样用本命令（扫描版每页都含图）：
 
 ```powershell
 $code = @'
-import fitz, os, sys
-doc = fitz.open(sys.argv[1])
+import pymupdf, os, sys
+doc = pymupdf.open(sys.argv[1])
 out = sys.argv[2]
 max_pages = int(sys.argv[3]) if len(sys.argv) > 3 else 12
 os.makedirs(out, exist_ok=True)
@@ -192,6 +228,7 @@ python -X utf8 -c $code "文件绝对路径" "工作区内临时目录\docx_medi
 已读取：<文件名>（<类型>，N 页/张）
 内容骨架：
 - <每页/每节一句话要点；图片则描述所见结构与关键内容>
+文本层噪声：无 / 轻微（拆行或 OCR 乱码，按标题页核对） / 严重（建议渲染 PNG→read_image）
 图片：N 张
 - 图1（第 3 页）：<所见结构一句话>
 - 图2（第 5 页）：<所见结构一句话>

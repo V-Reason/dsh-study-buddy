@@ -16,14 +16,35 @@ export function skipSetFor(extra?: string[]): Set<string> {
   return new Set([...SKIP_DIRS, ...(extra ?? [])])
 }
 
-/** Windows 非法文件名字符清洗 + 长度上限 */
+/** Windows 非法文件名字符清洗 + 长度上限。引号（ASCII/中文）直接移除不留空格，避免"标题↔文件名"脱节 */
 export function sanitizeFilename(title: string): string {
   const cleaned = title
+    .replace(/["'“”‘’]/g, '')
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
   const capped = cleaned.slice(0, 80).trim()
   return capped.length > 0 ? capped : '未命名'
+}
+
+/**
+ * 领域键近似匹配：按字符重合度（共同字符 / 较长键长度）≥0.6 排序，取前 2。
+ * 用于 card_create 领域键未精确命中时回显"最接近的已映射键"（如
+ * "图形学-动画与特效" → "图形学-动画特效"），避免 agent 翻配置文件绕路。
+ */
+export function findSimilarDomainKeys(domain: string, keys: string[]): string[] {
+  const d = String(domain ?? '').trim()
+  if (!d) return []
+  const scored: Array<{ key: string; score: number }> = []
+  for (const raw of keys) {
+    const key = String(raw)
+    if (key === d) continue
+    const common = [...new Set([...d])].filter((ch) => key.includes(ch)).length
+    const score = common / Math.max(d.length, key.length)
+    if (score >= 0.6) scored.push({ key, score })
+  }
+  scored.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key))
+  return scored.slice(0, 2).map((s) => s.key)
 }
 
 export function withinRoot(root: string, p: string): boolean {

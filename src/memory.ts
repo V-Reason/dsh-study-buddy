@@ -71,6 +71,32 @@ export function checkMemoryValue(value: string): string {
   return v
 }
 
+/** 进度句特征：正在学习/当前位置的表述（这类句子若存在偏好键里，很容易与 study_progress 过期不同步） */
+const PROGRESS_SENTENCE_RE = /现学|正在学|当前学习|现在学到/
+
+export interface StaleProgressHit {
+  key: string
+  snippet: string
+}
+
+/**
+ * 检测记忆中疑似过期的进度句（进度位置应单一来源 study_progress；
+ * prefs.* 只存偏好/惯例）。返回命中键与片段（≤3 条）。
+ */
+export function findProgressSentences(notes: Record<string, string>): StaleProgressHit[] {
+  const hits: StaleProgressHit[] = []
+  for (const [key, value] of Object.entries(notes)) {
+    if (isControlKey(key)) continue
+    if (!PROGRESS_SENTENCE_RE.test(value)) continue
+    const m = PROGRESS_SENTENCE_RE.exec(value)
+    const start = Math.max(0, (m?.index ?? 0) - 8)
+    const snippet = value.slice(start, start + 40).replace(/\s+/g, ' ').trim()
+    hits.push({ key, snippet })
+    if (hits.length >= 3) break
+  }
+  return hits
+}
+
 /** 是否为保留控制键（「_」前缀）；控制键由插件维护，不计入普通记忆条数 */
 export function isControlKey(key: string): boolean {
   return key.startsWith('_')

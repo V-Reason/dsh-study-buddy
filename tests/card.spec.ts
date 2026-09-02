@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  addLink, applyUpdate, generateId, renderCard, renderMoc, validateCard,
+  addLink, applyUpdate, generateId, renderCard, renderMoc, stripMocDatePrefix, todayLocal, validateCard, validateDefinition,
   type CardInput,
 } from '../src/card.ts'
 
@@ -61,6 +61,41 @@ describe('card', () => {
     expect(validateCard(missing).errors.join()).toContain('content')
   })
 
+  test('定义长度分级：31-45 一级警告、46-60 二级警告、>60 硬报错', () => {
+    // ≤30：无警告
+    expect(validateCard({ ...base, definition: '三'.repeat(30) }).warnings.filter(w => w.includes('字，'))).toEqual([])
+    // 31~45：允许放行的一级警告
+    const tier1 = validateCard({ ...base, definition: '这'.repeat(31) })
+    expect(tier1.errors).toEqual([])
+    expect(tier1.warnings.join()).toContain('稍长')
+    expect(tier1.warnings.join()).toContain('允许放行')
+    // 46~60：接近上限的二级警告，仍允许
+    const tier2 = validateCard({ ...base, definition: '这'.repeat(46) })
+    expect(tier2.errors).toEqual([])
+    expect(tier2.warnings.join()).toContain('偏长')
+    expect(tier2.warnings.join()).toContain('允许放行')
+    // >60：硬拒绝（fail-loud）
+    const hard = validateCard({ ...base, definition: '这'.repeat(61) })
+    expect(hard.errors.join()).toContain('60 字硬上限')
+    // validateDefinition 与 validateCard 同一规则
+    expect(validateDefinition('').errors.join()).toContain('不能为空')
+    expect(validateDefinition('x'.repeat(61)).errors.join()).toContain('60 字硬上限')
+  })
+
+  test('todayLocal 为本地时区日期（凌晨会话不回退到 UTC 前一天）', () => {
+    // 2026-09-02 00:30 本地时间：UTC 仍为 09-01，本地日期必须 09-02
+    expect(todayLocal(new Date(2026, 8, 2, 0, 30))).toBe('2026-09-02')
+    expect(todayLocal(new Date(2026, 8, 2, 23, 59))).toBe('2026-09-02')
+  })
+
+  test('stripMocDatePrefix 剥离旧惯例写入标题的日期前缀', () => {
+    expect(stripMocDatePrefix('2026-09-02_图形学 MOC 目录（第22讲）')).toBe('图形学 MOC 目录（第22讲）')
+    expect(stripMocDatePrefix('2026-09-02 知识目录')).toBe('知识目录')
+    expect(stripMocDatePrefix('图形学 MOC 目录')).toBe('图形学 MOC 目录')
+    expect(stripMocDatePrefix('')).toBe('')
+    expect(stripMocDatePrefix('  ')).toBe('')
+  })
+
   test('validateCard 警告缺失的阶梯式解剖模板小节（不阻塞）', () => {
     // 少了 实例走查 / 易错点 / 自测题
     const partial = { ...base, content: '### 核心思想\n一句话。\n\n### 阶梯式解剖\n第 1 层。' }
@@ -112,6 +147,28 @@ describe('card', () => {
     expect(result.text).toContain('### 勘误')
     expect(result.text).toContain('纠正原因')
     expect(result.text).toContain('透视投影矩阵可拆解') // 旧内容保留
+  })
+
+  test('applyUpdateDefinition只替换定义：不产生历史折叠、正文与关联保留', () => {
+    const raw = renderCard({ ...base, id: 'd1', links: { prev: ['正交投影'] } })
+    const result = applyUpdate(raw, 'd1', { mode: 'definition', definition: '透视投影矩阵三步拆解成缩放平移与齐次除' })
+    expect(result.text).toContain('> 透视投影矩阵三步拆解成缩放平移与齐次除')
+    expect(result.text).not.toContain('透视投影矩阵可拆解为缩放、平移与齐次除三步')
+    // 不产生历史折叠（只有 replace 才折叠）
+    expect(result.text).not.toContain('历史版本')
+    expect(result.text).not.toContain('<details>')
+    // 正文与关联小节原样保留
+    expect(result.text).toContain('### 阶梯式解剖')
+    expect(result.text).toContain('- 前置：正交投影')
+  })
+
+  test('applyUpdateDefinition 字段级校验：空/超限报错、非引用块引导 replace', () => {
+    const raw = renderCard({ ...base, id: 'd2' })
+    expect(() => applyUpdate(raw, 'd2', { mode: 'definition', definition: '' })).toThrow(/definition 模式校验失败/)
+    expect(() => applyUpdate(raw, 'd2', { mode: 'definition', definition: 'x'.repeat(61) })).toThrow(/60 字硬上限/)
+    // 正文首行不是引用块（旧笔记/自由格式）→ 报错并引导 replace
+    const plain = '# 普通笔记\n正文'
+    expect(() => applyUpdate(plain, 'n', { mode: 'definition', definition: '短定义' })).toThrow(/replace/)
   })
 
   test('applyUpdateReplaceKeepsHistoryBlock', () => {

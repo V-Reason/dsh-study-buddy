@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { todayLocal } from '../src/card.ts'
 import { VaultStore } from '../src/index.ts'
 import type { VaultLayout } from '../src/vault.ts'
 
@@ -221,6 +222,71 @@ describe('VaultStore 端到端', () => {
     expect(created.rel).toBe('未分类/美术/UV 展开.md')
   })
 
+  test('create 标题非法字符/引号清洗并回显；领域映射行回显', async () => {
+    const store = new VaultStore(layout())
+    const created = await store.create({
+      title: 'PBD/Verlet 积分与约束投影的实现',
+      domain: '图形学与渲染',
+      source: '课件',
+      status: '草稿',
+      definition: 'PBD 通过约束投影迭代满足约束',
+      content: '约束求解',
+    })
+    expect(created.rel).toBe('游戏开发/图形学/PBD Verlet 积分与约束投影的实现.md')
+    expect(created.text).toContain('已清洗为文件名「PBD Verlet 积分与约束投影的实现」')
+    expect(created.text).toContain('领域映射：图形学与渲染 → 游戏开发/图形学')
+  })
+
+  test('create 未映射领域回显可用键与近似键建议（含"与"字差异）', async () => {
+    const store = new VaultStore({
+      ...layout(),
+      domainFolders: { '图形学-动画特效': '游戏开发/图形学/动画与特效' },
+    })
+    const created = await store.create({
+      title: 'PBD 约束投影',
+      domain: '图形学-动画与特效',
+      source: '课件',
+      status: '草稿',
+      definition: 'PBD 迭代投影满足约束',
+      content: '约束求解',
+    })
+    expect(created.rel).toBe('未分类/图形学-动画与特效/PBD 约束投影.md')
+    expect(created.text).toContain('未在 domainFolders 映射表中')
+    expect(created.text).toContain('近似键建议：图形学-动画特效 → 游戏开发/图形学/动画与特效')
+    expect(created.text).toContain('重启 DSH 后生效')
+  })
+
+  test('moc 标题日期前缀自动剥离并回显 文件名/标题/日期（双前缀根治）', async () => {
+    const store = new VaultStore(layout())
+    const created = await store.create({
+      title: '透视投影矩阵',
+      domain: '图形学与渲染',
+      source: 'GAMES101 L04',
+      status: '草稿',
+      definition: '三步分解成的投影矩阵',
+      content: '正文',
+    })
+    const id = /ID: (\d{12}_[0-9a-f]{4})/.exec(created.text)![1]
+    const date = todayLocal()
+    const moc = await store.moc({ title: '2026-09-02_图形学 MOC 目录（测试）', cardIds: [id] })
+    expect(moc).toContain(`MOC 已写入：目录/${date}_图形学 MOC 目录（测试）.md`)
+    expect(moc).toContain(`（标题：图形学 MOC 目录（测试），日期：${date}）`)
+    expect(moc).not.toContain('2026-09-02_2026-09-02')
+  })
+
+  test('memory get 全量输出对疑似过期进度句提示（进度单一来源）', async () => {
+    const store = new VaultStore(layout())
+    await store.memory('set', { key: 'prefs.用户画像', value: '现学 GAMES101 L19' })
+    const full = await store.memory('get', {})
+    expect(full).toContain('⚠ 提示：上述记忆键含进度句')
+    expect(full).toContain('prefs.用户画像')
+    expect(full).toContain('study_progress 为准')
+    // 移除过期进度句后不再提示
+    await store.memory('remove', { key: 'prefs.用户画像' })
+    await store.memory('set', { key: 'prefs.讲解偏好', value: '先直觉后机制' })
+    expect(await store.memory('get', {})).not.toContain('⚠ 提示')
+  })
+
   test('createRejectsInvalidCard', async () => {
     const store = new VaultStore(layout())
     await expect(store.create({
@@ -265,6 +331,24 @@ describe('VaultStore 端到端', () => {
     expect(updated).toContain('- 前置：二叉查找树')
     expect(updated).toContain('- 易混淆：AVL 树')
     expect(updated).toContain('历史版本') // 旧版保留
+  })
+
+  test('card_update definition 字段级修定义：只改引用块、不产生历史折叠', async () => {
+    const store = new VaultStore(layout())
+    const created = await store.create({
+      title: '红黑树插入',
+      domain: '数据结构与算法',
+      source: '课件',
+      status: '草稿',
+      definition: '旧定义旧定义旧定义旧定义旧定义旧定义旧定义旧定义旧定义',
+      content: '### 核心思想\n一句话\n\n### 阶梯式解剖\n第 1 层\n\n### 实例走查\n数字\n\n### 易错点\n- 坑\n\n### 自测题\n- **Q1**',
+    })
+    const id = /ID: (\d{12}_[0-9a-f]{4})/.exec(created.text)![1]
+    const updated = await store.update(id, { mode: 'definition', definition: '新定义：通过变色旋转维持平衡' })
+    expect(updated).toContain('> 新定义：通过变色旋转维持平衡')
+    expect(updated).not.toContain('旧定义旧定义')
+    expect(updated).not.toContain('历史版本')
+    expect(updated).not.toContain('<details>')
   })
 
   test('searchOnMissingVaultThrowsClearError', async () => {

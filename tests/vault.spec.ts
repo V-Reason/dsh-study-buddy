@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import {
-  atomicWrite, cardDirFor, containsRoot, dedupeFiles, dedupeRoots, mocPathFor, resolveSearchRoots,
+  atomicWrite, cardDirFor, containsRoot, dedupeFiles, dedupeRoots, findSimilarDomainKeys, mocPathFor, resolveSearchRoots,
   sanitizeFilename, skipSetFor, uniqueCardPath, walk, withinRoot,
   type VaultLayout,
 } from '../src/vault.ts'
@@ -31,6 +31,17 @@ describe('vault', () => {
     expect(sanitizeFilename('透视投影矩阵：三步/分解?')).toBe('透视投影矩阵：三步 分解')
     expect(sanitizeFilename('a'.repeat(200)).length).toBeLessThanOrEqual(80)
     expect(sanitizeFilename('///')).toBe('未命名')
+    // 引号（ASCII 与中文）直接移除、不留空格：标题 ↔ 文件名不脱节
+    expect(sanitizeFilename('SPD 谱功率密度与"颜色是感知"')).toBe('SPD 谱功率密度与颜色是感知')
+    expect(sanitizeFilename('全屏后处理的成本本质与“是否后处理”判据')).toBe('全屏后处理的成本本质与是否后处理判据')
+  })
+
+  test('findSimilarDomainKeys 近似键建议（"与"字差异也能命中）', () => {
+    const keys = ['图形学', '图形学-后处理', '图形学-动画特效', '动画', '数学']
+    expect(findSimilarDomainKeys('图形学-动画与特效', keys)).toEqual(['图形学-动画特效'])
+    expect(findSimilarDomainKeys('图形学-动画特效', keys)).toEqual([]) // 精确键不参与建议
+    expect(findSimilarDomainKeys('美术', keys)).toEqual([]) // 无明显近似
+    expect(findSimilarDomainKeys('', keys)).toEqual([])
   })
 
   test('withinRoot', () => {

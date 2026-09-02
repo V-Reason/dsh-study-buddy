@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import {
-  checkMemoryValue, formatAutoPrefs, formatMemory, normalizeAutoPrefsValue, normalizeMemoryKey,
+  checkMemoryValue, findProgressSentences, formatAutoPrefs, formatMemory, normalizeAutoPrefsValue, normalizeMemoryKey,
   readMemory, writeMemory,
 } from '../src/memory.ts'
 
@@ -119,5 +119,23 @@ describe('memory', () => {
   test('formatMemory tolerates hand-edited invalid switch value', () => {
     const text = formatMemory({ notes: { _autoPrefs: 'yes-please' } })
     expect(text).toContain('异常值（yes-please）')
+  })
+
+  test('findProgressSentences 命中"现学/正在学"类进度句，排除控制键与完成句', () => {
+    const notes = {
+      'prefs.用户画像': '《Unity Shader》第 1-15 章已学完，现学 GAMES101 L19',
+      'prefs.讲解偏好': '先直觉后机制',
+      lastSummary: 'L21 已完成归档',
+      'prefs.完成句': '已学完 GAMES101 全部章节',
+      _autoPrefs: 'on',
+    }
+    const hits = findProgressSentences(notes)
+    expect(hits).toHaveLength(1)
+    expect(hits[0].key).toBe('prefs.用户画像')
+    expect(hits[0].snippet).toContain('现学 GAMES101 L19')
+    // 无进度句的键不误伤；控制键（_autoPrefs）与"已学完"不触发
+    expect(findProgressSentences({ 'prefs.讲解偏好': '先直觉后机制' })).toEqual([])
+    expect(findProgressSentences({ 'prefs.完成句': '已学完 GAMES101 L1-18' })).toEqual([])
+    expect(findProgressSentences(notes).map((h) => h.key)).not.toContain('_autoPrefs')
   })
 })

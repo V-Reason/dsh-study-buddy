@@ -14,11 +14,11 @@
 import { promises as fsp } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
-  addLink, applyUpdate, generateId, renderCard, renderMoc, validateCard, VALID_STATUS,
+  addLink, applyUpdate, generateId, renderCard, renderMoc, stripMocDatePrefix, todayLocal, validateCard, VALID_STATUS,
   type CardInput, type LinkKind, type MocEntry, type UpdatePayload,
 } from './card.ts'
 import {
-  AUTO_PREFS_KEY, checkMemoryValue, formatAutoPrefs, formatMemory,
+  AUTO_PREFS_KEY, checkMemoryValue, findProgressSentences, formatAutoPrefs, formatMemory,
   normalizeAutoPrefsValue, normalizeMemoryKey, readMemory, writeMemory, type MemoryState,
 } from './memory.ts'
 import {
@@ -28,7 +28,7 @@ import {
 import { indexNote, SearchIndex, type IndexedCard, type SearchHit } from './search.ts'
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
 import {
-  atomicWrite, canonicalRootKey, cardDirFor, dedupeFiles, dedupeRoots, mocPathFor, resolveSearchRoots, skipSetFor, uniqueCardPath, walkRoots, withinRoot,
+  atomicWrite, canonicalRootKey, cardDirFor, dedupeFiles, dedupeRoots, findSimilarDomainKeys, mocPathFor, resolveSearchRoots, sanitizeFilename, skipSetFor, uniqueCardPath, walkRoots, withinRoot,
   type SearchRoot, type VaultLayout,
 } from './vault.ts'
 
@@ -248,15 +248,42 @@ export class VaultStore {
     await this.assertVault()
     const result = validateCard(input)
     if (result.errors.length > 0) throw new Error(`卡片校验失败：${result.errors.join('；')}`)
+    const warnings = [...result.warnings]
+    const infoLines: string[] = []
+    // 标题→文件名清洗可见性：非法字符/引号会被清洗，回显实际文件名
+    const baseName = sanitizeFilename(input.title)
+    if (baseName !== input.title.trim()) {
+      warnings.push(`标题含非法字符/引号，已清洗为文件名「${baseName}」（实际文件名以"已写入"为准）`)
+    }
     const id = generateId()
     const text = renderCard({ ...input, id })
     const dir = cardDirFor(this.layout, input.domain)
+    const dirRel = dir.slice(this.layout.vaultRoot.length + 1).replace(/\\/g, '/')
+    // 领域键映射可见性：精确命中回显映射；未映射给出 fallback + 可用键列表 + 近似键建议
+    const keys = Object.keys(this.layout.domainFolders ?? {})
+    const mapped = this.layout.domainFolders?.[input.domain]
+    if (mapped) {
+      infoLines.push(`领域映射：${input.domain} → ${dirRel}`)
+    } else if (keys.length > 0) {
+      const similar = findSimilarDomainKeys(input.domain, keys)
+      const simText = similar.length > 0
+        ? `。近似键建议：${similar.map((k) => `${k} → ${this.layout.domainFolders?.[k]}`).join('；')}（要用该键请用其精确写法，或把该键加入 domainFolders）`
+        : ''
+      warnings.push(
+        `领域键 "${input.domain}" 未在 domainFolders 映射表中，已落 fallbackDir：${this.layout.fallbackDir}/${input.domain}`
+        + `。可用键（前 12 个，共 ${keys.length} 个）：${keys.slice(0, 12).join('、')}${keys.length > 12 ? '…' : ''}${simText}`
+        + '。完整键名表见 card-format 技能；若刚改过 preset 配置，需重启 DSH 后生效',
+      )
+    } else {
+      warnings.push(`领域键 "${input.domain}" 未配置映射（domainFolders 为空），已落 fallbackDir：${this.layout.fallbackDir}/${input.domain}`)
+    }
     const file = await uniqueCardPath(dir, input.title, id)
     await atomicWrite(file, text)
     this.sig = null
     const rel = file.slice(this.layout.vaultRoot.length + 1).replace(/\\/g, '/')
-    const warn = result.warnings.length > 0 ? `\n提示：${result.warnings.join('；')}` : ''
-    return { text: `已写入：${rel}\nID：${id}${warn}\n\n${text}`, rel }
+    const info = infoLines.length > 0 ? `\n${infoLines.join('\n')}` : ''
+    const warn = warnings.length > 0 ? `\n提示：${warnings.join('；')}` : ''
+    return { text: `已写入：${rel}\nID：${id}${info}${warn}\n\n${text}`, rel }
   }
 
   async update(id: string, payload: UpdatePayload): Promise<string> {
@@ -331,13 +358,14 @@ export class VaultStore {
     if (entries.length === 0) {
       throw new Error(`MOC 没有可收录的卡片（未解析到任何目标卡片${missing.length ? `，缺失：${missing.join('、')}` : ''}${skippedNotes.length ? `；跳过的旧笔记：${skippedNotes.join('、')}` : ''}）`)
     }
-    const date = new Date().toISOString().slice(0, 10)
-    const title = opts.title?.trim() || `知识目录_${date}`
+    const date = todayLocal()
+    // title 只传主题名：自动剥离旧惯例带进的日期前缀（否则与工具自动日期产生双前缀），缺省「知识目录」
+    const title = stripMocDatePrefix(opts.title ?? '') || '知识目录'
     const text = renderMoc(title, date, entries)
     const file = mocPathFor(this.layout, title, date)
     await atomicWrite(file, text)
     const rel = file.slice(this.layout.vaultRoot.length + 1).replace(/\\/g, '/')
-    return `MOC 已写入：${rel}${skippedNotes.length ? `\n（旧笔记不收录：${skippedNotes.join('、')}）` : ''}\n\n${text}`
+    return `MOC 已写入：${rel}（标题：${title}，日期：${date}）${skippedNotes.length ? `\n（旧笔记不收录：${skippedNotes.join('、')}）` : ''}\n\n${text}`
   }
 
   async progress(action: string, fields: {
@@ -386,7 +414,12 @@ export class VaultStore {
         const value = current.notes[normalized]
         return value !== undefined ? `${normalized}：${value}` : `（无此键：${normalized}）`
       }
-      return formatMemory(current)
+      const text = formatMemory(current)
+      // 进度单一来源：prefs.* 里出现"现学/正在学"类进度句 → 提示可能与 study_progress 过期不同步
+      const stale = findProgressSentences(current.notes)
+      if (stale.length === 0) return text
+      const lines = stale.map((h) => `- ${h.key}：「${h.snippet}…」`)
+      return `${text}\n\n⚠ 提示：上述记忆键含进度句，可能与 study_progress 不一致——进度位置以 study_progress 为准。建议把进度句迁移或标注为「历史快照」，偏好键只存偏好/惯例：\n${lines.join('\n')}`
     }
     if (action !== 'set' && action !== 'append' && action !== 'remove') {
       throw new Error(`study_memory 未知 action "${action}"（可用 get/set/append/remove/clear）`)
@@ -482,7 +515,9 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     },
     {
       name: 'card_id',
-      description: '生成卡片 ID（YYYYMMDDHHmm_随机4位）。',
+      description:
+        '生成卡片 ID（YYYYMMDDHHmm_随机4位）。注意：card_create 会自动生成 ID，不消费本工具的预取值——'
+        + '需要引用时以 card_create 返回的 ID 为准；本工具仅用于查看 ID 格式。',
       parameters: {
         type: 'object',
         properties: {
@@ -499,17 +534,18 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'card_create',
       description:
-        '把一张原子卡片写入 vault 对应分类目录（领域→目录映射；未映射落"未分类"）。知识即卡片：与旧笔记同库。'
-        + '自动生成唯一 ID、写 frontmatter（ID/标题/领域/来源/状态）；正文=裸引用块定义+自由 ### 小节+关联卡片（前置/后续/易混淆），格式见 card-format 技能。返回整卡。',
+        '把一张原子卡片写入 vault 对应分类目录（领域→目录映射；未映射落"未分类"并回显可用领域键与近似键建议）。知识即卡片：与旧笔记同库。'
+        + '自动生成唯一 ID、写 frontmatter（ID/标题/领域/来源/状态）；正文=裸引用块定义+自由 ### 小节+关联卡片（前置/后续/易混淆），格式见 card-format 技能。'
+        + '返回整卡；返回文本含"领域映射"行（键 → 目录）与标题清洗提示（非法字符/引号会被清洗，文件名以返回的 rel 为准）。',
       parameters: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: '概念名称，如"光线与表面的两种交互：散射与吸收"' },
-          domain: { type: 'string', description: '领域键，决定落盘目录' },
+          title: { type: 'string', description: '概念名称，如"光线与表面的两种交互：散射与吸收"（避免 / \\ : * ? " < > | 与引号；会被自动清洗）' },
+          domain: { type: 'string', description: '领域键，决定落盘目录（键名表见 card-format 技能；未映射会回显可用键与近似键）' },
           tags: { type: 'array', items: { type: 'string' }, description: '额外中文领域标签' },
           source: { type: 'string', description: '资料名称' },
           status: { type: 'string', enum: [...VALID_STATUS], description: '草稿/已确认/需更新' },
-          definition: { type: 'string', description: '一句话定义 ≤30 字' },
+          definition: { type: 'string', description: '一句话定义：≤30 字最佳，≤60 字硬上限（31~60 字仅提示精简）' },
           content: {
             type: 'string',
             description: '正文 Markdown（阶梯式解剖模板五小节：### 核心思想 / ### 阶梯式解剖 / ### 实例走查 / ### 易错点 / ### 自测题，缺一警告；公式块级 LaTeX 编号；代码标语言）',
@@ -548,19 +584,20 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       name: 'card_update',
       description:
         '增量更新：append-version=尾部加"版本更新（来源）"（补充不推翻旧结论）；errata=保留旧内容加"勘误"（changes 含纠正原因）；'
+        + 'definition=只替换一句话定义（字段级微调：不重传正文、不产生历史折叠，不算知识更新）；'
         + 'replace=整卡替换（旧版入历史折叠块，可传 links 重建关联卡片）。先给用户新旧对比、确认后才调用；决定权在用户。返回整卡。',
       parameters: {
         type: 'object',
         properties: {
           id: { type: 'string', description: '卡片 ID/标题/路径' },
-          mode: { type: 'string', description: 'append-version/errata/replace' },
+          mode: { type: 'string', description: 'append-version/errata/definition/replace' },
           changes: { type: 'string', description: 'append/errata 的追加内容' },
           source: { type: 'string', description: '版本更新来源（append-version 用）' },
           title: { type: 'string', description: 'replace：新标题' },
           domain: { type: 'string', description: 'replace：领域键' },
           tags: { type: 'array', items: { type: 'string' }, description: 'replace：额外领域标签' },
           status: { type: 'string', enum: [...VALID_STATUS], description: 'replace：草稿/已确认/需更新' },
-          definition: { type: 'string', description: 'replace：一句话定义 ≤30 字' },
+          definition: { type: 'string', description: 'definition/replace：一句话定义（≤30 字最佳，≤60 字硬上限）' },
           content: { type: 'string', description: 'replace：新正文 Markdown（同 card_create：阶梯式解剖模板五小节）' },
           links: {
             type: 'object',
@@ -581,6 +618,9 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         if (mode === 'append-version' || mode === 'errata') {
           payload.changes = args.changes ? String(args.changes) : undefined
           if (mode === 'append-version' && args.source) payload.source = String(args.source)
+        }
+        if (mode === 'definition') {
+          payload.definition = args.definition ? String(args.definition) : undefined
         }
         if (mode === 'replace') {
           payload.card = {
@@ -628,11 +668,13 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       name: 'card_moc',
       description:
         '生成 MOC（领域分组 + Obsidian wikilink）写入"目录"目录并返回文本。归档收尾时用：传本次涉及的卡片 ID。'
-        + '只收录有 ID 的卡片，旧笔记自动跳过。',
+        + '只收录有 ID 的卡片，旧笔记自动跳过。'
+        + 'title 只传主题名（如 "图形学 MOC 目录"）——日期前缀与文件名由工具自动生成（文件名 = 日期_标题.md），'
+        + '返回文本回显 文件名/标题/日期；标题带日期前缀会被自动剥离，勿再手写日期。',
       parameters: {
         type: 'object',
         properties: {
-          title: { type: 'string', description: 'MOC 标题（默认 知识目录_日期）' },
+          title: { type: 'string', description: 'MOC 主题名，只写主题（如 图形学 MOC 目录；默认 知识目录，日期由工具自动生成）' },
           cardIds: { type: 'array', items: { type: 'string' }, description: '本次涉及的卡片 ID/标题' },
           domain: { type: 'string', description: '可选：只收录该领域' },
         },
@@ -675,6 +717,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         '读写跨会话记忆（vault .study/memory.json，持久有效，重启不丢）：键值笔记。'
         + '新会话开场先 get（配合 study_progress(get) 给衔接提示）；用户偏好/约定存 prefs 键；'
         + '告一段落或归档时 set lastSummary=本次小结。清空进度（study_progress clear）不影响记忆。'
+        + 'get 全量输出会对含"现学/正在学"等进度句的键给出过期提示——进度位置以 study_progress 为准（单一来源）。'
         + '保留控制键 _autoPrefs（自迭代记忆开关，值 on/off，默认关闭）：set 切换、remove 回默认、不支持 append；'
         + '开启后无需用户"请记住"，按 memory-auto 技能把持久偏好/约定自动写入 prefs.* 键（每类约定一个键、覆盖更新）。',
       parameters: {
