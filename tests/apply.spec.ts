@@ -183,29 +183,43 @@ describe('apply（开场门禁接线）', () => {
     const baseDecision = { kind: 'enter' as const, messages: [{ id: 'user-1', role: 'user' }] }
     const next = async () => baseDecision
 
-    // ① 全新会话（无 user/message 事件）：注入提醒
+    // ① 全新会话（无 user/message 事件）：注入提醒（新平台 snapshotEvents 形状）
     const entered = await listener!(
-      { agent: { session: { events: [{ type: 'turn/start' }, { type: 'agent/inbox/spliced' }] } }, turn: 1, step: 1 },
+      { agent: { session: { snapshotEvents: () => [{ type: 'turn/start' }, { type: 'agent/inbox/spliced' }] } }, turn: 1, step: 1 },
       next,
     ) as { kind: 'enter'; messages: Array<{ id: string; source?: { plugin?: string } }> }
     expect(entered.messages).toHaveLength(2)
     expect(entered.messages[1].source).toEqual({ kind: 'plugin', plugin: 'dsh-study-buddy' })
     expect(entered.messages[1].id).not.toBe('user-1')
 
-    // ② 恢复会话（已有 user/message）：原样返回
+    // ①b 全新会话（旧平台 events 数组形状，向后兼容）
+    const enteredLegacy = await listener!(
+      { agent: { session: { events: [{ type: 'turn/start' }] } }, turn: 1, step: 1 },
+      next,
+    ) as { kind: 'enter'; messages: Array<{ id: string; source?: { plugin?: string } }> }
+    expect(enteredLegacy.messages).toHaveLength(2)
+    expect(enteredLegacy.messages[1].source).toEqual({ kind: 'plugin', plugin: 'dsh-study-buddy' })
+
+    // ② 恢复会话（已有 user/message，新平台形状）：原样返回
     const restored = await listener!(
-      { agent: { session: { events: [{ type: 'user/message' }] } }, turn: 1, step: 1 },
+      { agent: { session: { snapshotEvents: () => [{ type: 'user/message' }] } }, turn: 1, step: 1 },
       next,
     )
     expect(restored).toBe(baseDecision)
 
+    // ②b 恢复会话（旧平台 events 形状）：原样返回
+    expect(await listener!(
+      { agent: { session: { events: [{ type: 'user/message' }] } }, turn: 1, step: 1 },
+      next,
+    )).toBe(baseDecision)
+
     // ③ 后续轮/步：原样返回
-    expect(await listener!({ agent: { session: { events: [] } }, turn: 1, step: 2 }, next)).toBe(baseDecision)
-    expect(await listener!({ agent: { session: { events: [] } }, turn: 2, step: 1 }, next)).toBe(baseDecision)
+    expect(await listener!({ agent: { session: { snapshotEvents: () => [] } }, turn: 1, step: 2 }, next)).toBe(baseDecision)
+    expect(await listener!({ agent: { session: { snapshotEvents: () => [] } }, turn: 2, step: 1 }, next)).toBe(baseDecision)
 
     // ④ reject 决策：原样返回（reject 也走 next，无注入）
     const rejectNext = async () => ({ kind: 'reject' as const })
-    expect(await listener!({ agent: { session: { events: [] } }, turn: 1, step: 1 }, rejectNext)).toEqual({ kind: 'reject' })
+    expect(await listener!({ agent: { session: { snapshotEvents: () => [] } }, turn: 1, step: 1 }, rejectNext)).toEqual({ kind: 'reject' })
 
     // 卸载：段与监听器一起摘除
     for (const dispose of fake.runEffects()) dispose()

@@ -69,10 +69,27 @@ export function applyOpenerDecision<T>(decision: PreStepDecisionLike<T>, reminde
   return { ...decision, messages: [...decision.messages, reminder] }
 }
 
-/** 从预步载荷提取「会话历史已有 user/message」（恢复会话判定） */
+/**
+ * 从预步载荷提取「会话历史已有 user/message」（恢复会话判定）。
+ *
+ * 双形状特性探测（零平台类型依赖）：
+ * - 旧平台（≤2026-08-27 session 重构前）：`session.events` 是数组属性；
+ * - 新平台（>=0.1.3-alpha.1，session 拆分为快照 API 后）：`session.snapshotEvents()` 返回快照数组。
+ * 两者皆缺/抛错 → 保守返回 false（只多注入一次提醒，不阻断流程）。
+ */
 export function hasPriorUserMessage(payload: {
-  agent?: { session?: { events?: Array<{ type?: string }> } }
+  agent?: {
+    session?: {
+      events?: Array<{ type?: string }>
+      snapshotEvents?: () => Array<{ type?: string }>
+    }
+  }
 }): boolean {
-  const events = payload?.agent?.session?.events
+  const session = payload?.agent?.session
+  const events = Array.isArray(session?.events)
+    ? session?.events
+    : typeof session?.snapshotEvents === 'function'
+      ? session.snapshotEvents()
+      : undefined
   return Array.isArray(events) && events.some(event => event?.type === 'user/message')
 }

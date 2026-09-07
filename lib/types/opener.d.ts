@@ -46,11 +46,21 @@ export interface RejectDecision {
 export type PreStepDecisionLike<T> = EnterDecision<T> | RejectDecision;
 /** enter：把提醒追加到本步消息末尾（不改原对象）；reject：原样返回 */
 export declare function applyOpenerDecision<T>(decision: PreStepDecisionLike<T>, reminder: T): PreStepDecisionLike<T>;
-/** 从预步载荷提取「会话历史已有 user/message」（恢复会话判定） */
+/**
+ * 从预步载荷提取「会话历史已有 user/message」（恢复会话判定）。
+ *
+ * 双形状特性探测（零平台类型依赖）：
+ * - 旧平台（≤2026-08-27 session 重构前）：`session.events` 是数组属性；
+ * - 新平台（>=0.1.3-alpha.1，session 拆分为快照 API 后）：`session.snapshotEvents()` 返回快照数组。
+ * 两者皆缺/抛错 → 保守返回 false（只多注入一次提醒，不阻断流程）。
+ */
 export declare function hasPriorUserMessage(payload: {
     agent?: {
         session?: {
             events?: Array<{
+                type?: string;
+            }>;
+            snapshotEvents?: () => Array<{
                 type?: string;
             }>;
         };

@@ -12,12 +12,33 @@ describe('opener 开场门禁纯逻辑', () => {
     expect(shouldInjectOpener(1, 1, true)).toBe(false)
   })
 
-  test('hasPriorUserMessage：会话事件里存在 user/message 即视为恢复会话', () => {
+  test('hasPriorUserMessage：旧平台 session.events 数组（≤2026-08-27 兼容）', () => {
     expect(hasPriorUserMessage({})).toBe(false)
     expect(hasPriorUserMessage({ agent: { session: { events: [{ type: 'turn/start' }, { type: 'agent/inbox/spliced' }] } } })).toBe(false)
     expect(hasPriorUserMessage({ agent: { session: { events: [{ type: 'user/message' }] } } })).toBe(true)
     expect(hasPriorUserMessage({ agent: { session: { events: [] } } })).toBe(false)
     expect(hasPriorUserMessage({ agent: { session: undefined } })).toBe(false)
+  })
+
+  test('hasPriorUserMessage：新平台 session.snapshotEvents() 方法（≥0.1.3-alpha.1）', () => {
+    expect(hasPriorUserMessage({ agent: { session: { snapshotEvents: () => [{ type: 'turn/start' }] } } })).toBe(false)
+    expect(hasPriorUserMessage({ agent: { session: { snapshotEvents: () => [{ type: 'user/message' }, { type: 'turn/start' }] } } })).toBe(true)
+    expect(hasPriorUserMessage({ agent: { session: { snapshotEvents: () => [] } } })).toBe(false)
+    // 双形状同时存在：数组优先（与旧平台行为一致）
+    expect(hasPriorUserMessage({
+      agent: {
+        session: {
+          events: [{ type: 'user/message' }],
+          snapshotEvents: () => [],
+        },
+      },
+    })).toBe(true)
+  })
+
+  test('hasPriorUserMessage：两形状皆缺/方法不可用 → 保守 false（只多注入提醒）', () => {
+    expect(hasPriorUserMessage({ agent: { session: {} } })).toBe(false)
+    expect(hasPriorUserMessage({ agent: { session: { snapshotEvents: 'not-a-function' as unknown as () => Array<{ type?: string }> } } })).toBe(false)
+    expect(hasPriorUserMessage({ agent: {} })).toBe(false)
   })
 
   test('buildOpenerReminder：形状与 dsh-llm createUserMessage 运行时一致', () => {
