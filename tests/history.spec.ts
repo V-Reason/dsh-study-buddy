@@ -129,6 +129,70 @@ describe('history 版本块与历史折叠', () => {
     expect(result.text).not.toContain('<details>')
   })
 
+  // 回归（BIZ-1 / 审查探针 P2）：版本更新小节在 <details> 之前，且 details 不属于被删小节。
+  // 旧实现先重排文本再拿原始行号删除 → 行号前移 → 删掉「关联卡片」与 </details>。
+  test('stripHistory：版本更新在前时仍不误删关联小节（BIZ-1 探针 P2）', () => {
+    const raw = [
+      '> 定义',
+      '',
+      '### 核心思想',
+      '内容',
+      '',
+      '### 版本更新（来源：L16）',
+      '补充 A',
+      '',
+      '### 易错点',
+      '- 坑',
+      '',
+      '<details>',
+      '<summary>历史版本（2026-09-01）</summary>',
+      '',
+      '旧正文',
+      '',
+      '</details>',
+      '',
+      '### 关联卡片',
+      '- 前置：`A`（id1）',
+    ].join('\n')
+    const result = stripHistory(raw)
+    expect(result.text).toContain('### 易错点')
+    expect(result.text).toContain('### 关联卡片')
+    expect(result.text).toContain('- 前置：`A`（id1）')
+    expect(result.text).not.toContain('旧正文')
+    expect(result.text).not.toContain('<details>')
+    expect(result.text).not.toContain('</details>')
+    expect(result.text).not.toContain('版本更新')
+    expect(result.warnings).toEqual([])
+  })
+
+  // 回归（BIZ-1 / 审查探针 F）：手改卡常见的连续空行形态。
+  test('stripHistory：小节间多余空行时只清 details（BIZ-1 探针 F）', () => {
+    const raw = [
+      '### 核心思想',
+      '',
+      'x',
+      '',
+      '',
+      '### 关联卡片',
+      '',
+      '- 前置：`A`（id1）',
+      '',
+      '<details>',
+      '<summary>历史版本</summary>',
+      '',
+      '旧正文',
+      '',
+      '</details>',
+    ].join('\n')
+    const result = stripHistory(raw, { kinds: ['details'] })
+    expect(result.text).toContain('### 关联卡片')
+    expect(result.text).toContain('- 前置：`A`（id1）')
+    expect(result.text).toContain('### 核心思想')
+    expect(result.text).not.toContain('旧正文')
+    expect(result.text).not.toContain('<details>')
+    expect(result.text).not.toContain('\n\n\n')
+  })
+
   test('checkDetails：配对校验与未闭合行号', () => {
     expect(checkDetails('<details>\n<summary>a</summary>\n\nb\n\n</details>')).toMatchObject({ balanced: true, opens: 1, closes: 1 })
     expect(checkDetails('<details>\n没有闭合')).toMatchObject({ balanced: false, opens: 1, closes: 0, unclosed: [1] })

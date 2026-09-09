@@ -18,30 +18,17 @@ export type { ToolDef, ToolExecLike } from './tools.ts';
 export { buildToolDefs } from './tools.ts';
 export declare const name = "study-buddy";
 export declare const inject: string[];
-export interface StudyConfig {
-    /** Obsidian vault 根目录（绝对路径） */
-    vaultRoot: string;
+/**
+ * 插件配置：`VaultLayout` 的"可省略默认值"视图（EXT-6：配置类型只有一份定义，
+ * 不再三处同构搬运；新增配置项只改 vault.ts）。
+ */
+export interface StudyConfig extends Omit<VaultLayout, 'stateDir' | 'fallbackDir' | 'mocDir'> {
     /** 进度状态目录（相对 vaultRoot），默认 .study */
     stateDir?: string;
     /** 未映射领域的落盘目录（相对 vaultRoot），默认 未分类 */
     fallbackDir?: string;
     /** MOC 知识目录落盘位置（相对 vaultRoot），默认 目录 */
     mocDir?: string;
-    /** 领域键 → 落盘目录（相对 vaultRoot），支持多个键别名映射同一目录 */
-    domainFolders?: Record<string, string>;
-    /** 额外跳过扫描的目录名（相对 vaultRoot 的顶层目录名；内置已跳过 .obsidian/.trash/.study/.git/node_modules） */
-    skipDirs?: string[];
-    /** 额外检索根（绝对路径，或相对 vaultRoot 的路径）：旧笔记库，只读；不存在即挂载失败（fail-loud） */
-    searchRoots?: string[];
-    /** 是否把会话工作目录（工具调用方会话 cwd）纳入检索，默认 false */
-    includeSessionCwd?: boolean;
-    /** 是否允许把关联写入无 ID 的旧笔记，默认 false（旧笔记不碰不动；只写卡片侧） */
-    linkIntoNotes?: boolean;
-    /** lint 口径（可选）：residueLevel=off/warn/error（默认 warn），rulesOff=禁用的规则 id 列表 */
-    lint?: {
-        residueLevel?: 'off' | 'warn' | 'error';
-        rulesOff?: string[];
-    };
 }
 interface PluginContext {
     tools?: {
@@ -57,15 +44,29 @@ export declare class VaultStore {
     private readonly layout;
     private index;
     private sig;
+    private lastScanMs;
+    private lastScanCwd;
+    /** 上一次索引/扫描跳过的文件（读取失败等），在工具返回文本回显（BIZ-7） */
+    private skipped;
     private extraRoots;
     constructor(layout: VaultLayout);
     private stateFile;
     private memoryFile;
     private assertVault;
-    /** 当前会话的检索根：vault 优先，随后配置的 searchRoots，最后（可选）会话工作目录 */
+    /** 当前会话的检索根：vault（可写）优先，随后配置的 searchRoots，最后（可选）会话工作目录（只读） */
     private rootsFor;
-    /** 目录签名（含各根文件 mtime/ctime/size 与 cwd）变化才重建索引（Obsidian 外部编辑后仍能查到最新内容） */
-    private refresh;
+    /** 跳过的文件回显（BIZ-7：报告数字必须与"实际处理了哪些文件"一致） */
+    private noteSkips;
+    /** 写缓存失效：任何写操作之后必须调用 */
+    private invalidate;
+    /**
+     * 取索引（必要时重建）。**名实相符**（CPLX-6）：每次调用都可能 `walk` 全库并
+     * `stat` 每个文件；受 `config.indexTtlMs`（默认 2000ms）保护——TTL 内且会话
+     * cwd 未变时直接复用缓存。写操作与 `rename` 会显式失效/强制重扫。
+     */
+    private ensureIndex;
+    /** 写操作前的可写性校验（EXT-5：可写性策略上移到根定义，不再散落各处） */
+    private assertWritable;
     private resolveCard;
     search(query: string, opts?: {
         domain?: string;
@@ -79,11 +80,15 @@ export declare class VaultStore {
     get(ref: string, call?: {
         sessionCwd?: string;
     }): Promise<string>;
-    create(input: CardInput): Promise<{
+    create(input: CardInput, call?: {
+        sessionCwd?: string;
+    }): Promise<{
         text: string;
         rel: string;
     }>;
-    update(id: string, payload: UpdatePayload): Promise<string>;
+    update(id: string, payload: UpdatePayload, call?: {
+        sessionCwd?: string;
+    }): Promise<string>;
     link(fromId: string, toId: string, kind: LinkKind, call?: {
         sessionCwd?: string;
     }): Promise<string>;
@@ -94,6 +99,11 @@ export declare class VaultStore {
     }, call?: {
         sessionCwd?: string;
     }): Promise<string>;
+    private lintCtx;
+    /** 单卡报告：用刚从磁盘读到的原文（保证是最新版） */
+    private reportOfRaw;
+    /** 批量报告：直接用索引里已有的正文与模板，不再逐文件读盘（PERF-2） */
+    private reportOfIndexed;
     /** 单卡/批量质量体检（card_lint）+ 跨卡一致性 / 质量趋势 / 可执行性评级（P2） */
     lint(opts: {
         ref?: string;
@@ -106,6 +116,8 @@ export declare class VaultStore {
     }, call?: {
         sessionCwd?: string;
     }): Promise<string>;
+    private lintOne;
+    private lintBatch;
     /** 版本更新 / 勘误 / 历史折叠块管理（card_history） */
     history(ref: string, action: 'list' | 'strip', opts?: {
         kinds?: HistoryKind[];
@@ -113,11 +125,17 @@ export declare class VaultStore {
     }, call?: {
         sessionCwd?: string;
     }): Promise<string>;
-    /** 改标题并同步文件名 / 全库入链 / 断链检测（card_rename） */
+    /**
+     * 改名：**先算出全部改动并做完冲突校验，再落盘**（BIZ-2），
+     * 落盘失败按已写文件逆序回滚。入链扫描用索引正文预筛（PERF-5）。
+     */
     rename(ref: string, newTitle: string, opts?: {
         dryRun?: boolean;
         sessionCwd?: string;
     }): Promise<string>;
+    private planRenameAction;
+    /** 提交改名：写本卡 → 写全库入链 → 改文件名；任一失败按已写文件回滚 */
+    private commitRename;
     private fileExists;
     progress(action: string, fields: {
         material?: string;
@@ -125,6 +143,12 @@ export declare class VaultStore {
         pendingQuestions?: string[];
         touchedCardIds?: string[];
     }): Promise<string>;
+    /** `study_memory get`：单键或全量（含进度句过期提示） */
+    private memoryGet;
+    /** `_autoPrefs` 控制键：只接受 set / remove（不接受 append） */
+    private setControlKey;
+    /** 普通键：set / append / remove */
+    private writeNote;
     memory(action: string, fields: {
         key?: string;
         value?: string;

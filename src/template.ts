@@ -37,18 +37,16 @@ export const COMMON_SECTIONS: SectionSpec[] = [
 export const REENTRY_SECTION = SEC('重入点', '30 秒 / 5 分钟 / 30 分钟三种读法，从任意起点重建')
 export const PREREQ_SECTION = SEC('前置检查', '需要知道：概念 A（卡片 ID）…；不需要知道：明确排除')
 
-/** 工程型专属 */
-export const ENGINEERING_SECTIONS: SectionSpec[] = [
-  SEC('验证实验', '可执行步骤 ≥3 步，每步一句"看到什么说明什么"'),
-  SEC('排障判据', '表格：症状 | 判据 | 修复'),
-]
+/** 工程型专属（具名常量：lint 规则读标题，不再手抄字面量，EXT-2） */
+export const VERIFY_EXPERIMENT_SECTION = SEC('验证实验', '可执行步骤 ≥3 步，每步一句"看到什么说明什么"')
+export const TROUBLESHOOT_SECTION = SEC('排障判据', '表格：症状 | 判据 | 修复')
+export const ENGINEERING_SECTIONS: SectionSpec[] = [VERIFY_EXPERIMENT_SECTION, TROUBLESHOOT_SECTION]
 
 /** 对比型专属 */
-export const COMPARISON_SECTIONS: SectionSpec[] = [
-  SEC('对比表', '≥2 个对象的对比；列数 ≤4，列名短'),
-  SEC('选型口诀', '一句话决策规则'),
-  SEC('场景走查', '按场景代入：什么情况下选谁'),
-]
+export const COMPARISON_TABLE_SECTION = SEC('对比表', '≥2 个对象的对比；列数 ≤4，列名短')
+export const CHOICE_RULE_SECTION = SEC('选型口诀', '一句话决策规则')
+export const SCENARIO_WALKTHROUGH_SECTION = SEC('场景走查', '按场景代入：什么情况下选谁')
+export const COMPARISON_SECTIONS: SectionSpec[] = [COMPARISON_TABLE_SECTION, CHOICE_RULE_SECTION, SCENARIO_WALKTHROUGH_SECTION]
 
 export interface TemplateSpec {
   type: TemplateType
@@ -103,32 +101,54 @@ export function isTemplateType(value: string): value is TemplateType {
   return (TEMPLATE_TYPES as readonly string[]).includes(value)
 }
 
-/** 工程型领域特征（与 domainFolders 的值比对，而非键名硬编码） */
-const ENGINEERING_DOMAINS = ['图形学', 'Unity', 'Shader', 'URP', '渲染']
-const ENGINEERING_TITLE_HINTS = ['接入', '配置', '参数', '坑', '实现', '源码', '变体']
-const COMPARISON_TITLE_HINTS = ['对比', '谱系', '选型', '取舍', '差异', '之争', 'vs']
+/** 工程型领域特征（默认值；可用 config.templateHints 覆盖，EXT-3） */
+export const DEFAULT_ENGINEERING_DOMAINS = ['图形学', 'Unity', 'Shader', 'URP', '渲染']
+export const DEFAULT_ENGINEERING_TITLES = ['接入', '配置', '参数', '坑', '实现', '源码', '变体']
+export const DEFAULT_COMPARISON_TITLES = ['对比', '谱系', '选型', '取舍', '差异', '之争', 'vs']
+
+/** 模板自动推断的提示词表（配置项 `templateHints`，缺省用上面的默认值） */
+export interface TemplateHints {
+  /** 工程型领域键：精确命中或以 `${键}-` 前缀命中（不再用子串包含，避免「渲染数学」被判工程型） */
+  engineeringDomains?: string[]
+  /** 工程型标题特征词 */
+  engineeringTitles?: string[]
+  /** 对比型标题特征词 */
+  comparisonTitles?: string[]
+}
 
 export interface InferInput {
   title: string
   domain: string
-  /** domainFolders[domain] 解析出的落盘目录（相对 vaultRoot），用于按目录判断领域族 */
+  /** domainFolders[domain] 解析出的落盘目录（相对 vaultRoot），按"路径段精确等于领域键"补充判断 */
   mappedFolder?: string
+  /** 提示词表（缺省用内置默认值） */
+  hints?: TemplateHints
+}
+
+/** 领域键命中：精确相等，或以 `${hint}-` 开头（子域键）；目录按路径段精确比对 */
+function matchesDomainHint(domain: string, folder: string, hint: string): boolean {
+  if (!hint) return false
+  if (domain === hint || domain.startsWith(`${hint}-`)) return true
+  return folder.split(/[\\/]/).some((seg) => seg === hint)
 }
 
 /**
  * 自动推断模板类型（显式传 template 时以显式为准）：
  * 标题含对比/谱系/选型/取舍 → 对比型；
- * 领域落在图形学/Unity/Shader 族，或标题含接入/配置/参数/坑/实现 → 工程型；
+ * 领域键命中工程族（或标题含接入/配置/参数/坑/实现）→ 工程型；
  * 其余 → 理论型。
  */
 export function inferTemplate(input: InferInput): TemplateType {
   const title = String(input.title ?? '')
   const domain = String(input.domain ?? '')
   const folder = String(input.mappedFolder ?? '')
-  if (COMPARISON_TITLE_HINTS.some((h) => title.includes(h))) return '对比型'
-  const domainText = `${domain} ${folder}`
-  if (ENGINEERING_DOMAINS.some((d) => domainText.includes(d))) return '工程型'
-  if (ENGINEERING_TITLE_HINTS.some((h) => title.includes(h))) return '工程型'
+  const hints = input.hints ?? {}
+  const comparison = hints.comparisonTitles ?? DEFAULT_COMPARISON_TITLES
+  const engineeringDomains = hints.engineeringDomains ?? DEFAULT_ENGINEERING_DOMAINS
+  const engineeringTitles = hints.engineeringTitles ?? DEFAULT_ENGINEERING_TITLES
+  if (comparison.some((h) => title.includes(h))) return '对比型'
+  if (engineeringDomains.some((h) => matchesDomainHint(domain, folder, h))) return '工程型'
+  if (engineeringTitles.some((h) => title.includes(h))) return '工程型'
   return '理论型'
 }
 

@@ -11,6 +11,8 @@ export interface IndexedCard {
     rel: string;
     /** 来源根标签（vault / 工作目录 / searchRoots 目录名） */
     root: string;
+    /** 该文件是否可写（只有 vault 内文件为 true；只读根永不写入，EXT-5） */
+    writable: boolean;
     /** 展示/寻址路径：多根时为 root/rel，单根时无前缀 */
     fullRel: string;
     fileName: string;
@@ -23,6 +25,8 @@ export interface IndexedCard {
     status: string | null;
     source: string | null;
     definition: string | null;
+    /** frontmatter 模板类型（理论型/工程型/对比型；旧笔记为 null） */
+    template: string | null;
     /** 由相对路径顶层目录推断的领域（旧笔记用） */
     inferredDomain: string;
     /** 字段 → token 计数 */
@@ -68,10 +72,16 @@ export declare class SearchIndex {
     private titleInverted;
     private defInverted;
     private tagInverted;
+    private idIndex;
+    private titleIndex;
+    private rootSet;
     rebuild(cards: IndexedCard[], multiRoot?: boolean): void;
     private push;
     get size(): number;
-    all(): IndexedCard[];
+    /** 只读视图（CPLX-6：不再泄露内部数组引用） */
+    all(): readonly IndexedCard[];
+    /** 已索引的来源根标签集合（拼「来源：…」用，避免每次 O(n) 扫描） */
+    roots(): string[];
     byId(id: string): IndexedCard | undefined;
     byTitle(title: string): IndexedCard | undefined;
     /**
@@ -79,6 +89,6 @@ export declare class SearchIndex {
      * 返回全部候选（0/1/多个），由调用方决定唯一或报歧义。
      */
     candidatesForRef(ref: string): IndexedCard[];
-    byRel(rel: string): IndexedCard | undefined;
     search(query: string, opts?: SearchOptions): SearchHit[];
+    private toHit;
 }

@@ -5,10 +5,16 @@
  * 1. 代码与文档同源——persona / card-format 技能里写的正则口径就是这里的常量；
  * 2. 误伤控制显式化（白名单、代码块与折叠块跳过），可被单测钉住；
  * 3. 新增规则只改本文件，lint 引擎与工具描述自动跟随。
+ *
+ * 2026-09 审查后（CPLX-4 / PERF-3）：会话残留从"内联 if 链"改成数据表 + 单次遍历；
+ * 结构类判定统一接收**已切好的小节**，不再各自重新 `splitSections`。
  * @module lintrules
  */
 
-import { blankOutBlocks, codeFenceLanguages, countListItems, findSection, layerNumbers, matchesTitle, splitSections } from './cardmodel.ts'
+import {
+  blankOutBlocks, codeFenceLanguages, countListItems, findSection, layerNumbers, matchesTitle,
+  type CardSection,
+} from './cardmodel.ts'
 
 /** 会话残留：文件路径（`.md` 引用不算——卡片互引是合法内容） */
 export const RESIDUE_PATH_RE = /(?:[A-Za-z]:\\|Assets[\\/]|\.(?:shader|unity|mat|asset|hlsl|cs|cginc|compute)\b)/
@@ -20,12 +26,18 @@ export const RESIDUE_PERSON_RE = /你|我们|咱们/
 export const RESIDUE_TIME_RE = /上次|本次|刚才|刚刚|昨天|前天|前几讲/
 /** 会话残留：阶段/里程碑代号 */
 export const RESIDUE_PHASE_RE = /\b(?:P[0-3]|W[1-9])\b/
-/** 会话残留：会话口吻词 */
-export const RESIDUE_SESSION_RE = /本工程|本卡会话|实测|排查顺序|先证据后结论|课上/
+/**
+ * 会话残留：会话口吻词。
+ * 2026-09 审查后移除 `实测`（BIZ-11i）：工程卡里"实测帧率 60fps"是正常表述，
+ * 真正要抓的是"本工程实测"里的 `本工程`，`实测` 单独出现误报率过高。
+ */
+export const RESIDUE_SESSION_RE = /本工程|本卡会话|排查顺序|先证据后结论|课上/
 /** 行号白名单：球谐带 / 正则化 / LOD 等专有记号 */
 export const LINE_WHITELIST_RE = /\bL[0-2]\b(?!\s*[-–~]\s*L?\d)|LOD/
 /** 讲义/章节引用白名单（`GAMES101 L15`、`第 15 讲`）——是出处，不是会话残留 */
 export const LECTURE_REF_RE = /(?:[A-Za-z]+\s*)?L\d+\b[^。；\n]{0,12}(?:讲|课|课件)|第\s*\d+\s*讲|Lecture\s*\d+/i
+/** 外部资源引用（SEC-7）：Obsidian 打开卡片时会主动外联（信标/跟踪面） */
+export const EXTERNAL_RESOURCE_RE = /<iframe\b|<script\b|<img\b[^>]*\bsrc\s*=\s*["']?https?:/i
 
 export interface ResidueHit {
   rule: 'path' | 'line' | 'person' | 'time' | 'phase' | 'session'
@@ -49,48 +61,63 @@ function excerptOf(line: string, index: number, width = 16): string {
   return line.slice(start, index + width + 12).replace(/\s+/g, ' ').trim()
 }
 
+interface ResidueRule {
+  rule: ResidueHit['rule']
+  re: RegExp
+  /** 命中后的白名单/邻近性判定：返回 true 表示"确实是残留" */
+  guard?: (line: string, m: RegExpExecArray) => boolean
+  /** nonQuote = 引用块（`> …`）内不判（定义句里的"我们"不算残留） */
+  scope: 'all' | 'nonQuote'
+}
+
+/** 行号残留判定：只在"紧邻文件名"或"成区间"时才报（`RealtimeLights.hlsl L182`、`L35-55`） */
+function lineGuard(line: string, m: RegExpExecArray): boolean {
+  if (LINE_WHITELIST_RE.test(m[0]) || LECTURE_REF_RE.test(line)) return false
+  const before = line.slice(0, m.index)
+  const after = line.slice(m.index + m[0].length)
+  const nearFile = /\.[a-z0-9]{2,6}[`）)\s]*$/i.test(before)
+  const isRange = /[-–]\s*L?\d/.test(m[0])
+  const fileAfter = /^[`\s]*[\w./\\-]+\.[a-z0-9]{2,6}/i.test(after)
+  return nearFile || isRange || fileAfter
+}
+
+/**
+ * 残留规则表（顺序即报告顺序，line 在 path 之前是有意的：
+ * `RealtimeLights.hlsl L182` 同时命中两者时，行号条目在前更贴近阅读习惯）。
+ * `M1/M2/M3` 默认不报（真实语料里多为里程碑/数学记号），仅同行出现"工程/阶段/里程碑"时提示。
+ */
+const RESIDUE_RULES: ResidueRule[] = [
+  { rule: 'line', re: RESIDUE_LINE_RE, guard: lineGuard, scope: 'all' },
+  { rule: 'path', re: RESIDUE_PATH_RE, scope: 'all' },
+  { rule: 'person', re: RESIDUE_PERSON_RE, scope: 'nonQuote' },
+  { rule: 'time', re: RESIDUE_TIME_RE, scope: 'nonQuote' },
+  { rule: 'phase', re: RESIDUE_PHASE_RE, scope: 'nonQuote' },
+  { rule: 'session', re: RESIDUE_SESSION_RE, scope: 'nonQuote' },
+  { rule: 'phase', re: /\bM[1-3]\b/, guard: (line) => /工程|阶段|里程碑|排期/.test(line), scope: 'nonQuote' },
+]
+
 /**
  * 扫描会话残留（P0-2）。
  *
  * 误伤控制（与提案 §5.2 一致，并用真实 vault 223 张卡校准）：
- * ① 只扫代码块与 `<details>` 折叠块**之外**的正文；
+ * ① 只扫代码块与 `<details>` 折叠块**之外**的正文（`blanked` 可传入已算好的结果）；
  * ② 白名单优先：`L0/L1/L2`、`LOD`、讲义/章节引用（`GAMES101 L15`、`第 15 讲`）；
- * ③ 行号只在"紧邻文件名"或"成区间"时才报（`RealtimeLights.hlsl L182`、`L35-55`）；
- * ④ `M1/M2/M3` 默认不报（真实语料里多为里程碑/数学记号），仅同行出现"工程/阶段/里程碑"时提示。
+ * ③ 行号只在"紧邻文件名"或"成区间"时才报；
+ * ④ `M1/M2/M3` 默认不报。
  */
-export function scanResidue(body: string): ResidueHit[] {
-  const text = blankOutBlocks(body)
+export function scanResidue(body: string, opts: { blanked?: string } = {}): ResidueHit[] {
+  const text = opts.blanked ?? blankOutBlocks(body)
   const lines = text.split(/\r?\n/)
   const hits: ResidueHit[] = []
-  const push = (rule: ResidueHit['rule'], lineNo: number, line: string, index: number): void => {
-    hits.push({ rule, line: lineNo, excerpt: excerptOf(line, index), suggestion: SUGGESTIONS[rule] })
-  }
   lines.forEach((line, i) => {
-    const lineNo = i + 1
     if (!line.trim()) return
     const quoted = /^[ \t]*>/.test(line)
-    const lineMatch = RESIDUE_LINE_RE.exec(line)
-    if (lineMatch && !LINE_WHITELIST_RE.test(lineMatch[0]) && !LECTURE_REF_RE.test(line)) {
-      const before = line.slice(0, lineMatch.index)
-      const after = line.slice(lineMatch.index + lineMatch[0].length)
-      const nearFile = /\.[a-z0-9]{2,6}[`）)\s]*$/i.test(before)
-      const isRange = /[-–]\s*L?\d/.test(lineMatch[0])
-      const fileAfter = /^[`\s]*[\w./\\-]+\.[a-z0-9]{2,6}/i.test(after)
-      if (nearFile || isRange || fileAfter) push('line', lineNo, line, lineMatch.index)
-    }
-    const pathMatch = RESIDUE_PATH_RE.exec(line)
-    if (pathMatch) push('path', lineNo, line, pathMatch.index)
-    if (!quoted) {
-      const personMatch = RESIDUE_PERSON_RE.exec(line)
-      if (personMatch) push('person', lineNo, line, personMatch.index)
-      const timeMatch = RESIDUE_TIME_RE.exec(line)
-      if (timeMatch) push('time', lineNo, line, timeMatch.index)
-      const phaseMatch = RESIDUE_PHASE_RE.exec(line)
-      if (phaseMatch) push('phase', lineNo, line, phaseMatch.index)
-      const sessionMatch = RESIDUE_SESSION_RE.exec(line)
-      if (sessionMatch) push('session', lineNo, line, sessionMatch.index)
-      const milestone = /\bM[1-3]\b/.exec(line)
-      if (milestone && /工程|阶段|里程碑|排期/.test(line)) push('phase', lineNo, line, milestone.index)
+    for (const entry of RESIDUE_RULES) {
+      if (entry.scope === 'nonQuote' && quoted) continue
+      const m = entry.re.exec(line)
+      if (!m) continue
+      if (entry.guard && !entry.guard(line, m)) continue
+      hits.push({ rule: entry.rule, line: i + 1, excerpt: excerptOf(line, m.index), suggestion: SUGGESTIONS[entry.rule] })
     }
   })
   return hits
@@ -124,8 +151,8 @@ export interface SelfTestCheck {
 }
 
 /** 自测题格式与答案校验（P1-2） */
-export function checkSelfTest(body: string): SelfTestCheck {
-  const section = findSection(splitSections(body).sections, '自测题')
+export function checkSelfTest(sections: CardSection[]): SelfTestCheck {
+  const section = findSection(sections, '自测题')
   const text = section?.body ?? ''
   const qn = [...text.matchAll(/^[ \t]*(?:[-*+][ \t]*)?\*{0,2}Q(\d+)\*{0,2}[ \t]*[:：]/gm)]
   const numbered = [...text.matchAll(/^[ \t]*(\d+)[.)][ \t]+\S/gm)]
@@ -163,8 +190,8 @@ export interface LayerCheck {
 }
 
 /** 阶梯式解剖层数与序号检查（P1-4） */
-export function checkLayers(body: string): LayerCheck {
-  const section = findSection(splitSections(body).sections, '阶梯式解剖')
+export function checkLayers(sections: CardSection[], body = ''): LayerCheck {
+  const section = findSection(sections, '阶梯式解剖')
   const text = section ? `${section.title}\n${section.body}` : body
   const layers = layerNumbers(text)
   const sequential = layers.length > 0 && layers.every((n, i) => n === i + 1)
@@ -219,8 +246,8 @@ export interface LinksBlockCheck {
 }
 
 /** 关联块格式检查：统一 `- 前置/后续/易混淆：\`标题\`（ID）` */
-export function checkLinksBlock(body: string): LinksBlockCheck {
-  const section = findSection(splitSections(body).sections, '关联卡片')
+export function checkLinksBlock(sections: CardSection[]): LinksBlockCheck {
+  const section = findSection(sections, '关联卡片')
   if (!section) return { present: false, malformed: [], lines: [] }
   const lines = section.body.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('-'))
   const malformed = lines.filter((l) => !/^-\s*(?:前置|后续|易混淆)\s*[：:]\s*\S/.test(l))
@@ -228,20 +255,34 @@ export function checkLinksBlock(body: string): LinksBlockCheck {
 }
 
 /** 验证实验步数（工程型 ≥3 步） */
-export function checkExperiments(body: string): { present: boolean; steps: number } {
-  const section = findSection(splitSections(body).sections, '验证实验')
+export function checkExperiments(sections: CardSection[]): { present: boolean; steps: number } {
+  const section = findSection(sections, '验证实验')
   if (!section) return { present: false, steps: 0 }
   const items = countListItems(section.body)
   return { present: true, steps: items > 0 ? items : section.body.trim() ? 1 : 0 }
 }
 
-/** 主干线是否唯一（只允许一个小节） */
-export function checkMainline(body: string): { count: number } {
-  const sections = splitSections(body).sections.filter((s) => matchesTitle(s.title, '主干线'))
-  return { count: sections.length }
+/** 某个小节标题在正文中出现的次数（变体计入；spec.mainline 驱动的唯一性检查，EXT-2） */
+export function countSection(sections: CardSection[], title: string): number {
+  return sections.filter((s) => matchesTitle(s.title, title)).length
 }
 
-/** 正文实际字数（不含 frontmatter、代码块与折叠块） */
-export function bodyLength(body: string): number {
-  return blankOutBlocks(body).replace(/\s+/g, '').length
+export interface ExternalResourceHit {
+  line: number
+  excerpt: string
+}
+
+/** 外部资源引用检查（SEC-7）：Obsidian 渲染 HTML 时会主动外联（信标/跟踪） */
+export function checkExternalResources(body: string): ExternalResourceHit[] {
+  const hits: ExternalResourceHit[] = []
+  String(body ?? '').split(/\r?\n/).forEach((line, i) => {
+    const m = EXTERNAL_RESOURCE_RE.exec(line)
+    if (m) hits.push({ line: i + 1, excerpt: excerptOf(line, m.index) })
+  })
+  return hits
+}
+
+/** 正文实际字数（不含 frontmatter、代码块与折叠块；`blanked` 可复用已算好的结果） */
+export function bodyLength(body: string, blanked?: string): number {
+  return (blanked ?? blankOutBlocks(body)).replace(/\s+/g, '').length
 }

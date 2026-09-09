@@ -3,11 +3,21 @@
  * 全部走 node:fs 直写（插件是可信 preset 代码，不经沙箱 fs）。
  * @module vault
  */
+import type { TemplateHints } from './template.ts';
 /** 扫描时跳过的通用目录（vault 特定目录如"资源"由 config.skipDirs 配置） */
 export declare const SKIP_DIRS: Set<string>;
+/** 文件名长度上限（标题↔文件名同口径的唯一来源，CPLX-7） */
+export declare const MAX_FILENAME = 80;
+/** 单次扫描安全阀：文件数与递归深度上限（防跨盘符/异常根导致整盘扫描，SEC-2） */
+export declare const MAX_WALK_FILES = 20000;
+export declare const MAX_WALK_DEPTH = 16;
 /** 合并内置通用目录与用户配置的额外跳过目录 */
 export declare function skipSetFor(extra?: string[]): Set<string>;
-/** Windows 非法文件名字符清洗 + 长度上限。引号（ASCII/中文）直接移除不留空格，避免"标题↔文件名"脱节 */
+/**
+ * Windows 非法文件名字符清洗 + 长度上限。引号（ASCII/中文）直接移除不留空格，
+ * 避免"标题↔文件名"脱节；`[` `]` 必须清洗——它们会让 MOC 的 `[[wikilink]]`
+ * 断裂（SEC-3）；设备名加 `_` 前缀兜底。
+ */
 export declare function sanitizeFilename(title: string): string;
 /**
  * 领域键近似匹配：按字符重合度（共同字符 / 较长键长度）≥0.6 排序，取前 2。
@@ -25,20 +35,34 @@ export interface WalkedFile {
     rel: string;
     /** 来源根标签（vault / 工作目录 / searchRoots 目录名） */
     root: string;
+    /** 是否可写（只有 vault 根为 true；只读根不写入，EXT-5） */
+    writable: boolean;
     mtimeMs: number;
     /** inode 变更时间（rename/元数据变更也触发；与 mtime 互补防同毫秒同大小漏检） */
     ctimeMs: number;
     size: number;
 }
-/** 一个检索根：扫描目录 + 展示标签 */
+/** 一个检索根：扫描目录 + 展示标签 + 是否可写（EXT-5：可写性策略上移到根定义） */
 export interface SearchRoot {
     path: string;
     label: string;
+    /** vault=true；searchRoots 与工作目录=false（只读，绝不写入） */
+    writable: boolean;
 }
-/** 递归收集 root 下所有 .md（跳过 skip 集合，默认内置通用目录）；rootLabel 标注来源 */
-export declare function walk(root: string, skip?: Set<string>, rootLabel?: string): Promise<WalkedFile[]>;
+/** 是否文件系统根（`resolve('/')` 在 Windows 上只等于当前盘根，跨盘符 cwd 会漏拦，SEC-2） */
+export declare function isFsRoot(p: string): boolean;
+/** 扫描进度回调（读取失败/超限时收集，供工具返回文本回显，BIZ-7） */
+export type SkipReporter = (entry: {
+    path: string;
+    reason: string;
+}) => void;
+/**
+ * 递归收集 root 下所有 .md（跳过 skip 集合，默认内置通用目录）；rootLabel 标注来源。
+ * 读取失败与安全阀超限都通过 `onSkip` 上报，绝不静默吞掉。
+ */
+export declare function walk(root: string, skip?: Set<string>, rootLabel?: string, onSkip?: SkipReporter, writable?: boolean): Promise<WalkedFile[]>;
 /** 跨根扫描：逐根 walk 后拼接（rel 为各根内相对路径，root 标注来源） */
-export declare function walkRoots(roots: SearchRoot[], skip?: Set<string>): Promise<WalkedFile[]>;
+export declare function walkRoots(roots: SearchRoot[], skip?: Set<string>, onSkip?: SkipReporter): Promise<WalkedFile[]>;
 /** 规范化路径键：Windows 下大小写不敏感，用于跨根去重（cwd 与 vault 相同时只索引一次） */
 export declare function canonicalRootKey(p: string): string;
 /** outer 是否包含 inner（按规范化绝对路径前缀判断；同路径视为包含） */
@@ -50,8 +74,18 @@ export declare function containsRoot(outer: string, inner: string): boolean;
 export declare function dedupeRoots(roots: SearchRoot[]): SearchRoot[];
 /** 文件级去重：同文件（规范化路径）只留首个（调用方把 vault 放最前，vault 标签优先） */
 export declare function dedupeFiles(files: WalkedFile[]): WalkedFile[];
-/** 校验额外检索根存在（fail-loud）并解析为绝对路径 + 唯一展示标签 */
-export declare function resolveSearchRoots(vaultRoot: string, raw?: string[]): SearchRoot[];
+/**
+ * 校验额外检索根存在（fail-loud）并解析为绝对路径 + 唯一展示标签。
+ * 额外根默认只读；`config.linkIntoNotes: true` 时允许写入（此时根标记可写）。
+ */
+export declare function resolveSearchRoots(vaultRoot: string, raw?: string[], writable?: boolean): SearchRoot[];
+/** lint 口径配置（具名接口，供 StudyConfig 与 VaultLayout 共用，EXT-6） */
+export interface LintConfig {
+    /** 会话残留级别：off 关闭 / warn 扣分 / error 扣分并封顶 59（默认 warn） */
+    residueLevel?: 'off' | 'warn' | 'error';
+    /** 禁用的规则 id 列表 */
+    rulesOff?: string[];
+}
 export interface VaultLayout {
     vaultRoot: string;
     stateDir: string;
@@ -67,10 +101,11 @@ export interface VaultLayout {
     /** 是否允许把关联写入没有 ID 的旧笔记，默认 false（旧笔记不碰不动） */
     linkIntoNotes?: boolean;
     /** lint 口径（可选）：会话残留级别与禁用规则 */
-    lint?: {
-        residueLevel?: 'off' | 'warn' | 'error';
-        rulesOff?: string[];
-    };
+    lint?: LintConfig;
+    /** 索引缓存 TTL（毫秒）：默认 2000；0 = 每次调用都重扫全库（外部编辑立即可见） */
+    indexTtlMs?: number;
+    /** 模板推断提示词表（缺省用内置默认值） */
+    templateHints?: TemplateHints;
 }
 /** 解析某领域卡片的落盘目录：优先映射表，未映射落入 fallbackDir/<领域名> */
 export declare function cardDirFor(layout: VaultLayout, domain: string): string;

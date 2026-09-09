@@ -49,7 +49,8 @@
 | 怎么用（安装/配置/工具/格式/排障） | `docs/用户使用指南.md` |
 | 卡片该写成什么样 | `presets/study/skills/card-format/SKILL.md` |
 | 为什么这样设计（架构、模板、决策取舍） | `docs/设计文档.md` |
-| 怎么实现（API、规则权重、配置、测试布局） | `docs/技术文档.md` |
+| 怎么实现（API、规则表、配置、测试布局） | `docs/技术文档.md` |
 | 本轮踩了什么坑、有什么可复用技巧 | `docs/经验文档.md` |
+| 2026-09 审查发现了什么、修了没有、为什么不修 | `docs/review/README.md`（§七 修复状态） |
 | 全功能验证怎么跑 | `docs/check/prompt-verify-all-features.md` |
-| 特性/性能/更新记录 | `README.md` |
+| 特性/性能/更新记录/隐私 | `README.md` |

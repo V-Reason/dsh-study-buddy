@@ -8,10 +8,23 @@
  */
 
 import { generateId, VALID_STATUS, type LinkKind, type UpdatePayload } from './card.ts'
-import { ruleIds } from './lint.ts'
-import { TEMPLATE_TYPES } from './template.ts'
+import { REENTRY_CHARS, RULES, ruleIds } from './lint.ts'
+import { PREREQ_SECTION, REENTRY_SECTION, TEMPLATE_TYPES, templateTable } from './template.ts'
 import type { HistoryKind } from './history.ts'
 import type { VaultStore } from './index.ts'
+
+/** `card_history` 支持的块类型（BIZ-11e：非法值必须报错，不能静默变成"无块可清除"） */
+export const HISTORY_KINDS: HistoryKind[] = ['version', 'errata', 'details']
+
+function historyKinds(value: unknown): HistoryKind[] | undefined {
+  const list = stringList(value)
+  if (list === undefined) return undefined
+  const invalid = list.filter((k) => !HISTORY_KINDS.includes(k as HistoryKind))
+  if (invalid.length > 0) {
+    throw new Error(`kinds 只接受 ${HISTORY_KINDS.join('/')}，收到：${invalid.join('、')}`)
+  }
+  return list as HistoryKind[]
+}
 
 export interface ToolDef {
   name: string
@@ -80,7 +93,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     },
     {
       name: 'card_get',
-      description: '按 ID、标题、根限定路径（如 "工作目录/子目录/笔记.md"）、相对路径或文件名读取一篇文档的完整原文（卡片或旧笔记）。',
+      description: '按 ID、标题、根限定路径（如 "工作目录/子目录/笔记.md"）、相对路径或文件名读取一篇文档的**完整原文**（卡片或旧笔记，无截断）。',
       parameters: {
         type: 'object',
         properties: {
@@ -95,7 +108,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'card_id',
       description:
-        '生成卡片 ID（YYYYMMDDHHmm_随机4位）。注意：card_create 会自动生成 ID，不消费本工具的预取值——'
+        '生成卡片 ID（YYYYMMDDHHmm_随机6位hex）。注意：card_create 会自动生成 ID，不消费本工具的预取值——'
         + '需要引用时以 card_create 返回的 ID 为准；本工具仅用于查看 ID 格式。',
       parameters: {
         type: 'object',
@@ -128,9 +141,9 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
           template: { type: 'string', enum: [...TEMPLATE_TYPES], description: '卡片模板：理论型（为什么）/工程型（怎么做）/对比型（怎么选）；不传则按领域与标题自动推断' },
           content: {
             type: 'string',
-            description: '正文 Markdown。必含小节：核心思想 / 主干线 / 阶梯式解剖（第 1~N 层，4~6 层）/ 实例走查 / 易错点 / 自测题（**Qn**：… → 答案）；'
-              + '工程型另需 验证实验（≥3 步）+ 排障判据（表格）；对比型另需 对比表 + 选型口诀 + 场景走查；'
-              + '长卡（>3000 字）补 重入点，有前置卡时补 前置检查。正文长度不设限，按信息完备性写。',
+            description: `正文 Markdown。三型模板（自动推断，可用 template 覆盖）：${templateTable().join('；')}。`
+              + `长卡（>${REENTRY_CHARS} 字）补「${REENTRY_SECTION.title}」，有前置卡时补「${PREREQ_SECTION.title}」。`
+              + '正文长度不设限，按信息完备性写。',
           },
           links: {
             type: 'object',
@@ -145,7 +158,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         required: ['title', 'domain', 'source', 'status', 'definition', 'content'],
       },
       output,
-      execute: (args) => store.create({
+      execute: (args, exec) => store.create({
         title: String(args.title ?? ''),
         domain: String(args.domain ?? ''),
         source: String(args.source ?? ''),
@@ -155,7 +168,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         content: String(args.content ?? ''),
         tags: stringList(args.tags),
         links: linksOf(args.links),
-      }).then((r) => r.text),
+      }, { sessionCwd: sessionCwdOf(exec) }).then((r) => r.text),
     },
     {
       name: 'card_update',
@@ -190,7 +203,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         required: ['id', 'mode'],
       },
       output,
-      execute: (args) => {
+      execute: (args, exec) => {
         const mode = String(args.mode ?? '')
         const payload: UpdatePayload = { mode: mode as UpdatePayload['mode'] }
         if (mode === 'append-version' || mode === 'errata') {
@@ -213,7 +226,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
             links: linksOf(args.links),
           }
         }
-        return store.update(String(args.id ?? ''), payload)
+        return store.update(String(args.id ?? ''), payload, { sessionCwd: sessionCwdOf(exec) })
       },
     },
     {
@@ -263,16 +276,16 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'card_lint',
       description:
-        '卡片质量体检（2026-09 重设计新增）：按 14 条规则打分并给出改写建议——会话残留（路径/行号/第二人称/会话时间词/阶段代号）、'
-        + '模板必填小节、主干线唯一、前置检查、重入点、验证实验步数、排障判据、代码块语言、自测题答案率、层级序号、关联块格式、领域标签、实例走查。'
-        + '全部为警告级（不阻塞落盘）。ref 给单卡；scope="vault" 批量体检（limit 控制明细条数，默认 20）。'
+        `卡片质量体检（2026-09 重设计新增）：按 ${RULES.length} 条规则打分并给出改写建议——${RULES.map((r) => r.title).join('、')}。`
+        + '全部为警告级（不阻塞落盘）；会话残留含白名单（L0/L1/L2 球谐带、讲义引用、代码块与历史折叠块内不扫）。'
+        + 'ref 给单卡；scope="vault" 批量体检卡片，scope="all" 含旧笔记（旧笔记仅体检通用规则，不套模板）。limit 控制明细条数（默认 20）。'
         + 'cross=true 做跨卡一致性检查（同一符号/常量/口径在多卡取值冲突）；trend=true 按周统计质量趋势；rating=true 输出可执行性分布（能跑/能查/只能读）。'
         + '归档后自检、或用户问"卡片质量/有没有写歪/口径是否一致"时用。',
       parameters: {
         type: 'object',
         properties: {
           ref: { type: 'string', description: '单卡：卡片 ID/标题/路径（与 scope 二选一）' },
-          scope: { type: 'string', enum: ['vault', 'all'], description: '批量：vault=只体检卡片，all=含旧笔记（旧笔记无模板要求）' },
+          scope: { type: 'string', enum: ['vault', 'all'], description: '批量：vault=只体检卡片，all=含旧笔记（旧笔记仅体检通用规则，不套模板）' },
           limit: { type: 'number', description: '批量时返回的最低分明细条数，默认 20' },
           rule: { type: 'string', enum: ruleIds(), description: '只看某条规则（如 session-residue）' },
           cross: { type: 'boolean', description: '跨卡一致性检查：同键（表格首列/公式左侧）在多卡取值不一致时列出冲突' },
@@ -296,7 +309,8 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       name: 'card_history',
       description:
         '管理卡片的版本更新 / 勘误 / 历史折叠块：action="list" 列出各块（类型/行号/摘要）；'
-        + 'action="strip" 清除历史块（正文与关联保留，先校验 <details> 配对，不配对只警告不删）。'
+        + 'action="strip" 清除历史块（正文与关联保留，先校验 <details> 配对，不配对只警告不删；'
+        + '删除是整块语义的，报告里的行号为删除前位置）。'
         + '用户说"清掉历史版本/这张卡太长了/只留最新版"时用；dryRun=true 只看会删什么。',
       parameters: {
         type: 'object',
@@ -305,7 +319,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
           action: { type: 'string', enum: ['list', 'strip'], description: 'list=列出；strip=清除' },
           kinds: {
             type: 'array',
-            items: { type: 'string', enum: ['version', 'errata', 'details'] },
+            items: { type: 'string', enum: HISTORY_KINDS },
             description: 'strip 时只清指定类型（默认全部：version=版本更新，errata=勘误，details=历史折叠块）',
           },
           dryRun: { type: 'boolean', description: 'strip 时只报告将删除的块，不写盘' },
@@ -314,7 +328,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       },
       output,
       execute: (args) => store.history(String(args.ref ?? ''), String(args.action ?? '') as 'list' | 'strip', {
-        kinds: stringList(args.kinds) as HistoryKind[] | undefined,
+        kinds: historyKinds(args.kinds),
         dryRun: args.dryRun === true,
       }),
     },

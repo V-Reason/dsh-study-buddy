@@ -7,7 +7,7 @@
  * @module history
  */
 
-import { insertBlockBefore, renderSections, splitSections } from './cardmodel.ts'
+import { inlineText, insertBlockBefore, makeLineOf, renderSections, splitSections } from './cardmodel.ts'
 
 export type HistoryKind = 'version' | 'errata' | 'details'
 
@@ -64,7 +64,7 @@ export function extractHistory(body: string): HistoryBlock[] {
   const text = String(body ?? '')
   const { sections } = splitSections(text)
   const blocks: HistoryBlock[] = []
-  const lineOf = (index: number): number => text.slice(0, index).split('\n').length
+  const lineOf = makeLineOf(text)
   for (const section of sections) {
     if (/^版本更新/.test(section.title)) {
       blocks.push({ kind: 'version', title: section.title, body: section.body, line: lineOf(section.start), endLine: lineOf(section.end) })
@@ -105,9 +105,9 @@ export function extractHistory(body: string): HistoryBlock[] {
   return blocks.sort((a, b) => a.line - b.line)
 }
 
-/** 渲染版本更新块（插入到关联卡片之前） */
+/** 渲染版本更新块（插入到关联卡片之前）；source 收敛为单行（SEC-1） */
 export function versionBlock(source: string, changes: string): string {
-  return `### 版本更新（来源：${source}）\n${String(changes ?? '').trim()}`
+  return `### 版本更新（来源：${inlineText(source) || '学习补充'}）\n${String(changes ?? '').trim()}`
 }
 
 /** 渲染勘误块 */
@@ -129,17 +129,22 @@ export interface StripResult {
   warnings: string[]
 }
 
-/** 删除指定的 `<details>` 折叠块（按 `</details>` 结尾的整块删除，保留块外内容） */
+/**
+ * 删除指定的 `<details>` 折叠块（按 `</details>` 结尾的整块删除，保留块外内容）。
+ *
+ * 前提：`blocks` 的 `line`/`endLine` 必须与 `text` **同一坐标系**
+ * （即 `extractHistory(text)` 的返回值）。行号越界时按普通行保留，
+ * 绝不因为一个坏行号就跳到文件末尾——这是 BIZ-1 的教训。
+ */
 function dropDetailsBlocks(text: string, blocks: HistoryBlock[]): string {
   if (blocks.length === 0) return text
-  const targets = new Set(blocks.map((b) => b.line))
+  const targets = new Map(blocks.map((b) => [b.line, b]))
   const lines = text.split(/\r?\n/)
   const kept: string[] = []
   let i = 0
   while (i < lines.length) {
-    const lineNo = i + 1
-    if (targets.has(lineNo)) {
-      const target = blocks.find((b) => b.line === lineNo)!
+    const target = targets.get(i + 1)
+    if (target && target.endLine >= target.line && target.endLine <= lines.length) {
       i = target.endLine
       continue
     }
@@ -153,6 +158,11 @@ function dropDetailsBlocks(text: string, blocks: HistoryBlock[]): string {
  * 剥离历史块（P0-4 `card_history strip`）。
  * - 先校验 `<details>` 配对：不配对时给出警告，未闭合块不会被删除；
  * - `kinds` 可指定只清某类（如只清历史折叠、保留勘误）。
+ *
+ * 删除顺序（BIZ-1 修复）：**先删 `<details>`（与 `extractHistory` 同一坐标系），
+ * 再删版本更新/勘误小节（走段落模型按标题过滤）**。旧实现先 `renderSections`
+ * 重排文本、再拿原始行号去删，重排后行号前移，会删掉无关正文
+ * （实测丢失整个「关联卡片」小节并留下未闭合 `<details>`）。
  */
 export function stripHistory(body: string, opts: { kinds?: HistoryKind[] } = {}): StripResult {
   const text = String(body ?? '')
@@ -164,14 +174,18 @@ export function stripHistory(body: string, opts: { kinds?: HistoryKind[] } = {})
   const kinds = new Set<HistoryKind>(opts.kinds ?? ['version', 'errata', 'details'])
   const removed = extractHistory(text).filter((b) => kinds.has(b.kind))
   if (removed.length === 0) return { text, removed, warnings }
-  const { lead, sections } = splitSections(text)
+  // ① 删 `<details>`：仍在原始坐标系里，行号可靠
+  let next = kinds.has('details')
+    ? dropDetailsBlocks(text, removed.filter((b) => b.kind === 'details'))
+    : text
+  // ② 删版本更新/勘误小节：段落模型按标题过滤，不再依赖任何行号
+  const { lead, sections } = splitSections(next)
   const kept = sections.filter((s) => {
     if (kinds.has('version') && /^版本更新/.test(s.title)) return false
     if (kinds.has('errata') && /^勘误/.test(s.title)) return false
     return true
   })
-  let next = renderSections(lead, kept)
-  if (kinds.has('details')) next = dropDetailsBlocks(next, removed.filter((b) => b.kind === 'details'))
+  next = renderSections(lead, kept)
   return { text: next, removed, warnings }
 }
 

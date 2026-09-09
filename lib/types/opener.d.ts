@@ -53,6 +53,10 @@ export declare function applyOpenerDecision<T>(decision: PreStepDecisionLike<T>,
  * - 旧平台（≤2026-08-27 session 重构前）：`session.events` 是数组属性；
  * - 新平台（>=0.1.3-alpha.1，session 拆分为快照 API 后）：`session.snapshotEvents()` 返回快照数组。
  * 两者皆缺/抛错 → 保守返回 false（只多注入一次提醒，不阻断流程）。
+ *
+ * BIZ-9：`snapshotEvents()` 是宿主 API，跨版本可能抛错；这里**必须**捕获——
+ * 从 pre-step 处理器逸出的异常会变成步骤级失败（最坏情况首步直接失败），
+ * 而不是注释承诺的"只多注入一次提醒"。
  */
 export declare function hasPriorUserMessage(payload: {
     agent?: {

@@ -15,6 +15,8 @@ export interface IndexedCard {
   rel: string
   /** 来源根标签（vault / 工作目录 / searchRoots 目录名） */
   root: string
+  /** 该文件是否可写（只有 vault 内文件为 true；只读根永不写入，EXT-5） */
+  writable: boolean
   /** 展示/寻址路径：多根时为 root/rel，单根时无前缀 */
   fullRel: string
   fileName: string
@@ -27,6 +29,8 @@ export interface IndexedCard {
   status: string | null
   source: string | null
   definition: string | null
+  /** frontmatter 模板类型（理论型/工程型/对比型；旧笔记为 null） */
+  template: string | null
   /** 由相对路径顶层目录推断的领域（旧笔记用） */
   inferredDomain: string
   /** 字段 → token 计数 */
@@ -108,6 +112,7 @@ export function indexNote(file: WalkedFile, raw: string): IndexedCard {
     path: file.path,
     rel: file.rel,
     root,
+    writable: file.writable === true,
     fullRel: `${root}/${file.rel.replace(/\\/g, '/')}`,
     fileName: fileNameOf(file.path),
     kind: parsed.meta?.id ? 'card' : 'note',
@@ -116,6 +121,7 @@ export function indexNote(file: WalkedFile, raw: string): IndexedCard {
     status: parsed.meta?.status ?? null,
     source: parsed.meta?.source ?? null,
     definition,
+    template: parsed.meta?.template ?? null,
     inferredDomain,
     titleTokens: countTokens(tokenize(title)),
     defTokens: countTokens(tokenize(definition ?? '')),
@@ -146,12 +152,20 @@ export interface SearchOptions {
   limit?: number
 }
 
+/** 字段权重（PERF-6 引入单字降权后仍集中在此，CPLX-7） */
+const FIELD_WEIGHTS = { title: 4, definition: 3, tag: 2, body: 1 } as const
+/** 单字 CJK token 的权重系数（命中几乎全库，降权避免"算 snippet 扫全库"） */
+const SINGLE_CHAR_FACTOR = 0.2
+
 export class SearchIndex {
   private cards: IndexedCard[] = []
   private inverted = new Map<string, number[]>()
   private titleInverted = new Map<string, number[]>()
   private defInverted = new Map<string, number[]>()
   private tagInverted = new Map<string, number[]>()
+  private idIndex = new Map<string, IndexedCard>()
+  private titleIndex = new Map<string, IndexedCard>()
+  private rootSet = new Set<string>()
 
   rebuild(cards: IndexedCard[], multiRoot = false): void {
     this.cards = cards.map((c) => ({ ...c, fullRel: multiRoot ? c.fullRel : c.rel.replace(/\\/g, '/') }))
@@ -159,11 +173,18 @@ export class SearchIndex {
     this.titleInverted.clear()
     this.defInverted.clear()
     this.tagInverted.clear()
+    this.idIndex.clear()
+    this.titleIndex.clear()
+    this.rootSet.clear()
     this.cards.forEach((card, idx) => {
       for (const t of card.bodyTokens.keys()) this.push(this.inverted, t, idx)
       for (const t of card.titleTokens.keys()) this.push(this.titleInverted, t, idx)
       for (const t of card.defTokens.keys()) this.push(this.defInverted, t, idx)
       for (const t of card.tagTokens.keys()) this.push(this.tagInverted, t, idx)
+      if (card.id && !this.idIndex.has(card.id)) this.idIndex.set(card.id, card)
+      const titleKey = card.title.toLowerCase()
+      if (!this.titleIndex.has(titleKey)) this.titleIndex.set(titleKey, card)
+      this.rootSet.add(card.root)
     })
   }
 
@@ -177,17 +198,22 @@ export class SearchIndex {
     return this.cards.length
   }
 
-  all(): IndexedCard[] {
+  /** 只读视图（CPLX-6：不再泄露内部数组引用） */
+  all(): readonly IndexedCard[] {
     return this.cards
   }
 
+  /** 已索引的来源根标签集合（拼「来源：…」用，避免每次 O(n) 扫描） */
+  roots(): string[] {
+    return [...this.rootSet]
+  }
+
   byId(id: string): IndexedCard | undefined {
-    return this.cards.find((c) => c.id === id)
+    return this.idIndex.get(id)
   }
 
   byTitle(title: string): IndexedCard | undefined {
-    const wanted = title.toLowerCase()
-    return this.cards.find((c) => c.title.toLowerCase() === wanted)
+    return this.titleIndex.get(String(title).toLowerCase())
   }
 
   /**
@@ -206,55 +232,57 @@ export class SearchIndex {
     })
   }
 
-  byRel(rel: string): IndexedCard | undefined {
-    return this.candidatesForRef(rel)[0]
-  }
-
   search(query: string, opts: SearchOptions = {}): SearchHit[] {
     const tokens = tokenizeQuery(query)
     const scores = new Map<number, number>()
+    const bump = (idx: number, delta: number): void => { scores.set(idx, (scores.get(idx) ?? 0) + delta) }
     for (const t of tokens) {
-      for (const idx of this.titleInverted.get(t) ?? []) {
-        scores.set(idx, (scores.get(idx) ?? 0) + 4)
-      }
-      for (const idx of this.defInverted.get(t) ?? []) {
-        scores.set(idx, (scores.get(idx) ?? 0) + 3)
-      }
-      for (const idx of this.tagInverted.get(t) ?? []) {
-        scores.set(idx, (scores.get(idx) ?? 0) + 2)
-      }
-      for (const idx of this.inverted.get(t) ?? []) {
-        scores.set(idx, (scores.get(idx) ?? 0) + 1)
-      }
+      const factor = t.length === 1 ? SINGLE_CHAR_FACTOR : 1
+      for (const idx of this.titleInverted.get(t) ?? []) bump(idx, FIELD_WEIGHTS.title * factor)
+      for (const idx of this.defInverted.get(t) ?? []) bump(idx, FIELD_WEIGHTS.definition * factor)
+      for (const idx of this.tagInverted.get(t) ?? []) bump(idx, FIELD_WEIGHTS.tag * factor)
+      for (const idx of this.inverted.get(t) ?? []) bump(idx, FIELD_WEIGHTS.body * factor)
     }
     const limit = opts.limit && opts.limit > 0 ? Math.min(opts.limit, 50) : 5
-    const hits: SearchHit[] = []
+    // 先排序截断，再只对入选结果算 snippet（PERF-6：旧实现对全部命中算 snippet 再丢弃）
+    const ranked: Array<{ idx: number; score: number }> = []
     for (const [idx, score] of scores) {
       if (score <= 0) continue
       const card = this.cards[idx]
       if (opts.domain && card.domain !== opts.domain && card.inferredDomain !== opts.domain) continue
       if (opts.status && card.status !== opts.status) continue
       if (opts.kind && card.kind !== opts.kind) continue
-      hits.push({
-        id: card.id,
-        title: card.title,
-        domain: card.domain,
-        tags: card.tags,
-        status: card.status,
-        source: card.source,
-        definition: card.definition,
-        path: card.path,
-        rel: card.rel,
-        root: card.root,
-        fullRel: card.fullRel,
-        fileName: card.fileName,
-        kind: card.kind,
-        inferredDomain: card.inferredDomain,
-        score,
-        snippet: snippetOf(card, tokens),
-      })
+      ranked.push({ idx, score })
     }
-    hits.sort((a, b) => b.score - a.score || (a.kind === b.kind ? 0 : a.kind === 'card' ? -1 : 1) || a.fullRel.localeCompare(b.fullRel))
-    return hits.slice(0, limit)
+    ranked.sort((a, b) => {
+      const scoreDiff = b.score - a.score
+      if (scoreDiff !== 0) return scoreDiff
+      const ca = this.cards[a.idx]
+      const cb = this.cards[b.idx]
+      if (ca.kind !== cb.kind) return ca.kind === 'card' ? -1 : 1
+      return ca.fullRel.localeCompare(cb.fullRel)
+    })
+    return ranked.slice(0, limit).map(({ idx, score }) => this.toHit(this.cards[idx], score, tokens))
+  }
+
+  private toHit(card: IndexedCard, score: number, tokens: string[]): SearchHit {
+    return {
+      id: card.id,
+      title: card.title,
+      domain: card.domain,
+      tags: card.tags,
+      status: card.status,
+      source: card.source,
+      definition: card.definition,
+      path: card.path,
+      rel: card.rel,
+      root: card.root,
+      fullRel: card.fullRel,
+      fileName: card.fileName,
+      kind: card.kind,
+      inferredDomain: card.inferredDomain,
+      score,
+      snippet: snippetOf(card, tokens),
+    }
   }
 }

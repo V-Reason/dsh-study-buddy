@@ -5,6 +5,8 @@
  * @module frontmatter
  */
 
+import { inlineText } from './cardmodel.ts'
+
 export interface CardMeta {
   id?: string
   title?: string
@@ -46,14 +48,23 @@ export function parseFrontmatter(raw: string): ParsedNote {
   return { meta, body: raw.slice(m[0].length), raw }
 }
 
+/**
+ * 渲染 frontmatter。每个值都过 `inlineText`（SEC-1）：标题/来源里混入换行时
+ * 会把 `key: value` 截成两行，`parseFrontmatter` 的非贪婪正则在注入的 `---`
+ * 处提前闭合，后半段元数据静默降级为正文。校验层会拒绝换行，这里是兜底。
+ */
 export function renderFrontmatter(meta: CardMeta): string {
   const lines = ['---']
-  if (meta.id) lines.push(`ID: ${meta.id}`)
-  if (meta.title) lines.push(`标题: ${meta.title}`)
-  if (meta.domain) lines.push(`领域: ${meta.domain}`)
-  if (meta.source) lines.push(`来源: ${meta.source}`)
-  if (meta.status) lines.push(`状态: ${meta.status}`)
-  if (meta.template) lines.push(`模板: ${meta.template}`)
+  const push = (key: string, value: string | undefined): void => {
+    const v = inlineText(value)
+    if (v) lines.push(`${key}: ${v}`)
+  }
+  push('ID', meta.id)
+  push('标题', meta.title)
+  push('领域', meta.domain)
+  push('来源', meta.source)
+  push('状态', meta.status)
+  push('模板', meta.template)
   lines.push('---', '')
   return lines.join('\n')
 }

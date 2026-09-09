@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  blankOutBlocks, codeFenceLanguages, countListItems, findSection, hasHeading, headingLine,
+  blankOutBlocks, codeFenceLanguages, countListItems, findSection, inlineText, makeLineOf,
   insertBlockBefore, layerNumbers, matchesTitle, renderSections, splitSections,
 } from '../src/cardmodel.ts'
 
@@ -44,13 +44,27 @@ describe('cardmodel 段落模型', () => {
     expect(matchesTitle('', '核心思想')).toBe(false)
   })
 
-  test('findSection / hasHeading / headingLine 定位一致', () => {
+  test('findSection 定位一致', () => {
     const { sections } = splitSections(BODY)
     expect(findSection(sections, '实例走查')?.body).toBe('数值代入')
-    expect(hasHeading(BODY, '阶梯式解剖')).toBe(true)
-    expect(hasHeading(BODY, '排障判据')).toBe(false)
-    expect(headingLine(BODY, '实例走查')).toBe(9)
-    expect(headingLine(BODY, '不存在')).toBe(0)
+    expect(findSection(sections, '阶梯式解剖')?.title).toBe('阶梯式解剖（第 1 层 → 第 4 层）')
+    expect(findSection(sections, '排障判据')).toBeUndefined()
+  })
+
+  test('inlineText 收敛换行与多余空白（SEC-1 渲染兜底）', () => {
+    expect(inlineText('A\n---\n注入: x')).toBe('A --- 注入: x')
+    expect(inlineText('  前后空白  ')).toBe('前后空白')
+    expect(inlineText(undefined)).toBe('')
+  })
+
+  test('makeLineOf 下标 → 行号（1 基，含边界）', () => {
+    const text = 'a\nbb\n\nccc'
+    const lineOf = makeLineOf(text)
+    expect(lineOf(0)).toBe(1)
+    expect(lineOf(2)).toBe(2)
+    expect(lineOf(5)).toBe(3)
+    expect(lineOf(6)).toBe(4)
+    expect(lineOf(999)).toBe(4)
   })
 
   test('insertBlockBefore：插到「关联卡片」之前，不破坏前后空行', () => {

@@ -11,7 +11,7 @@
 - **四步学习闭环**：资料摄入 → 讲解拓展 → 问答反诘（三明治原则）→ 笔记归档，每步都有明确模板与检查清单
 - **原子卡片落盘 Obsidian vault（2026-09 重设计：可独立复读的微课程）**：分型模板——理论型（为什么）/工程型（怎么做，含验证实验 + 排障判据）/对比型（怎么选，含对比表 + 选型口诀），自动推断并回显；通用骨架含核心思想/主干线/阶梯式解剖（4~6 层）/实例走查/易错点/自测题，长卡补重入点、有前置卡补前置检查；**正文不设字数上限**（长度由信息完备性决定），定义仍限 ≤60 字；卡片就是普通 `.md`，与旧笔记同库同目录，Obsidian 可直接打开、编辑、git 管理
 - **反堆砌三规则**：主干线唯一（一句话写清"问题 → 约束 → 解法 → 代价 → 验证"）、删除测试（删了会迷路才留在主线）、前置检查（≤2 条直接前置 + 明确排除），写进 persona 与 card-format 技能
-- **质量可检测（`card_lint`）**：14 条规则逐项打分——会话残留（路径/行号/第二人称/会话时间词/阶段代号，含 `L0/L1/L2`、讲义引用等白名单）、模板必填小节、主干线、重入点、验证实验步数、排障判据、代码块语言、自测题答案率、层级序号、关联块格式、领域标签；全部警告级、带改写建议，单卡或全库批量
+- **质量可检测（`card_lint`）**：14 条规则逐项打分——会话残留（路径/行号/第二人称/会话时间词/阶段代号，含 `L0/L1/L2`、讲义引用等白名单；硬信号 10 分/处、第二人称与会话口吻 3 分/处）、模板必填小节、主干线唯一、重入点、验证实验步数、排障判据、代码块语言、自测题答案率、层级序号、关联块格式、领域标签、外部资源（info 级）；全部警告级、带改写建议，单卡或全库批量（`scope=all` 时旧笔记只体检通用规则）
 - **多根检索（卡片 ↔ 旧笔记联动）**：`card_search` 不止检索 vault 卡片，还覆盖**会话工作目录**（`includeSessionCwd`）与配置的 `searchRoots` 旧笔记；命中标注「类型：卡片/旧笔记」与「路径」；`card_get` 可读旧笔记全文，`card_link` 默认只写卡片侧（旧笔记零改动），关联用根限定路径寻址
 - **增量更新（活笔记）**：补充加"版本更新"、推翻加"勘误"、无关则新卡关联——旧内容永不丢失，更新决定权永远在你；版本块插在「关联卡片」**之前**（阅读顺序正确）；`card_history` 可列出/清除历史块；仅修一句话定义走字段级 `card_update(definition)`
 - **改名不散链（`card_rename`）**：改标题时同步 frontmatter + 文件名 + 全库入链 + MOC wikilink，并做断链检测；`dryRun` 可先预演
@@ -22,10 +22,11 @@
 - **指令驱动（听指挥）**：读取 ≠ 讲解——"读取 X"只输出读取报告，说"讲解"才开始讲；读取 PDF/PNG/PPT 等文件走内置 `file-reading` 技能（PDF/PPTX/DOCX 的**内嵌图片自动提取**并逐张 `read_image`，不漏掉课件里的图），不摸索工具
 - **MOC 知识目录**：归档时自动生成按领域分组的知识地图
 - **轻量**：每次请求固定开销约 15KB（比标准模式低 ~30%）；技能按需加载；会话早期自动压缩历史（阈值 30%）
-- 209 项单元测试覆盖卡片渲染、检索索引（含多根旧笔记）、增量更新、进度与记忆持久化、原子写与路径安全
+- 248 项单元测试覆盖卡片渲染、检索索引（含多根旧笔记）、增量更新、进度与记忆持久化、原子写与路径安全、以及审查修复回归
 
 ## 更新记录
 
+- **v0.9.0（2026-09-10）— 依据 `docs/review/` 的审查修复**：3 个 blocker 全部修复（`card_history strip` 行号漂移会删错正文 → 改「先删 `<details>` 再按段落模型过滤小节」；标题/定义含换行会截断 frontmatter → 入口拒绝 + 渲染兜底；`card_rename` 冲突校验在所有写入之后 → 拆「先校验后提交 + 失败回滚」）。另修复 15 个 warning 与 12 个 nit：`card_update` 透传会话 cwd、`scope=all` 旧笔记只体检通用规则、禁用规则时不再报"未通过"、关联判重限关联卡片小节、读取失败计数回显、同名卡提示、`hasPriorUserMessage` 兑现兜底、断链检测对象纠正、跨盘符根守卫（`isFsRoot`）、`[`/`]` 与设备名清洗、记忆保留键拒绝、外部资源 info 规则、ID 6 位 hex、进度队列上限等。可维护性/性能：lint 规则收敛为 `RULES` 注册表 + 规格驱动（删除与 `template-sections` 重复的 `walkthrough`，新增 `external-resource`）、索引 TTL（`indexTtlMs`）、批量 lint 复用索引正文、`rename` 索引预筛、`matchAll`/`makeLineOf`/Map 索引。工具仍 12 个，测试 209 → 248；逐条修复状态见 `docs/review/README.md` §七。
 - **v0.8.0（2026-09-10）— P1/P2 收口**：模板分型（理论型/工程型/对比型，自动推断 + `template` 覆盖）与四个新小节（重入点/前置检查/验证实验/排障判据）落进代码与文档；`card_lint` 增 `cross`（跨卡一致性）/`trend`（质量趋势）/`rating`（可执行性评级）三个分析开关；persona、card-format、study-loop、incremental-update、用户指南、README 全面同步"正文不设字数上限 + 反堆砌三规则"。测试 203 → 209。
 - **v0.6.0（2026-09-10）— 卡片质量可检测（P0）**：依据重设计提案（现归档于 `docs/archive/design/`）完成框架重设计与 P0 全部 6 项——① 新增 `card_lint`（14 条规则打分：会话残留/模板小节/主干线/重入点/验证实验/排障判据/代码块语言/自测题答案率/层级序号/关联块格式/领域标签…，全部警告级）；② 会话残留规则集含白名单（`L0/L1/L2` 球谐带、`GAMES101 L15` 讲义引用、代码块与 `<details>` 内不扫）；③ `append-version`/`errata` 改为插在「关联卡片」**之前**（阅读顺序不再被破坏）；④ 新增 `card_history`（list/strip + `<details>` 配对校验）；⑤ 新增 `card_rename`（改标题同步文件名 + 全库入链 + 断链检测 + dryRun）；⑥ 关联块归一为 `` - 前置：`标题`（ID） ``，去重改为"标题或 ID 任一命中即跳过"。工具 9 → 12，测试 136 → 201；新增 `src/cardmodel.ts`（段落模型）/`src/template.ts`（模板注册表）/`src/lint.ts`（规则引擎）/`src/history.ts`/`src/rename.ts`/`src/tools.ts`。
 - **v0.5.0（2026-09-07）— dsh 0.1.3-alpha.1 平台适配**：宿主侧仍零 `@deepseek-ai` 运行时导入（加载层无需改动，不会因平台重构 fail-loud）；唯一 API 漂移是 2026-08-28 起 session 重构移除 `session.events`（改为 `session.snapshotEvents()`），已将开场门禁的恢复会话判定改为**双形状特性探测**（新旧平台均兼容：新平台恢复会话不再误注入预步提醒，旧平台行为不变）。同步版本元数据（package.json / dsh.plugin.json 均 0.5.0）并新增本更新记录。
@@ -134,7 +135,7 @@ ID: 202608161430_ab12
 git clone https://github.com/V-Reason/dsh-study-buddy.git
 cd dsh-study-buddy
 pnpm install
-pnpm run check          # typecheck + 209 项测试 + 构建 lib/index.js
+pnpm run check          # typecheck + 248 项测试 + 构建 lib/index.js
 
 # 2. 把插件装进你的 DSH profile（<profileDir> 通常是 %DSH_HOME%\profiles\web）
 #    在 <profileDir>\package.json 的 dependencies 里加入：
@@ -186,23 +187,39 @@ Copy-Item -Recurse presets/study "$env:DSH_HOME\.agent-presets\study"
 | `skipDirs` | `[]` | 额外跳过扫描的顶层目录名（内置已跳过 `.obsidian`/`.trash`/`.study`/`.git`/`node_modules`） |
 | `includeSessionCwd` | `false` | 把会话工作目录（DSH 启动目录即 `{{cwd}}`）的旧笔记纳入检索；与 vault 相同/嵌套自动去重 |
 | `searchRoots` | `[]` | 额外检索根（绝对路径或相对 vaultRoot）：旧笔记库，只读；不存在即挂载失败（fail-loud） |
-| `linkIntoNotes` | `false` | 是否把 `card_link` 关联写入无 ID 的旧笔记本体（默认只写卡片侧，旧笔记不碰不动） |
+| `linkIntoNotes` | `false` | 是否把 `card_link` 关联写入无 ID 的旧笔记本体（默认只写卡片侧，旧笔记不碰不动）；同时决定 `searchRoots`/工作目录是否可写 |
 | `lint.residueLevel` | `warn` | 会话残留规则级别：`off` 关闭 / `warn` / `error`（含残留的卡封顶 59 分） |
 | `lint.rulesOff` | `[]` | 禁用的 lint 规则 id 列表（如 `['domain-tag']`） |
+| `indexTtlMs` | `2000` | 索引缓存 TTL：TTL 内跳过全库 stat；设 `0` = 每次调用都重扫（Obsidian 外部编辑立即可见） |
+| `templateHints.engineeringDomains` | 图形学/Unity/Shader/URP/渲染 | 工程型领域键（精确或 `${键}-` 前缀）；新增领域族不必改源码 |
+| `templateHints.engineeringTitles` | 接入/配置/参数/坑/实现/源码/变体 | 工程型标题特征词 |
+| `templateHints.comparisonTitles` | 对比/谱系/选型/取舍/差异/之争/vs | 对比型标题特征词 |
 
 预设内另有压缩配置（`compaction-basic` 组）：`thresholdRatio: 0.3`、`retainRatio: 0.15`、`maxTokens: 4096`，并带 `deepseek-v4-flash` / `deepseek-v4-pro` 模型策略。
 
-插件工具一览（12 个）：`card_search`（多根：vault + 会话工作目录 + searchRoots；标注 类型：卡片/旧笔记 与 路径）/ `card_get`（卡片与旧笔记均可）/ `card_id`（预生成占位，card_create 不消费）/ `card_create`（定义 ≤60 字硬上限；模板自动推断；领域键未映射回显可用键/近似键）/ `card_update`（append-version · errata · definition · replace；版本块插在关联卡片之前）/ `card_link`（关联行归一 + 标题/ID 双向去重；旧笔记默认只写卡片侧）/ `card_moc`（title 只传主题名，日期自动加且回显文件名/标题/日期）/ `card_lint`（14 条规则体检：单卡或全库批量）/ `card_history`（版本块/历史折叠 list + strip）/ `card_rename`（改标题同步文件名与全库入链 + 断链检测）/ `study_progress` / `study_memory`（跨会话记忆：键值笔记 + 上次小结 lastSummary + 自迭代开关 `_autoPrefs`；get 对疑似过期进度句给出提示，与进度相互独立）。
+插件工具一览（12 个）：`card_search`（多根：vault + 会话工作目录 + searchRoots；标注 类型：卡片/旧笔记 与 路径）/ `card_get`（卡片与旧笔记均可，返回完整原文）/ `card_id`（预生成占位，card_create 不消费）/ `card_create`（定义 ≤60 字硬上限；模板自动推断；领域键未映射回显可用键/近似键；同名卡提示）/ `card_update`（append-version · errata · definition · replace；版本块插在关联卡片之前）/ `card_link`（关联行归一 + 标题/ID 双向去重，判重限关联卡片小节；旧笔记默认只写卡片侧）/ `card_moc`（title 只传主题名，日期自动加且回显文件名/标题/日期）/ `card_lint`（14 条规则体检：单卡或全库批量，`scope=all` 时旧笔记仅体检通用规则）/ `card_history`（版本块/历史折叠 list + strip）/ `card_rename`（改标题同步文件名与全库入链 + 断链检测，冲突时不做任何写入）/ `study_progress` / `study_memory`（跨会话记忆：键值笔记 + 上次小结 lastSummary + 自迭代开关 `_autoPrefs`；get 对疑似过期进度句给出提示，与进度相互独立）。
+
+## 隐私
+
+**vault 内容会出境。** 这个插件把 vault 里的内容读出来交给模型，这是它的工作方式，需要明确写在这里：
+
+- `card_search` / `card_get` 的返回文本（标题、定义、正文片段、**整篇原文**）、绝对/相对路径，都会写入 DSH 会话日志，并作为请求内容发送给模型服务商。
+- `.study/progress.json`（进度、未答追问）与 `.study/memory.json`（跨会话记忆）在会话开场被强制读取，同样进入上下文。
+- 卡片正文里的 HTML 外链（`<img src="http…">`、`<iframe>`）会在你于 Obsidian 打开卡片时由**本机主动外联**；`card_lint` 的 `external-resource` 规则会给出 info 级提示。
+- 插件本身**不联网**：全仓无 `child_process`、无 HTTP 客户端、无 `eval`；所有 IO 只有 `node:fs` 与 `.study/*.json`。
+- 记忆与进度中的文本是**用户数据**：persona 与 `memory-auto` 技能明确要求只能作为事实引用，不得当作指令执行；`study_memory(get)` 对以"忽略/指令/你现在是"开头的记忆给出软提示。
+
+结论：**不要把不适合交给模型服务商的内容放进同一个 vault**，或为该 vault 单独配置部署。
 
 ## 开发
 
 ```bash
 pnpm install
-pnpm run check     # typecheck + vitest（209 项）+ esbuild 构建
+pnpm run check     # typecheck + vitest（248 项）+ esbuild 构建
 ```
 
 - 源码在 `src/`（零运行时依赖，仅 Node 内置模块），构建产物 `lib/index.js`（`@deepseek-ai/*` 保持 external）
-- 测试在 `tests/`：段落模型与模板分型、lint 规则与白名单反例、历史块与改名、frontmatter 往返、卡片渲染/增量更新/关联、CJK+英文混合检索、原子写与路径越界、临时 vault 端到端全链路
+- 测试在 `tests/`：段落模型与模板分型、lint 规则与白名单反例、历史块与改名、frontmatter 往返、卡片渲染/增量更新/关联、CJK+英文混合检索、原子写与路径越界、临时 vault 端到端全链路、`docs/review/` 审查修复回归（blocker/静默错误/注入）
 - CI：push/PR 自动跑 `pnpm run check`（`.github/workflows/check.yml`，Node 22）
 
 ## 目录结构
@@ -210,11 +227,12 @@ pnpm run check     # typecheck + vitest（209 项）+ esbuild 构建
 ```
 dsh-study-buddy/
 ├── src/                 # 插件源码（vault 适配 / 检索索引 / 卡片模型 / 模板 / lint / 历史块 / 改名 / 工具 / 入口）
-├── tests/               # 209 项单元与端到端测试
+├── tests/               # 248 项单元与端到端测试
 ├── presets/study/       # 「学习」Agent 预设（persona + 工具行 + 6 个技能）
 │   └── skills/          # file-reading / study-loop / card-format / incremental-update / domain-adaptation / memory-auto
 ├── docs/                # 当前文档：用户使用指南、设计文档、技术文档、经验文档
 │   ├── check/           # 全功能验证脚本
+│   ├── review/          # 2026-09 代码审查报告 + 修复状态对照
 │   └── archive/         # 历史文档归档（提案 / 早期需求稿 / 体检 / 复盘 / 体验报告）
 ├── build.mjs            # esbuild 构建脚本
 └── cordis.patch.yml     # 备用：宿主平面挂载层（默认走 preset 行）

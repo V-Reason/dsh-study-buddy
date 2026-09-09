@@ -3,7 +3,7 @@ import { indexNote, SearchIndex, tokenize, tokenizeQuery } from '../src/search.t
 import type { WalkedFile } from '../src/vault.ts'
 
 function file(rel: string, root = 'vault'): WalkedFile {
-  return { path: `T:/vault/${rel}`, rel, root, mtimeMs: 1, ctimeMs: 1, size: 10 }
+  return { path: `T:/vault/${rel}`, rel, root, writable: root === 'vault', mtimeMs: 1, ctimeMs: 1, size: 10 }
 }
 
 const LEGACY = `> 概念: 迭代器是一种设计模式, 任何类都可以成为迭代器, 其本质是一个指针
@@ -97,11 +97,12 @@ describe('SearchIndex', () => {
     expect(index.search('红黑树旋转').length).toBe(0)
   })
 
-  test('byRelNormalizesSeparators', () => {
+  test('candidatesForRef 归一化分隔符与文件名回退', () => {
     const index = new SearchIndex()
     index.rebuild([indexNote(file('计算机/图形学/透视投影矩阵.md'), CARD)])
-    expect(index.byRel('计算机/图形学/透视投影矩阵.md')?.id).toBe('202608161430_ab12')
-    expect(index.byRel('透视投影矩阵.md')?.id).toBe('202608161430_ab12')
+    expect(index.candidatesForRef('计算机/图形学/透视投影矩阵.md')[0]?.id).toBe('202608161430_ab12')
+    expect(index.candidatesForRef('透视投影矩阵.md')[0]?.id).toBe('202608161430_ab12')
+    expect(index.candidatesForRef('不存在.md')).toEqual([])
   })
 
   test('indexNote 标记根与类型（card=有 ID，note=无 ID）', () => {

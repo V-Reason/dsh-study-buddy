@@ -1,5 +1,9 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { buildToolDefs, VaultStore } from '../src/index.ts'
+import { RULES } from '../src/lint.ts'
 
 // 构造不触盘：VaultStore 仅持有 layout，fs 操作都在工具方法里
 const store = new VaultStore({
@@ -98,6 +102,11 @@ describe('buildToolDefs（工具 schema 契约）', () => {
     expect(props.trend?.type).toBe('boolean')
     expect(props.rating?.type).toBe('boolean')
     expect(def.description).toContain('跨卡一致性')
+    // EXT-1：描述由规则注册表生成，新增规则不会漏改文案
+    expect(props.rule?.enum).toEqual(RULES.map((r) => r.id))
+    for (const rule of RULES) expect(def.description, rule.id).toContain(rule.title)
+    // BIZ-4：scope=all 的口径写进描述
+    expect(props.scope?.description).toContain('旧笔记仅体检通用规则')
   })
 
   test('card_history：action 枚举与 kinds', () => {
@@ -135,5 +144,35 @@ describe('buildToolDefs（工具 schema 契约）', () => {
   test('study_progress / study_memory：未知 action 抛错而非静默', async () => {
     await expect(defOf('study_progress').execute({ action: 'bogus' })).rejects.toThrow(/未知 action/)
     await expect(defOf('study_memory').execute({ action: 'bogus' })).rejects.toThrow(/未知 action/)
+  })
+
+  test('card_history：非法 kinds 抛错（BIZ-11e，不再静默变成"无块可清除"）', () => {
+    expect(() => defOf('card_history').execute({ ref: 'x', action: 'strip', kinds: ['versions'] }))
+      .toThrow(/kinds 只接受/)
+  })
+
+  // BIZ-3 工具侧：card_update 必须把会话 cwd 透传给 store，否则 card_search 回显的路径用不了
+  test('card_update：透传会话 cwd（引用解析不再"找不到卡片"）', async () => {
+    const vault = await mkdtemp(join(tmpdir(), 'study-buddy-tool-vault-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'study-buddy-tool-cwd-'))
+    try {
+      await writeFile(join(cwd, 'note.md'), '> 概念: x\n# note\n正文', 'utf8')
+      const store = new VaultStore({
+        vaultRoot: vault, stateDir: '.study', fallbackDir: '未分类', mocDir: '目录', includeSessionCwd: true,
+      })
+      const update = buildToolDefs(store).find((d) => d.name === 'card_update')!
+      let message = ''
+      try {
+        await update.execute({ id: '工作目录/note.md', mode: 'append-version', changes: 'x' }, { agent: { session: { header: { cwd } } } })
+      } catch (error) {
+        message = (error as Error).message
+      }
+      // 只读根拒绝写入，但绝不能是"找不到卡片"
+      expect(message).not.toContain('找不到卡片')
+      expect(message).toContain('只读检索根')
+    } finally {
+      await rm(vault, { recursive: true, force: true })
+      await rm(cwd, { recursive: true, force: true })
+    }
   })
 })

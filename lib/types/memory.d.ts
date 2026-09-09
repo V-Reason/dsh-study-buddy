@@ -22,7 +22,7 @@ export interface MemoryState {
 }
 export declare function readMemory(file: string): Promise<MemoryState>;
 export declare function writeMemory(file: string, state: MemoryState): Promise<void>;
-/** 校验并规范化记忆键名：trim 后非空、≤64 字符、不含控制字符 */
+/** 校验并规范化记忆键名：trim 后非空、≤64 字符、不含控制字符、不是原型相关保留名 */
 export declare function normalizeMemoryKey(key: string): string;
 /** 校验记忆值：字符串且 ≤4000 字符 */
 export declare function checkMemoryValue(value: string): string;

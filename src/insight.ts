@@ -6,7 +6,7 @@
  * @module insight
  */
 
-import { codeFenceLanguages, findSection, splitSections } from './cardmodel.ts'
+import { codeFenceLanguages, findSection, makeLineOf, splitSections } from './cardmodel.ts'
 import type { LintReport } from './lint.ts'
 
 export interface CardFact {
@@ -45,7 +45,7 @@ export function extractFacts(cardLabel: string, body: string): CardFact[] {
   const facts: CardFact[] = []
   const text = String(body ?? '')
   const { sections } = splitSections(text)
-  const lineOf = (index: number): number => text.slice(0, index).split('\n').length
+  const lineOf = makeLineOf(text)
   for (const section of sections) {
     const startLine = lineOf(section.start)
     const lines = section.body.split(/\r?\n/)

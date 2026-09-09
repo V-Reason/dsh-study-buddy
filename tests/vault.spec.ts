@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import {
-  atomicWrite, cardDirFor, containsRoot, dedupeFiles, dedupeRoots, findSimilarDomainKeys, mocPathFor, resolveSearchRoots,
-  sanitizeFilename, skipSetFor, uniqueCardPath, walk, withinRoot,
+  atomicWrite, cardDirFor, containsRoot, dedupeFiles, dedupeRoots, findSimilarDomainKeys, isFsRoot, mocPathFor,
+  resolveSearchRoots, sanitizeFilename, skipSetFor, uniqueCardPath, walk, withinRoot, MAX_WALK_DEPTH,
   type VaultLayout,
 } from '../src/vault.ts'
 
@@ -34,6 +34,31 @@ describe('vault', () => {
     // 引号（ASCII 与中文）直接移除、不留空格：标题 ↔ 文件名不脱节
     expect(sanitizeFilename('SPD 谱功率密度与"颜色是感知"')).toBe('SPD 谱功率密度与颜色是感知')
     expect(sanitizeFilename('全屏后处理的成本本质与“是否后处理”判据')).toBe('全屏后处理的成本本质与是否后处理判据')
+  })
+
+  test('sanitizeFilename：方括号与 Windows 设备名（SEC-3）', () => {
+    // `[` `]` 会打断 MOC 的 [[wikilink]]
+    expect(sanitizeFilename('A]]B[[C')).toBe('A B C')
+    expect(sanitizeFilename('nul')).toBe('_nul')
+    expect(sanitizeFilename('COM1')).toBe('_COM1')
+    expect(sanitizeFilename('concept')).toBe('concept')
+  })
+
+  test('isFsRoot：真正的文件系统根判定（SEC-2）', () => {
+    expect(isFsRoot(resolve('/'))).toBe(true)
+    expect(isFsRoot(dir)).toBe(false)
+    expect(isFsRoot(join(dir, '子目录'))).toBe(false)
+  })
+
+  test('walk 深度安全阀：超限上报而不是继续递归（SEC-2）', async () => {
+    let deep = dir
+    for (let i = 0; i <= MAX_WALK_DEPTH + 1; i++) deep = join(deep, `d${i}`)
+    await mkdir(deep, { recursive: true })
+    await writeFile(join(deep, '深处.md'), 'x')
+    const skipped: string[] = []
+    const files = await walk(dir, skipSetFor(), 'vault', (entry) => skipped.push(entry.reason))
+    expect(files).toEqual([])
+    expect(skipped.join()).toContain('目录深度超过')
   })
 
   test('findSimilarDomainKeys 近似键建议（"与"字差异也能命中）', () => {
@@ -121,22 +146,22 @@ describe('vault', () => {
   })
 
   test('dedupeRoots 裁剪被覆盖的根（vault 优先）', () => {
-    const vault = { path: dir, label: 'vault' }
-    const inside = { path: join(dir, '子目录'), label: '工作目录' }
-    const outside = { path: join(tmpdir(), '外部笔记'), label: '外部笔记' }
+    const vault = { path: dir, label: 'vault', writable: true }
+    const inside = { path: join(dir, '子目录'), label: '工作目录', writable: false }
+    const outside = { path: join(tmpdir(), '外部笔记'), label: '外部笔记', writable: false }
     // cwd 在 vault 内：丢弃（vault 已覆盖）
     expect(dedupeRoots([vault, inside, outside]).map((r) => r.label)).toEqual(['vault', '外部笔记'])
     // vault 在 cwd 内：两者都保留（cwd 可能有 vault 之外的笔记）
-    const cwd = { path: tmpdir(), label: '工作目录' }
+    const cwd = { path: tmpdir(), label: '工作目录', writable: false }
     expect(dedupeRoots([vault, cwd]).map((r) => r.label)).toEqual(['vault', '工作目录'])
     // 完全相同的根：只留首个
-    expect(dedupeRoots([vault, { path: dir, label: 'dup' }]).map((r) => r.label)).toEqual(['vault'])
+    expect(dedupeRoots([vault, { path: dir, label: 'dup', writable: false }]).map((r) => r.label)).toEqual(['vault'])
   })
 
   test('dedupeFiles 同文件只留首个（嵌套根重复扫描防重）', () => {
-    const a = { path: join(dir, 'a.md'), rel: 'a.md', root: 'vault', mtimeMs: 1, ctimeMs: 1, size: 1 }
-    const b = { path: join(dir, 'a.md'), rel: 'a.md', root: '工作目录', mtimeMs: 1, ctimeMs: 1, size: 1 }
-    const c = { path: join(dir, 'b.md'), rel: 'b.md', root: 'vault', mtimeMs: 2, ctimeMs: 2, size: 2 }
+    const a = { path: join(dir, 'a.md'), rel: 'a.md', root: 'vault', writable: true, mtimeMs: 1, ctimeMs: 1, size: 1 }
+    const b = { path: join(dir, 'a.md'), rel: 'a.md', root: '工作目录', writable: false, mtimeMs: 1, ctimeMs: 1, size: 1 }
+    const c = { path: join(dir, 'b.md'), rel: 'b.md', root: 'vault', writable: true, mtimeMs: 2, ctimeMs: 2, size: 2 }
     const out = dedupeFiles([a, b, c])
     expect(out.map((f) => f.root)).toEqual(['vault', 'vault'])
   })

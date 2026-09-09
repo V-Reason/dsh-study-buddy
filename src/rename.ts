@@ -8,16 +8,17 @@
  */
 
 import { parseFrontmatter } from './frontmatter.ts'
-import { findSection, renderSections, splitSections } from './cardmodel.ts'
+import { findSection, inlineText, renderSections, splitSections } from './cardmodel.ts'
+import { sanitizeFilename } from './vault.ts'
 
 /** 转义正则元字符（用于把标题/文件名当字面量匹配） */
 function escapeRe(text: string): string {
   return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** 把 frontmatter 的标题替换为新标题，其余字段与正文原样保留 */
+/** 把 frontmatter 的标题替换为新标题，其余字段与正文原样保留（标题收敛为单行，SEC-1） */
 export function replaceCardTitle(raw: string, newTitle: string): string {
-  const title = String(newTitle ?? '').trim()
+  const title = inlineText(newTitle)
   const { body } = parseFrontmatter(raw)
   const head = raw.slice(0, raw.length - body.length)
   if (/^标题:/m.test(head)) return `${head.replace(/^标题:.*$/m, `标题: ${title}`)}${body}`
@@ -95,10 +96,15 @@ export interface BrokenLinkHit {
 /**
  * 断链检测（改名后调用）：在关联卡片小节里找
  * ① 仍指向旧标题且没有 ID 锚点的行（改名没同步到）；
- * ② 格式可疑（既不是 `- 标签：…` 也不像路径）的行。
+ * ② 格式可疑（既不是 `- 标签：…` 也不像路径）的行（`checkFormat: false` 时跳过，
+ *    用于"改别的文件时只关心本次改名相关的断链"，避免无关格式噪声）。
  * 注意：不带 `（ID）` 的关联行是合法的（旧笔记用路径寻址），不据此判为断链。
  */
-export function detectBrokenLinks(body: string, opts: { oldTitle: string; oldId?: string; newTitle?: string } = { oldTitle: '' }): BrokenLinkHit[] {
+export function detectBrokenLinks(
+  body: string,
+  opts: { oldTitle: string; oldId?: string; newTitle?: string; checkFormat?: boolean } = { oldTitle: '' },
+): BrokenLinkHit[] {
+  const checkFormat = opts.checkFormat !== false
   const section = findSection(splitSections(body).sections, '关联卡片')
   if (!section) return []
   const hits: BrokenLinkHit[] = []
@@ -115,22 +121,11 @@ export function detectBrokenLinks(body: string, opts: { oldTitle: string; oldId?
       hits.push({ line: lineNo, text: line.trim(), reason: `仍指向旧标题「${opts.oldTitle}」` })
       return
     }
-    if (!/^[ \t]*-\s*(?:前置|后续|易混淆)\s*[：:]/.test(line)) {
+    if (checkFormat && !/^[ \t]*-\s*(?:前置|后续|易混淆)\s*[：:]/.test(line)) {
       hits.push({ line: lineNo, text: line.trim(), reason: '关联行格式不符（应为 "- 标签：`标题`（ID）"）' })
     }
   })
   return hits
-}
-
-/** 文件名清洗（与 vault.sanitizeFilename 同口径；独立实现避免循环依赖） */
-function sanitize(name: string): string {
-  return String(name)
-    .replace(/["'“”‘’]/g, '')
-    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80)
-    .trim() || '未命名'
 }
 
 export interface RenamePlanInput {
@@ -155,8 +150,8 @@ export interface RenamePlan {
  */
 export function planRename(input: RenamePlanInput): RenamePlan {
   const oldBase = input.fileName.replace(/\.md$/i, '')
-  const newBase = sanitize(input.newTitle)
-  const expected = sanitize(input.oldTitle)
+  const newBase = sanitizeFilename(input.newTitle)
+  const expected = sanitizeFilename(input.oldTitle)
   if (oldBase === newBase) return { renameFile: false, oldBase, newBase, reason: '新标题清洗后与原文件名相同，无需改名' }
   if (oldBase === expected) return { renameFile: true, oldBase, newBase, reason: '文件名与旧标题一致，同步改名为新标题' }
   return { renameFile: false, oldBase, newBase, reason: `文件名「${oldBase}」与旧标题「${input.oldTitle}」不一致（历史遗留），保留文件名，只改标题与入链` }
@@ -171,6 +166,8 @@ export function formatRenameReport(input: {
   filesChanged: Array<{ rel: string; kind: string; changed: number; samples: string[] }>
   broken: BrokenLinkHit[]
   dryRun: boolean
+  /** 额外提示（回滚失败、旧文件未删除、跳过文件等） */
+  notes?: string[]
 }): string {
   const lines: string[] = []
   lines.push(`${input.dryRun ? '[dryRun] ' : ''}改名：${input.oldTitle} → ${input.newTitle}（ID：${input.id}）`)
@@ -189,5 +186,6 @@ export function formatRenameReport(input: {
   } else {
     lines.push('断链检测：无')
   }
+  for (const note of input.notes ?? []) lines.push(note)
   return lines.join('\n')
 }

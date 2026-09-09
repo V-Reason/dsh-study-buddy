@@ -5,17 +5,15 @@
  */
 
 import { randomBytes } from 'node:crypto'
+import { inlineText, matchesTitle, splitSections } from './cardmodel.ts'
 import { parseFrontmatter, renderFrontmatter } from './frontmatter.ts'
 import { errataBlock, insertHistoryBlock, versionBlock } from './history.ts'
-import { checkTemplate, inferTemplate, isTemplateType, templateSpec, type TemplateType } from './template.ts'
+import { checkTemplate, inferTemplate, isTemplateType, type TemplateHints, type TemplateType } from './template.ts'
 
 export const VALID_STATUS = ['草稿', '已确认', '需更新'] as const
 
-/**
- * 模板必填小节（向后兼容的常量视图：理论型必填小节）。
- * 分型后的完整规则见 template.ts；此处保留导出避免破坏既有调用方。
- */
-export const TEMPLATE_SECTIONS = templateSpec('理论型').required.map((s) => ({ title: s.title, hint: s.hint })) as ReadonlyArray<{ title: string; hint: string }>
+/** 含换行的字段一律拒绝：会让 frontmatter 被截断、引用块被击穿（SEC-1） */
+const NEWLINE_RE = /[\r\n]/
 
 export interface CardLinks {
   prev?: string[]
@@ -49,13 +47,13 @@ export interface ValidateResult {
   warnings: string[]
 }
 
-/** `YYYYMMDDHHmm_xxxx`（hex 后缀，恒为 [0-9a-f]） */
+/** `YYYYMMDDHHmm_xxxxxx`（6 位 hex 后缀，恒为 [0-9a-f]；ID 是关联锚点，4 位碰撞概率不可忽略） */
 export function generateId(now = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   const stamp =
     `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
     + `${pad(now.getHours())}${pad(now.getMinutes())}`
-  return `${stamp}_${randomBytes(2).toString('hex')}`
+  return `${stamp}_${randomBytes(3).toString('hex')}`
 }
 
 /** 本地时区的 `YYYY-MM-DD`（与 generateId 同源；勿用 toISOString——UTC 会把凌晨会话日期算到前一天） */
@@ -75,6 +73,8 @@ export function validateDefinition(definition: string): ValidateResult {
   const def = String(definition ?? '')
   if (!def.trim()) {
     errors.push('definition（一句话定义）不能为空')
+  } else if (NEWLINE_RE.test(def)) {
+    errors.push('definition（一句话定义）不能包含换行——换行会击穿引用块并伪造小节')
   } else if (def.length > DEFINITION_MAX) {
     errors.push(`定义 ${def.length} 字，超过 ${DEFINITION_MAX} 字硬上限；请精简到 ≤${DEFINITION_MAX} 字（${DEFINITION_TARGET} 字左右最佳）`)
   } else if (def.length > DEFINITION_TARGET) {
@@ -91,6 +91,8 @@ export interface ValidateOptions {
   template?: string
   /** domainFolders[domain] 的落盘目录，用于按领域族推断模板 */
   mappedFolder?: string
+  /** 模板推断提示词表（config.templateHints） */
+  hints?: TemplateHints
 }
 
 /** 解析卡片模板：显式声明优先（非法值报错），否则按领域与标题推断 */
@@ -102,18 +104,33 @@ export function resolveTemplate(input: { title?: string; domain?: string; templa
     }
     return { type: declared }
   }
-  return { type: inferTemplate({ title: String(input.title ?? ''), domain: String(input.domain ?? ''), mappedFolder: opts.mappedFolder }) }
+  return {
+    type: inferTemplate({
+      title: String(input.title ?? ''),
+      domain: String(input.domain ?? ''),
+      mappedFolder: opts.mappedFolder,
+      hints: opts.hints,
+    }),
+  }
 }
 
 export function validateCard(input: CardInput, opts: ValidateOptions = {}): ValidateResult {
   const errors: string[] = []
   const warnings: string[] = []
   if (!input.title?.trim()) errors.push('title 不能为空')
+  else if (NEWLINE_RE.test(input.title)) errors.push('title 不能包含换行（会让 frontmatter 被截断）')
   if (!input.domain?.trim()) errors.push('domain 不能为空')
+  else if (NEWLINE_RE.test(input.domain)) errors.push('domain 不能包含换行')
   if (!input.source?.trim()) errors.push('source（资料名称）不能为空')
+  else if (NEWLINE_RE.test(input.source)) errors.push('source 不能包含换行')
   if (!input.status?.trim()) errors.push('status 不能为空')
+  else if (NEWLINE_RE.test(input.status)) errors.push('status 不能包含换行')
   else if (!VALID_STATUS.includes(input.status as (typeof VALID_STATUS)[number])) {
     errors.push(`status 必须是 ${VALID_STATUS.join('/')} 之一，收到 "${input.status}"`)
+  }
+  // 领域标签以 `#tag` 空格分隔写入 frontmatter，含空白的标签会被拆成两个（BIZ-11c）
+  for (const tag of input.tags ?? []) {
+    if (/\s/.test(String(tag))) errors.push(`tags 中的「${String(tag)}」含空白字符，会被拆成多个领域标签`)
   }
   const template = resolveTemplate(input, opts)
   if (template.error) errors.push(template.error)
@@ -158,7 +175,7 @@ export function renderCard(card: CardDoc): string {
     status: card.status,
     template: card.template,
   }
-  const body = `> ${card.definition}\n\n${card.content.trim()}\n` + linksSection(card.links)
+  const body = `> ${inlineText(card.definition)}\n\n${card.content.trim()}\n` + linksSection(card.links)
   return `${renderFrontmatter(meta)}\n${body}`
 }
 
@@ -176,6 +193,8 @@ export interface UpdatePayload {
   card?: Omit<CardInput, 'id'>
   /** replace 模式：domainFolders 映射出的落盘目录（用于模板推断） */
   mappedFolder?: string
+  /** replace 模式：模板推断提示词表（config.templateHints） */
+  hints?: TemplateHints
 }
 
 export interface UpdateResult {
@@ -226,7 +245,7 @@ export function applyUpdate(raw: string, id: string, payload: UpdatePayload): Up
     const oldTemplate = parseFrontmatter(raw).meta?.template
     const resolved = resolveTemplate(
       { ...payload.card, template: payload.card.template ?? oldTemplate },
-      { mappedFolder: payload.mappedFolder },
+      { mappedFolder: payload.mappedFolder, hints: payload.hints },
     )
     const card = { ...payload.card, template: resolved.type }
     const result = validateCard(card)
@@ -247,7 +266,10 @@ export function applyUpdate(raw: string, id: string, payload: UpdatePayload): Up
  * 工具侧保证"title 只传主题"，本函数做兜底归一。
  */
 export function stripMocDatePrefix(title: string): string {
-  return String(title ?? '').trim().replace(/^\d{4}-\d{2}-\d{2}[_\s-]+/, '').trim()
+  return String(title ?? '')
+    .trim()
+    .replace(/^(\d{4}[-/年]\d{1,2}(?:[-/月]\d{1,2}日?|月)?)[_\s-]+/, '')
+    .trim()
 }
 
 export type LinkKind = 'prev' | 'next' | 'conflict'
@@ -288,16 +310,25 @@ export function normalizeLinkLabel(label: string): string {
 /**
  * 在卡片正文维护关联卡片：新增 `- 标签：目标` 行。
  *
+ * 判重范围**限定在「关联卡片」小节内**（BIZ-6）：旧实现扫全正文的 `-` 行，
+ * 卡片「前置检查」小节里的 `- 前置：甲` 会被当成"已关联"，静默跳过真实关联
+ * 却报告"已建立关联"。小节不存在时视为无重复。
+ *
  * 去重规则（P0-6）：**标题或 ID 任一命中即跳过**——既覆盖"标题改了但 ID 未变"
- * （按 ID 判重），也覆盖"标题相同但没写 ID / ID 写错"（按标题判重），
- * 于是同一目标不会再出现两行。保留原 frontmatter。
+ * （按 ID 判重），也覆盖"标题相同但没写 ID / ID 写错"（按标题判重）。
+ * 保留原 frontmatter。
  */
 export function addLink(raw: string, kind: LinkKind, targetLabel: string, targetId?: string): string {
   const label = LINK_LABELS[kind]
   const title = linkTargetTitle(targetLabel)
   const anchor = targetId?.trim() || linkTargetId(targetLabel)
-  const bodyText = parseFrontmatter(raw).body
-  const existing = bodyText.split(/\r?\n/).filter((line) => /^[ \t]*-/.test(line))
+  const parsed = parseFrontmatter(raw)
+  const fm = raw.slice(0, raw.length - parsed.body.length)
+  const bodyText = parsed.body
+  const heading = '### 关联卡片'
+  const sections = splitSections(bodyText).sections
+  const target = sections.find((s) => matchesTitle(s.title, '关联卡片'))
+  const existing = target ? target.body.split(/\r?\n/).filter((line) => /^[ \t]*-/.test(line)) : []
   const duplicated = existing.some((line) => {
     const lineTitle = linkTargetTitle(line.replace(/^[ \t]*-\s*(?:前置|后续|易混淆)\s*[：:]\s*/, ''))
     const lineAnchor = linkTargetId(line)
@@ -306,18 +337,12 @@ export function addLink(raw: string, kind: LinkKind, targetLabel: string, target
   })
   if (duplicated) return raw
 
-  const parsed = parseFrontmatter(raw)
-  const fm = raw.slice(0, raw.length - parsed.body.length)
-  const body = parsed.body.trimEnd()
-  const heading = '### 关联卡片'
+  const body = bodyText.trimEnd()
   const line = `- ${label}：${normalizeLinkLabel(targetLabel)}\n`
-  const idx = body.indexOf(heading)
-  if (idx === -1) {
-    return `${fm}${body}\n\n${heading}\n${line}`
-  }
-  // 找到 heading 之后首个换行，紧随其后插入新行
-  const afterHeading = body.indexOf('\n', idx + heading.length)
-  const insertAt = afterHeading === -1 ? body.length : afterHeading + 1
+  if (!target) return `${fm}${body}\n\n${heading}\n${line}`
+  // 插到标题行之后的首个换行后（保留小节内既有内容）
+  const nl = bodyText.indexOf('\n', target.start)
+  const insertAt = nl === -1 ? body.length : Math.min(nl + 1, body.length)
   return `${fm}${body.slice(0, insertAt)}${line}${body.slice(insertAt)}`
 }
 
@@ -328,18 +353,31 @@ export interface MocEntry {
   fileName: string
 }
 
+/**
+ * Obsidian wikilink 目标清洗：`[` `]` `#` `|` `^` 会截断链接
+ * （SEC-3：文件名含 `]]` 时 `[[A]]B]]` 在 Obsidian 里点不开）。
+ */
+function wikilinkTarget(name: string): string {
+  return inlineText(String(name ?? '').replace(/[[\]#|^]/g, ' ').replace(/\s{2,}/g, ' '))
+}
+
 /** 生成 MOC Markdown：按领域分组 + Obsidian wikilink */
 export function renderMoc(title: string, date: string, entries: MocEntry[]): string {
   const groups = new Map<string, MocEntry[]>()
   for (const e of entries) {
-    const list = groups.get(e.domain) ?? []
+    const domain = inlineText(e.domain) || '未分类'
+    const list = groups.get(domain) ?? []
     list.push(e)
-    groups.set(e.domain, list)
+    groups.set(domain, list)
   }
-  const lines = [`# ${title}`, '', `> 知识目录（MOC）· ${date}`, '']
+  const lines = [`# ${inlineText(title) || '知识目录'}`, '', `> 知识目录（MOC）· ${inlineText(date)}`, '']
   for (const [domain, list] of groups) {
     lines.push(`## ${domain}`)
-    for (const e of list) lines.push(`- [[${e.fileName.replace(/\.md$/, '')}]]（${e.id}）${e.title !== e.fileName.replace(/\.md$/, '') ? `· ${e.title}` : ''}`)
+    for (const e of list) {
+      const base = wikilinkTarget(e.fileName.replace(/\.md$/, ''))
+      const suffix = e.title && e.title !== e.fileName.replace(/\.md$/, '') ? `· ${inlineText(e.title)}` : ''
+      lines.push(`- [[${base}]]（${inlineText(e.id)}）${suffix}`)
+    }
     lines.push('')
   }
   return `${lines.join('\n').trimEnd()}\n`

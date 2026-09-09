@@ -3,16 +3,8 @@
  * 纯文本变换（不碰文件系统），便于单元测试。
  * @module card
  */
-import { type TemplateType } from './template.ts';
+import { type TemplateHints, type TemplateType } from './template.ts';
 export declare const VALID_STATUS: readonly ["草稿", "已确认", "需更新"];
-/**
- * 模板必填小节（向后兼容的常量视图：理论型必填小节）。
- * 分型后的完整规则见 template.ts；此处保留导出避免破坏既有调用方。
- */
-export declare const TEMPLATE_SECTIONS: ReadonlyArray<{
-    title: string;
-    hint: string;
-}>;
 export interface CardLinks {
     prev?: string[];
     next?: string[];
@@ -41,7 +33,7 @@ export interface ValidateResult {
     errors: string[];
     warnings: string[];
 }
-/** `YYYYMMDDHHmm_xxxx`（hex 后缀，恒为 [0-9a-f]） */
+/** `YYYYMMDDHHmm_xxxxxx`（6 位 hex 后缀，恒为 [0-9a-f]；ID 是关联锚点，4 位碰撞概率不可忽略） */
 export declare function generateId(now?: Date): string;
 /** 本地时区的 `YYYY-MM-DD`（与 generateId 同源；勿用 toISOString——UTC 会把凌晨会话日期算到前一天） */
 export declare function todayLocal(now?: Date): string;
@@ -55,6 +47,8 @@ export interface ValidateOptions {
     template?: string;
     /** domainFolders[domain] 的落盘目录，用于按领域族推断模板 */
     mappedFolder?: string;
+    /** 模板推断提示词表（config.templateHints） */
+    hints?: TemplateHints;
 }
 /** 解析卡片模板：显式声明优先（非法值报错），否则按领域与标题推断 */
 export declare function resolveTemplate(input: {
@@ -85,6 +79,8 @@ export interface UpdatePayload {
     card?: Omit<CardInput, 'id'>;
     /** replace 模式：domainFolders 映射出的落盘目录（用于模板推断） */
     mappedFolder?: string;
+    /** replace 模式：模板推断提示词表（config.templateHints） */
+    hints?: TemplateHints;
 }
 export interface UpdateResult {
     text: string;
@@ -115,9 +111,13 @@ export declare function normalizeLinkLabel(label: string): string;
 /**
  * 在卡片正文维护关联卡片：新增 `- 标签：目标` 行。
  *
+ * 判重范围**限定在「关联卡片」小节内**（BIZ-6）：旧实现扫全正文的 `-` 行，
+ * 卡片「前置检查」小节里的 `- 前置：甲` 会被当成"已关联"，静默跳过真实关联
+ * 却报告"已建立关联"。小节不存在时视为无重复。
+ *
  * 去重规则（P0-6）：**标题或 ID 任一命中即跳过**——既覆盖"标题改了但 ID 未变"
- * （按 ID 判重），也覆盖"标题相同但没写 ID / ID 写错"（按标题判重），
- * 于是同一目标不会再出现两行。保留原 frontmatter。
+ * （按 ID 判重），也覆盖"标题相同但没写 ID / ID 写错"（按标题判重）。
+ * 保留原 frontmatter。
  */
 export declare function addLink(raw: string, kind: LinkKind, targetLabel: string, targetId?: string): string;
 export interface MocEntry {

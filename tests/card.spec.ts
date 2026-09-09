@@ -3,6 +3,7 @@ import {
   addLink, applyUpdate, generateId, renderCard, renderMoc, resolveTemplate, stripMocDatePrefix, todayLocal, validateCard, validateDefinition,
   type CardInput,
 } from '../src/card.ts'
+import { parseFrontmatter } from '../src/frontmatter.ts'
 
 const base: CardInput = {
   title: '透视投影矩阵的三步分解',
@@ -47,7 +48,7 @@ describe('card', () => {
     const ids = new Set(Array.from({ length: 20 }, () => generateId(now)))
     expect(ids.size).toBe(20)
     for (const id of ids) {
-      expect(id).toMatch(/^202608161430_[0-9a-f]{4}$/)
+      expect(id).toMatch(/^202608161430_[0-9a-f]{6}$/)
     }
   })
 
@@ -249,9 +250,20 @@ describe('card', () => {
   })
 
   test('addLinkSkipsExistingTarget', () => {
-    const raw = '# 标题\n- 前置：已有（id3）'
+    const raw = '# 标题\n\n### 关联卡片\n- 前置：已有（id3）'
     const text = addLink(raw, 'prev', '已有（id3）')
     expect(text.match(/已有/g)?.length).toBe(1)
+  })
+
+  // 回归（BIZ-6）：判重只限「关联卡片」小节——别的小节里的 `- 前置：X` 不算已关联
+  test('addLink 判重范围限定关联卡片小节（BIZ-6）', () => {
+    const raw = '# 标题\n\n### 前置检查\n- 前置：甲（id1）\n'
+    const text = addLink(raw, 'prev', '甲（id1）', 'id1')
+    expect(text).toContain('### 关联卡片')
+    expect(text.match(/- 前置：/g)?.length).toBe(2)
+    // 真的已在「关联卡片」里时仍然跳过
+    const again = addLink(text, 'prev', '甲（id1）', 'id1')
+    expect(again).toBe(text)
   })
 
   test('addLinkDedupesByIdAcrossTitleChanges', () => {
@@ -308,5 +320,42 @@ describe('card', () => {
     expect(text).toContain('- [[投影矩阵]]（a）')
     expect(text).toContain('## 数据结构与算法')
     expect(text).toContain('- [[红黑树]]（b）· 红黑树插入')
+  })
+
+  // ── SEC-1：换行 / `---` 注入 ──────────────────────────────────────────────
+  test('SEC-1：标题/定义/来源含换行一律拒绝（不静默截断 frontmatter）', () => {
+    expect(validateCard({ ...base, title: '正常标题\n---\n注入: x' }).errors.join()).toContain('换行')
+    expect(validateCard({ ...base, definition: '第一行\n### 关联卡片' }).errors.join()).toContain('换行')
+    expect(validateDefinition('第一行\n第二行').errors.join()).toContain('换行')
+    expect(validateCard({ ...base, source: 'a\nb' }).errors.join()).toContain('换行')
+    expect(validateCard({ ...base, status: '草稿\n' }).errors.join()).toContain('换行')
+    // 领域标签含空白会被 frontmatter 拆成两个标签（BIZ-11c）
+    expect(validateCard({ ...base, tags: ['带 空格'] }).errors.join()).toContain('空白')
+  })
+
+  test('SEC-1：渲染兜底把换行折成空格，frontmatter 不被截断', () => {
+    const text = renderCard({ ...base, id: 'id1', title: 'A\n---\n注入: x', definition: '一行\n两行' })
+    const parsed = parseFrontmatter(text)
+    expect(parsed.meta?.title).toBe('A --- 注入: x')
+    expect(parsed.meta?.domain).toBe('#图形学与渲染 #线性代数')
+    expect(parsed.meta?.status).toBe('草稿')
+    expect(parsed.meta?.template).toBe('理论型')
+    expect(parsed.body).toContain('> 一行 两行')
+  })
+
+  test('SEC-3：MOC wikilink 目标清洗 `[`/`]`（链接不被打断）', () => {
+    const text = renderMoc('目录', '2026-08-16', [
+      { id: 'a', title: 'A]]B', domain: '领域', fileName: 'A]]B.md' },
+    ])
+    expect(text).toContain('- [[A B]]（a）')
+    expect(text).not.toContain('[[A]]B]]')
+  })
+
+  test('BIZ-11d：MOC 标题日期前缀支持 / 与 年月 写法', () => {
+    expect(stripMocDatePrefix('2026-09-02_图形学')).toBe('图形学')
+    expect(stripMocDatePrefix('2026/09/10 图形学')).toBe('图形学')
+    expect(stripMocDatePrefix('2026年9月 图形学')).toBe('图形学')
+    expect(stripMocDatePrefix('2026年9月10日 图形学')).toBe('图形学')
+    expect(stripMocDatePrefix('图形学')).toBe('图形学')
   })
 })

@@ -22,6 +22,11 @@ export interface ParsedNote {
     raw: string;
 }
 export declare function parseFrontmatter(raw: string): ParsedNote;
+/**
+ * 渲染 frontmatter。每个值都过 `inlineText`（SEC-1）：标题/来源里混入换行时
+ * 会把 `key: value` 截成两行，`parseFrontmatter` 的非贪婪正则在注入的 `---`
+ * 处提前闭合，后半段元数据静默降级为正文。校验层会拒绝换行，这里是兜底。
+ */
 export declare function renderFrontmatter(meta: CardMeta): string;
 /**
  * 从正文提取一句话概念，按格式优先级：

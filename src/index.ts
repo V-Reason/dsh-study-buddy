@@ -29,12 +29,16 @@ import {
   MANDATE, OPENER_SECTION_NAME, OPENER_SECTION_ORDER,
   applyOpenerDecision, buildOpenerReminder, hasPriorUserMessage, shouldInjectOpener,
 } from './opener.ts'
-import { cardTitleOf, detectBrokenLinks, formatRenameReport, planRename, replaceCardTitle, rewriteCardLinks, rewriteWikilinks } from './rename.ts'
+import {
+  cardTitleOf, detectBrokenLinks, formatRenameReport, planRename, replaceCardTitle, rewriteCardLinks, rewriteWikilinks,
+  type BrokenLinkHit, type RenamePlan,
+} from './rename.ts'
 import { indexNote, SearchIndex, type IndexedCard, type SearchHit } from './search.ts'
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
 import { buildToolDefs, type ToolDef } from './tools.ts'
 import {
-  atomicWrite, canonicalRootKey, cardDirFor, dedupeFiles, dedupeRoots, findSimilarDomainKeys, mocPathFor, resolveSearchRoots, sanitizeFilename, skipSetFor, uniqueCardPath, walkRoots, withinRoot,
+  atomicWrite, canonicalRootKey, cardDirFor, dedupeFiles, dedupeRoots, findSimilarDomainKeys, isFsRoot, mocPathFor,
+  resolveSearchRoots, sanitizeFilename, skipSetFor, uniqueCardPath, walkRoots, withinRoot,
   type SearchRoot, type VaultLayout,
 } from './vault.ts'
 
@@ -44,31 +48,22 @@ export { buildToolDefs } from './tools.ts'
 export const name = 'study-buddy'
 export const inject = ['tools']
 
-export interface StudyConfig {
-  /** Obsidian vault 根目录（绝对路径） */
-  vaultRoot: string
+/**
+ * 插件配置：`VaultLayout` 的"可省略默认值"视图（EXT-6：配置类型只有一份定义，
+ * 不再三处同构搬运；新增配置项只改 vault.ts）。
+ */
+export interface StudyConfig extends Omit<VaultLayout, 'stateDir' | 'fallbackDir' | 'mocDir'> {
   /** 进度状态目录（相对 vaultRoot），默认 .study */
   stateDir?: string
   /** 未映射领域的落盘目录（相对 vaultRoot），默认 未分类 */
   fallbackDir?: string
   /** MOC 知识目录落盘位置（相对 vaultRoot），默认 目录 */
   mocDir?: string
-  /** 领域键 → 落盘目录（相对 vaultRoot），支持多个键别名映射同一目录 */
-  domainFolders?: Record<string, string>
-  /** 额外跳过扫描的目录名（相对 vaultRoot 的顶层目录名；内置已跳过 .obsidian/.trash/.study/.git/node_modules） */
-  skipDirs?: string[]
-  /** 额外检索根（绝对路径，或相对 vaultRoot 的路径）：旧笔记库，只读；不存在即挂载失败（fail-loud） */
-  searchRoots?: string[]
-  /** 是否把会话工作目录（工具调用方会话 cwd）纳入检索，默认 false */
-  includeSessionCwd?: boolean
-  /** 是否允许把关联写入无 ID 的旧笔记，默认 false（旧笔记不碰不动；只写卡片侧） */
-  linkIntoNotes?: boolean
-  /** lint 口径（可选）：residueLevel=off/warn/error（默认 warn），rulesOff=禁用的规则 id 列表 */
-  lint?: {
-    residueLevel?: 'off' | 'warn' | 'error'
-    rulesOff?: string[]
-  }
 }
+
+/** 进度队列长度上限（BIZ-11f：无上限会长成 progress.json 里的巨型数组） */
+const MAX_PROGRESS_ITEMS = 50
+const MAX_PROGRESS_ITEM_CHARS = 200
 
 interface PluginContext {
   tools?: { register: (def: ToolDef) => () => void }
@@ -87,7 +82,7 @@ function normalizeConfig(config: StudyConfig | undefined): VaultLayout {
   // 注意：不再拒绝 vaultRoot === 工作目录。launcher 通常以 vault 目录为 cwd
   // 启动 DSH，vault 即工作目录是受支持的部署形态（曾因此误伤导致 9 个工具
   // 静默不注册）。只保留"文件系统根"这一真正危险的落盘目标。
-  if (vaultRoot === resolve('/')) {
+  if (isFsRoot(vaultRoot)) {
     throw new Error(`vaultRoot 不能是文件系统根：${vaultRoot}`)
   }
   return {
@@ -101,6 +96,8 @@ function normalizeConfig(config: StudyConfig | undefined): VaultLayout {
     includeSessionCwd: config.includeSessionCwd === true,
     linkIntoNotes: config.linkIntoNotes === true,
     lint: config.lint,
+    indexTtlMs: Number.isFinite(Number(config.indexTtlMs)) && Number(config.indexTtlMs) >= 0 ? Number(config.indexTtlMs) : 2000,
+    templateHints: config.templateHints,
   }
 }
 
@@ -135,14 +132,59 @@ function fmtHits(hits: SearchHit[]): string {
   return lines.join('\n\n')
 }
 
+/** 进度队列字段校验（BIZ-11f：条数与单条长度都要设上限） */
+function normalizeQueue(items: string[], label: string): string[] {
+  if (items.length > MAX_PROGRESS_ITEMS) {
+    throw new Error(`${label} 最多 ${MAX_PROGRESS_ITEMS} 条（当前 ${items.length} 条），请先清理或归档`)
+  }
+  for (const item of items) {
+    if (String(item).length > MAX_PROGRESS_ITEM_CHARS) {
+      throw new Error(`${label} 单条最长 ${MAX_PROGRESS_ITEM_CHARS} 字（当前 ${String(item).length} 字），请精简`)
+    }
+  }
+  return items.map(String)
+}
+
+/** 改名动作（先规划后提交，BIZ-2） */
+interface RenameChange {
+  rel: string
+  kind: string
+  changed: number
+  samples: string[]
+}
+
+interface RenameAction {
+  id: string
+  card: IndexedCard
+  oldTitle: string
+  title: string
+  plan: RenamePlan
+  /** 本卡改写后的完整文本（含末尾换行） */
+  selfText: string
+  /** 需要写入的其它文件 */
+  writes: Array<{ path: string; text: string }>
+  changed: RenameChange[]
+  broken: BrokenLinkHit[]
+  /** 需要落盘的新文件路径（null = 不改文件名） */
+  targetPath: string | null
+}
+
+/** 新旧标题相同：不是错误，只是"无改动"，由 rename() 转成正常返回 */
+class SameTitleError extends Error {}
+
 export class VaultStore {
   private index: SearchIndex | null = null
   private sig: string | null = null
+  private lastScanMs = 0
+  private lastScanCwd = ''
+  /** 上一次索引/扫描跳过的文件（读取失败等），在工具返回文本回显（BIZ-7） */
+  private skipped: string[] = []
   private extraRoots: SearchRoot[] = []
 
   constructor(private readonly layout: VaultLayout) {
     // fail-loud：searchRoots 配置错误在挂载时立即可见（而不是首次搜索才暴露）
-    this.extraRoots = resolveSearchRoots(layout.vaultRoot, layout.searchRoots)
+    // 额外根默认只读；linkIntoNotes 开启时允许写入（与"旧笔记不碰不动"的默认口径相反）
+    this.extraRoots = resolveSearchRoots(layout.vaultRoot, layout.searchRoots, layout.linkIntoNotes === true)
   }
 
   private stateFile(): string {
@@ -166,46 +208,82 @@ export class VaultStore {
     }
   }
 
-  /** 当前会话的检索根：vault 优先，随后配置的 searchRoots，最后（可选）会话工作目录 */
+  /** 当前会话的检索根：vault（可写）优先，随后配置的 searchRoots，最后（可选）会话工作目录（只读） */
   private rootsFor(sessionCwd?: string): SearchRoot[] {
-    const roots: SearchRoot[] = [{ path: this.layout.vaultRoot, label: 'vault' }, ...this.extraRoots]
+    const roots: SearchRoot[] = [{ path: this.layout.vaultRoot, label: 'vault', writable: true }, ...this.extraRoots]
     const cwd = sessionCwd && sessionCwd.trim() ? String(sessionCwd).trim() : undefined
-    if (this.layout.includeSessionCwd && cwd) {
-      // 文件系统根是真正的危险目标（会整盘递归扫描），跳过并保持 vault/searchRoots 可用
-      if (canonicalRootKey(cwd) !== canonicalRootKey(resolve('/'))) {
-        roots.push({ path: resolve(cwd), label: '工作目录' })
-      }
+    // 文件系统根是真正的危险目标（会整盘递归扫描）：用真正的根判定，而不是
+    // `resolve('/')`（在 Windows 上只等于当前盘根，跨盘符 cwd 会漏拦，SEC-2）
+    if (this.layout.includeSessionCwd && cwd && !isFsRoot(cwd)) {
+      roots.push({ path: resolve(cwd), label: '工作目录', writable: this.layout.linkIntoNotes === true })
     }
     // 去重：cwd == vaultRoot / cwd 在 vault 内 / searchRoots 被覆盖时只保留贡献新文件的根
     return dedupeRoots(roots)
   }
 
-  /** 目录签名（含各根文件 mtime/ctime/size 与 cwd）变化才重建索引（Obsidian 外部编辑后仍能查到最新内容） */
-  private async refresh(sessionCwd?: string): Promise<SearchIndex> {
+  /** 跳过的文件回显（BIZ-7：报告数字必须与"实际处理了哪些文件"一致） */
+  private noteSkips(): string {
+    if (this.skipped.length === 0) return ''
+    const head = this.skipped.slice(0, 5)
+    return `\n⚠ 跳过 ${this.skipped.length} 个文件（读取失败/无权限）：${head.join('、')}${this.skipped.length > head.length ? ' 等' : ''}`
+  }
+
+  /** 写缓存失效：任何写操作之后必须调用 */
+  private invalidate(): void {
+    this.sig = null
+    this.lastScanMs = 0
+  }
+
+  /**
+   * 取索引（必要时重建）。**名实相符**（CPLX-6）：每次调用都可能 `walk` 全库并
+   * `stat` 每个文件；受 `config.indexTtlMs`（默认 2000ms）保护——TTL 内且会话
+   * cwd 未变时直接复用缓存。写操作与 `rename` 会显式失效/强制重扫。
+   */
+  private async ensureIndex(sessionCwd?: string): Promise<SearchIndex> {
     await this.assertVault()
+    const cwdKey = sessionCwd ?? ''
+    const ttl = this.layout.indexTtlMs ?? 2000
+    if (this.index && this.sig !== null && cwdKey === this.lastScanCwd && ttl > 0 && Date.now() - this.lastScanMs < ttl) {
+      return this.index
+    }
     const roots = this.rootsFor(sessionCwd)
-    const walked = await walkRoots(roots, skipSetFor(this.layout.skipDirs))
+    const skipped: string[] = []
+    const walked = await walkRoots(roots, skipSetFor(this.layout.skipDirs), (entry) => skipped.push(entry.path))
     // 嵌套根（如 vault ⊆ cwd）会重复扫到同一文件：按规范化路径去重，vault 标签优先
     const files = dedupeFiles(walked)
-    const sig = `${sessionCwd ?? ''}\n` + files.map((f) => `${f.root}|${f.rel}|${f.mtimeMs}|${f.ctimeMs}|${f.size}`).join('\n')
-    if (this.index && sig === this.sig) return this.index
+    const sig = `${cwdKey}\n` + files.map((f) => `${f.root}|${f.rel}|${f.mtimeMs}|${f.ctimeMs}|${f.size}`).join('\n')
+    if (this.index && sig === this.sig) {
+      this.lastScanMs = Date.now()
+      this.skipped = skipped
+      return this.index
+    }
     const cards: IndexedCard[] = []
     for (const f of files) {
       try {
         const raw = await fsp.readFile(f.path, 'utf8')
         cards.push(indexNote(f, raw))
       } catch {
-        // 读取失败（锁定/删除）：跳过该文件
+        // 读取失败（锁定/删除）：计入 skipped 并回显，不再静默（BIZ-7）
+        skipped.push(f.path)
       }
     }
     this.index = new SearchIndex()
     this.index.rebuild(cards, roots.length > 1)
     this.sig = sig
+    this.lastScanMs = Date.now()
+    this.lastScanCwd = cwdKey
+    this.skipped = skipped
     return this.index
   }
 
+  /** 写操作前的可写性校验（EXT-5：可写性策略上移到根定义，不再散落各处） */
+  private assertWritable(card: IndexedCard): void {
+    if (card.writable) return
+    throw new Error(`"${card.fullRel}" 位于只读检索根（${card.root}）：本插件只写 vault 内的文件`)
+  }
+
   private async resolveCard(ref: string, sessionCwd?: string): Promise<{ card: IndexedCard; raw: string }> {
-    const index = await this.refresh(sessionCwd)
+    const index = await this.ensureIndex(sessionCwd)
     const card = index.byId(ref) ?? index.byTitle(ref) ?? byUniqueRef(index, ref)
     if (!card) {
       throw new Error(`找不到卡片 "${ref}"（可传 ID、标题、根限定路径 如 "工作目录/子目录/笔记.md"、相对路径或文件名）`)
@@ -215,17 +293,17 @@ export class VaultStore {
   }
 
   async search(query: string, opts: { domain?: string; status?: string; kind?: 'card' | 'note'; limit?: number } = {}, call?: { sessionCwd?: string }): Promise<string> {
-    const index = await this.refresh(call?.sessionCwd)
+    const index = await this.ensureIndex(call?.sessionCwd)
     const hits = index.search(query, opts)
     if (hits.length === 0) {
-      return `未命中（共检索 ${index.size} 篇${this.indexScopes(index)}）。可换词再试；新概念直接进入讲解，归档时新建卡片。`
+      return `未命中（共检索 ${index.size} 篇${this.indexScopes(index)}）。可换词再试；新概念直接进入讲解，归档时新建卡片。${this.noteSkips()}`
     }
-    return `命中 ${hits.length}（共 ${index.size} 篇${this.indexScopes(index)}）：\n\n${fmtHits(hits)}`
+    return `命中 ${hits.length}（共 ${index.size} 篇${this.indexScopes(index)}）：\n\n${fmtHits(hits)}${this.noteSkips()}`
   }
 
   private indexScopes(index: SearchIndex): string {
-    const roots = new Set(index.all().map((c) => c.root))
-    return roots.size > 0 ? `，来源：${[...roots].join(' / ')}` : ''
+    const roots = index.roots()
+    return roots.length > 0 ? `，来源：${roots.join(' / ')}` : ''
   }
 
   async get(ref: string, call?: { sessionCwd?: string }): Promise<string> {
@@ -233,16 +311,22 @@ export class VaultStore {
     return `路径：${card.fullRel}\n\n${raw}`
   }
 
-  async create(input: CardInput): Promise<{ text: string; rel: string }> {
+  async create(input: CardInput, call?: { sessionCwd?: string }): Promise<{ text: string; rel: string }> {
     await this.assertVault()
     const mapped = this.layout.domainFolders?.[input.domain]
     // 模板：显式 > 按领域目录族/标题推断；推断结果写入 frontmatter（可选字段，旧卡不强迁）
-    const resolved = resolveTemplate(input, { mappedFolder: mapped })
+    const resolved = resolveTemplate(input, { mappedFolder: mapped, hints: this.layout.templateHints })
     const card: CardInput = { ...input, template: resolved.type }
-    const result = validateCard(card, { mappedFolder: mapped })
+    const result = validateCard(card, { mappedFolder: mapped, hints: this.layout.templateHints })
     if (result.errors.length > 0) throw new Error(`卡片校验失败：${result.errors.join('；')}`)
     const warnings = [...result.warnings]
     const infoLines: string[] = []
+    // 同名标题检测（BIZ-8）：不阻断（故意建多张同名卡是允许的），但要显著提示
+    const index = await this.ensureIndex(call?.sessionCwd)
+    const clash = index.byTitle(String(input.title ?? '').trim())
+    if (clash && clash.id !== null) {
+      warnings.unshift(`已存在同名卡片「${clash.title}」（${clash.fullRel}，ID：${clash.id}）：建议 card_update 增量更新而非新建`)
+    }
     // 标题→文件名清洗可见性：非法字符/引号会被清洗，回显实际文件名
     const baseName = sanitizeFilename(input.title)
     if (baseName !== input.title.trim()) {
@@ -273,19 +357,20 @@ export class VaultStore {
     }
     const file = await uniqueCardPath(dir, input.title, id)
     await atomicWrite(file, text)
-    this.sig = null
+    this.invalidate()
     const rel = file.slice(this.layout.vaultRoot.length + 1).replace(/\\/g, '/')
     const info = infoLines.length > 0 ? `\n${infoLines.join('\n')}` : ''
     const warn = warnings.length > 0 ? `\n提示：${warnings.join('；')}` : ''
     return { text: `已写入：${rel}\nID：${id}${info}${warn}\n\n${text}`, rel }
   }
 
-  async update(id: string, payload: UpdatePayload): Promise<string> {
-    const { card, raw } = await this.resolveCard(id)
+  async update(id: string, payload: UpdatePayload, call?: { sessionCwd?: string }): Promise<string> {
+    const { card, raw } = await this.resolveCard(id, call?.sessionCwd)
+    this.assertWritable(card)
     const mappedFolder = payload.card?.domain ? this.layout.domainFolders?.[payload.card.domain] : undefined
-    const result = applyUpdate(raw, card.id ?? id, { ...payload, mappedFolder })
+    const result = applyUpdate(raw, card.id ?? id, { ...payload, mappedFolder, hints: this.layout.templateHints })
     await atomicWrite(card.path, result.text)
-    this.sig = null
+    this.invalidate()
     const rel = card.rel.replace(/\\/g, '/')
     const warn = result.warnings.length > 0 ? `\n提示：${result.warnings.join('；')}` : ''
     return `已更新：${rel}\nID：${card.id ?? id}${warn}\n\n${result.text}`
@@ -294,12 +379,16 @@ export class VaultStore {
   async link(fromId: string, toId: string, kind: LinkKind, call?: { sessionCwd?: string }): Promise<string> {
     const from = await this.resolveCard(fromId, call?.sessionCwd)
     const to = await this.resolveCard(toId, call?.sessionCwd)
+    // 自关联没有意义（BIZ-11a）：同一文件互为前置/后续只会产生无意义自环
+    if (canonicalRootKey(from.card.path) === canonicalRootKey(to.card.path)) {
+      return `无需自关联：「${from.card.title}」与目标是同一篇文档（${from.card.fullRel}）。`
+    }
     const labelOf = (c: typeof from) => (c.card.id ? `${c.card.title}（${c.card.id}）` : `${c.card.title}（${c.card.fullRel}）`)
     const allowNoteWrite = this.layout.linkIntoNotes === true
     const reverseKind: LinkKind = kind === 'prev' ? 'next' : kind === 'next' ? 'prev' : 'conflict'
     const noteSkipped: string[] = []
     const written: string[] = []
-    // 每一侧：卡片总是写入；旧笔记仅在 linkIntoNotes 时写入（默认不碰旧笔记）
+    // 每一侧：卡片总是写入；旧笔记仅在 linkIntoNotes 且可写根时写入（默认不碰旧笔记）
     const applySide = async (
       side: typeof from, sideKind: LinkKind, targetLabel: string, targetId: string | null,
     ): Promise<void> => {
@@ -307,6 +396,7 @@ export class VaultStore {
         noteSkipped.push(labelOf(side))
         return
       }
+      this.assertWritable(side.card)
       const next = addLink(side.raw, sideKind, targetLabel, targetId ?? undefined)
       if (next !== side.raw) {
         await atomicWrite(side.card.path, next)
@@ -321,17 +411,17 @@ export class VaultStore {
     }
     await applySide(from, kind, labelOf(to), to.card.id)
     await applySide(to, reverseKind, labelOf(from), from.card.id)
-    this.sig = null
+    this.invalidate()
     const map: Record<LinkKind, string> = { prev: '前置知识', next: '后续延伸', conflict: '冲突/易混淆' }
     const basis = `已建立关联：${labelOf(from)} ←${map[kind]}→ ${labelOf(to)}`
     if (noteSkipped.length > 0) {
       return `${basis}（单侧写入；未修改旧笔记：${noteSkipped.join('、')}。开启 config.linkIntoNotes 可双向写入，或用 Obsidian 内链）`
     }
-    return written.length > 0 ? `${basis}（已写入 ${written.length} 侧）` : `${basis}（关联已存在，无改动）`
+    return written.length > 0 ? `${basis}（新增 ${written.length} 侧关联行）` : `${basis}（两侧关联行均已存在，无改动）`
   }
 
   async moc(opts: { title?: string; cardIds: string[]; domain?: string }, call?: { sessionCwd?: string }): Promise<string> {
-    const index = await this.refresh(call?.sessionCwd)
+    const index = await this.ensureIndex(call?.sessionCwd)
     const entries: MocEntry[] = []
     const missing: string[] = []
     const skippedNotes: string[] = []
@@ -359,8 +449,40 @@ export class VaultStore {
     const text = renderMoc(title, date, entries)
     const file = mocPathFor(this.layout, title, date)
     await atomicWrite(file, text)
+    this.invalidate()
     const rel = file.slice(this.layout.vaultRoot.length + 1).replace(/\\/g, '/')
     return `MOC 已写入：${rel}（标题：${title}，日期：${date}）${skippedNotes.length ? `\n（旧笔记不收录：${skippedNotes.join('、')}）` : ''}\n\n${text}`
+  }
+
+  private lintCtx(): { knownDomains: string[]; residueLevel?: 'off' | 'warn' | 'error'; rulesOff?: string[] } {
+    return {
+      knownDomains: Object.keys(this.layout.domainFolders ?? {}),
+      residueLevel: this.layout.lint?.residueLevel,
+      rulesOff: this.layout.lint?.rulesOff,
+    }
+  }
+
+  /** 单卡报告：用刚从磁盘读到的原文（保证是最新版） */
+  private reportOfRaw(raw: string, card: IndexedCard): LintReport {
+    const parsed = parseFrontmatter(raw)
+    return lintCard({
+      title: parsed.meta?.title ?? card.title,
+      definition: card.definition ?? '',
+      body: parsed.body,
+      template: parsed.meta?.template,
+      tags: card.tags,
+    }, { ...this.lintCtx(), kind: card.kind })
+  }
+
+  /** 批量报告：直接用索引里已有的正文与模板，不再逐文件读盘（PERF-2） */
+  private reportOfIndexed(card: IndexedCard): LintReport {
+    return lintCard({
+      title: card.title,
+      definition: card.definition ?? '',
+      body: card.body,
+      template: card.template ?? undefined,
+      tags: card.tags,
+    }, { ...this.lintCtx(), kind: card.kind })
   }
 
   /** 单卡/批量质量体检（card_lint）+ 跨卡一致性 / 质量趋势 / 可执行性评级（P2） */
@@ -373,35 +495,36 @@ export class VaultStore {
     trend?: boolean
     rating?: boolean
   }, call?: { sessionCwd?: string }): Promise<string> {
-    const index = await this.refresh(call?.sessionCwd)
-    const ctx = {
-      knownDomains: Object.keys(this.layout.domainFolders ?? {}),
-      residueLevel: this.layout.lint?.residueLevel,
-      rulesOff: this.layout.lint?.rulesOff,
-    }
-    const reportOf = (raw: string, card: IndexedCard): LintReport => {
-      const parsed = parseFrontmatter(raw)
-      return lintCard({
-        title: parsed.meta?.title ?? card.title,
-        definition: card.definition ?? '',
-        body: parsed.body,
-        template: parsed.meta?.template,
-        tags: card.tags,
-      }, ctx)
-    }
-    if (opts.ref) {
-      const { card, raw } = await this.resolveCard(opts.ref, call?.sessionCwd)
-      const report = reportOf(raw, card)
-      if (opts.rule) {
-        const hits = report.findings.filter((f) => f.rule === opts.rule)
-        const passed = report.passed[opts.rule]
-        return `卡片：${report.title}  规则：${opts.rule}  ${passed ? '✓ 通过' : '✗/⚠ 未通过'}\n`
-          + (hits.length > 0 ? hits.map((f) => `  ${f.message}${f.suggestion ? `\n    建议：${f.suggestion}` : ''}`).join('\n') : '  （该规则无发现）')
+    return opts.ref ? this.lintOne(opts, call) : this.lintBatch(opts, call)
+  }
+
+  private async lintOne(opts: { ref?: string; rule?: string; rating?: boolean }, call?: { sessionCwd?: string }): Promise<string> {
+    const { card, raw } = await this.resolveCard(opts.ref ?? '', call?.sessionCwd)
+    const report = this.reportOfRaw(raw, card)
+    if (opts.rule) {
+      const hits = report.findings.filter((f) => f.rule === opts.rule)
+      const passed = report.passed[opts.rule]
+      // BIZ-5：规则被 lint.rulesOff 关闭、或对旧笔记不适用时，passed 为 undefined
+      if (passed === undefined) {
+        return `卡片：${report.title}  规则：${opts.rule}  未启用或不适用于此类文档（检查 config.lint.rulesOff）`
       }
-      const body = parseFrontmatter(raw).body
-      const rating = opts.rating === false ? '' : `\n  可执行性：${executabilityOf(body)}`
-      return `${formatReport(report)}${rating}`
+      return `卡片：${report.title}  规则：${opts.rule}  ${passed ? '✓ 通过' : '✗/⚠ 未通过'}\n`
+        + (hits.length > 0 ? hits.map((f) => `  ${f.message}${f.suggestion ? `\n    建议：${f.suggestion}` : ''}`).join('\n') : '  （该规则无发现）')
     }
+    const body = parseFrontmatter(raw).body
+    const rating = opts.rating === false ? '' : `\n  可执行性：${executabilityOf(body)}`
+    return `${formatReport(report)}${rating}${this.noteSkips()}`
+  }
+
+  private async lintBatch(opts: {
+    scope?: 'vault' | 'all'
+    limit?: number
+    rule?: string
+    cross?: boolean
+    trend?: boolean
+    rating?: boolean
+  }, call?: { sessionCwd?: string }): Promise<string> {
+    const index = await this.ensureIndex(call?.sessionCwd)
     const cards = index.all().filter((c) => (opts.scope === 'all' ? true : c.id !== null))
     if (cards.length === 0) return '未找到可体检的卡片。'
     const reports: LintReport[] = []
@@ -409,144 +532,240 @@ export class VaultStore {
     const bodies: string[] = []
     const ids: Array<string | null> = []
     for (const card of cards) {
-      let raw = ''
-      try {
-        raw = await fsp.readFile(card.path, 'utf8')
-      } catch {
-        continue
-      }
-      const report = reportOf(raw, card)
-      reports.push(report)
+      reports.push(this.reportOfIndexed(card))
       titles.push(card.fullRel)
-      bodies.push(parseFrontmatter(raw).body)
+      bodies.push(card.body)
       ids.push(card.id)
     }
     if (opts.rule) {
       const hit = reports.filter((r) => r.findings.some((f) => f.rule === opts.rule))
-      const lines = [`规则 ${opts.rule}（${ruleTitle(opts.rule)}）：${hit.length}/${reports.length} 张卡命中`]
+      const lines = [`规则 ${opts.rule}（${ruleTitle(opts.rule)}）：${hit.length}/${reports.length} 篇命中`]
       for (const r of hit.slice(0, opts.limit ?? 20)) {
         for (const f of r.findings.filter((x) => x.rule === opts.rule)) lines.push(`  - ${r.title}：${f.message}`)
       }
-      return lines.join('\n')
+      return lines.join('\n') + this.noteSkips()
     }
     if (opts.cross) {
       const groups = crossCardConflicts(bodies.map((body, i) => ({ label: titles[i], body })))
-      return formatConflicts(groups, opts.limit ?? 20)
+      return formatConflicts(groups, opts.limit ?? 20) + this.noteSkips()
     }
     if (opts.trend) {
-      return formatTrend(qualityTrend(reports.map((report, i) => ({ id: ids[i], report }))))
+      return formatTrend(qualityTrend(reports.map((report, i) => ({ id: ids[i], report })))) + this.noteSkips()
     }
     const parts = [formatBatch(summarizeLint(reports, titles), opts.limit ?? 20)]
     if (opts.rating) {
       const summary = executabilitySummary(bodies.map((body) => ({ body })))
-      parts.push(`可执行性分布：${summary.map((s) => `${s.rating} ${s.count} 张`).join('，')}`)
+      parts.push(`可执行性分布：${summary.map((s) => `${s.rating} ${s.count} 篇`).join('，')}`)
     }
-    return parts.join('\n')
+    return parts.join('\n') + this.noteSkips()
   }
 
   /** 版本更新 / 勘误 / 历史折叠块管理（card_history） */
   async history(ref: string, action: 'list' | 'strip', opts: { kinds?: HistoryKind[]; dryRun?: boolean } = {}, call?: { sessionCwd?: string }): Promise<string> {
+    if (action !== 'list' && action !== 'strip') throw new Error(`card_history 未知 action "${action}"（可用 list/strip）`)
     const { card, raw } = await this.resolveCard(ref, call?.sessionCwd)
     const parsed = parseFrontmatter(raw)
     const blocks = extractHistory(parsed.body)
     if (action === 'list') {
       return `卡片：${card.title}（${card.id ?? '旧笔记'}）历史块 ${blocks.length} 个\n${formatHistory(blocks)}`
     }
-    if (action !== 'strip') throw new Error(`card_history 未知 action "${action}"（可用 list/strip）`)
     const result = stripHistory(parsed.body, { kinds: opts.kinds })
     if (opts.dryRun) {
-      return `[dryRun] 卡片：${card.title}，将删除 ${result.removed.length} 个历史块：\n${formatHistory(result.removed)}${result.warnings.length ? `\n提示：${result.warnings.join('；')}` : ''}`
+      return `[dryRun] 卡片：${card.title}，将删除 ${result.removed.length} 个历史块（行号为删除前的位置）：\n${formatHistory(result.removed)}${result.warnings.length ? `\n提示：${result.warnings.join('；')}` : ''}`
     }
     if (result.removed.length === 0) {
       return `卡片：${card.title} 无历史块可清除。${result.warnings.length ? `\n提示：${result.warnings.join('；')}` : ''}`
     }
+    this.assertWritable(card)
     const head = raw.slice(0, raw.length - parsed.body.length)
     await atomicWrite(card.path, `${head}${result.text}\n`)
-    this.sig = null
+    this.invalidate()
     const warn = result.warnings.length > 0 ? `\n提示：${result.warnings.join('；')}` : ''
-    return `已清除：${card.rel.replace(/\\/g, '/')}（删除 ${result.removed.length} 个历史块）\n${formatHistory(result.removed)}${warn}`
+    return `已清除：${card.rel.replace(/\\/g, '/')}（删除 ${result.removed.length} 个历史块；行号为删除前的位置）\n${formatHistory(result.removed)}${warn}`
   }
 
-  /** 改标题并同步文件名 / 全库入链 / 断链检测（card_rename） */
+  /**
+   * 改名：**先算出全部改动并做完冲突校验，再落盘**（BIZ-2），
+   * 落盘失败按已写文件逆序回滚。入链扫描用索引正文预筛（PERF-5）。
+   */
   async rename(ref: string, newTitle: string, opts: { dryRun?: boolean; sessionCwd?: string } = {}): Promise<string> {
-    const { card, raw } = await this.resolveCard(ref, opts.sessionCwd)
+    let plan: RenameAction
+    try {
+      plan = await this.planRenameAction(ref, newTitle, opts.sessionCwd)
+    } catch (error) {
+      if (error instanceof SameTitleError) return error.message
+      throw error
+    }
+    if (opts.dryRun) {
+      return formatRenameReport({
+        id: plan.id,
+        oldTitle: plan.oldTitle,
+        newTitle: plan.title,
+        plan: plan.plan,
+        filesChanged: plan.changed,
+        broken: plan.broken,
+        dryRun: true,
+      })
+    }
+    return this.commitRename(plan)
+  }
+
+  private async planRenameAction(ref: string, newTitle: string, sessionCwd?: string): Promise<RenameAction> {
+    // 改名是写操作：强制重扫索引，避免 TTL 窗口内拿到过期正文
+    this.invalidate()
+    const { card, raw } = await this.resolveCard(ref, sessionCwd)
     if (card.id === null) {
       throw new Error(`"${card.title}" 是旧笔记（无 ID），不支持改名；请用 Obsidian 重命名，或用 card_update(replace) 原地升级为卡片`)
     }
+    this.assertWritable(card)
     const title = String(newTitle ?? '').trim()
     if (!title) throw new Error('newTitle 不能为空')
+    if (/[\r\n]/.test(title)) throw new Error('newTitle 不能包含换行（会让 frontmatter 被截断）')
     const oldTitle = cardTitleOf(raw) || card.title
-    if (title === oldTitle) return `新标题与旧标题相同（${title}），无改动。`
-    const index = await this.refresh(opts.sessionCwd)
+    if (title === oldTitle) throw new SameTitleError(`新标题与旧标题相同（${title}），无改动。`)
+    const index = await this.ensureIndex(sessionCwd)
     const clash = index.byTitle(title)
     if (clash && clash.id !== card.id) throw new Error(`已存在同名卡片 "${title}"（${clash.fullRel}），请换标题`)
     const plan = planRename({ fileName: card.fileName, oldTitle, newTitle: title })
     const rewritten = replaceCardTitle(raw, title)
     const selfRewrite = rewriteCardLinks(parseFrontmatter(rewritten).body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
     const selfText = `${rewritten.slice(0, rewritten.length - parseFrontmatter(rewritten).body.length)}${selfRewrite.text}`
-    const changed: Array<{ rel: string; kind: string; changed: number; samples: string[] }> = [
-      { rel: card.fullRel, kind: '本卡标题', changed: 1, samples: [`${oldTitle} → ${title}`] },
-    ]
-    if (selfRewrite.changed > 0) changed.push({ rel: card.fullRel, kind: '本卡关联卡片', changed: selfRewrite.changed, samples: selfRewrite.samples })
-    // 全库扫描入链：只写 vault 内文件（searchRoots / 工作目录只读）
-    const roots = this.rootsFor(opts.sessionCwd)
-    const files = dedupeFiles(await walkRoots(roots, skipSetFor(this.layout.skipDirs)))
+    // 断链检测对象是**本卡改写后的正文**（BIZ-10：旧实现检测的是别人文件）
+    const broken: BrokenLinkHit[] = detectBrokenLinks(selfRewrite.text, { oldTitle, oldId: card.id ?? undefined, newTitle: title })
+    const changed: RenameChange[] = [{ rel: card.fullRel, kind: '本卡标题', changed: 1, samples: [`${oldTitle} → ${title}`] }]
+    if (selfRewrite.changed > 0) {
+      changed.push({ rel: card.fullRel, kind: '本卡关联卡片', changed: selfRewrite.changed, samples: selfRewrite.samples })
+    }
     const writes: Array<{ path: string; text: string }> = []
-    const broken: ReturnType<typeof detectBrokenLinks> = []
-    for (const file of files) {
-      if (canonicalRootKey(file.path) === canonicalRootKey(card.path)) continue
-      let content = ''
-      try {
-        content = await fsp.readFile(file.path, 'utf8')
-      } catch {
-        continue
-      }
-      const parsed = parseFrontmatter(content)
-      const isCard = Boolean(parsed.meta?.id)
-      const linkRewrite = rewriteCardLinks(parsed.body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
+    const needles = [oldTitle, plan.oldBase, card.id].filter(Boolean) as string[]
+    for (const other of index.all()) {
+      if (canonicalRootKey(other.path) === canonicalRootKey(card.path)) continue
+      // 预筛（PERF-5）：索引里已持有正文，不含任何待改字面量的文件直接跳过，不读盘
+      if (!needles.some((n) => other.body.includes(n))) continue
+      const linkRewrite = rewriteCardLinks(other.body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
       let nextBody = linkRewrite.text
       let changedCount = linkRewrite.changed
       const samples = [...linkRewrite.samples]
-      // MOC 用文件名建链：卡片文件内的 wikilink 同步（旧笔记按文件名寻址，不动）
-      if (isCard) {
+      if (other.kind === 'card') {
         const wiki = rewriteWikilinks(nextBody, plan.oldBase, plan.newBase)
         nextBody = wiki.text
         changedCount += wiki.changed
         samples.push(...wiki.samples)
       }
-      if (changedCount === 0) continue
-      const head = content.slice(0, content.length - parsed.body.length)
-      const target = `${head}${nextBody}`
-      if (file.root !== 'vault') {
-        // 只读根：报告但不写
-        changed.push({ rel: file.rel, kind: `只读根(${file.root}) 未写入`, changed: changedCount, samples })
+      // 断链检测对该文件**总是**执行（BIZ-10）：裸标题入链不会被 rewriteCardLinks 改写，
+      // 但正是"改名后仍指向旧标题"的断链，必须在报告里出现
+      const brokenHere = detectBrokenLinks(nextBody, { oldTitle, oldId: card.id ?? undefined, newTitle: title, checkFormat: false })
+      if (!other.writable) {
+        // 只读根：报告但不读盘、不写入（EXT-5 / PERF-5）
+        if (changedCount > 0) changed.push({ rel: other.fullRel, kind: `只读根(${other.root}) 未写入`, changed: changedCount, samples })
+        broken.push(...brokenHere)
         continue
       }
-      if (opts.dryRun) {
-        changed.push({ rel: file.rel.replace(/\\/g, '/'), kind: isCard ? '卡片入链' : '文档入链', changed: changedCount, samples })
+      // 读盘兜底：索引正文可能落后于磁盘，写入前重算一次
+      let content = ''
+      try {
+        content = await fsp.readFile(other.path, 'utf8')
+      } catch {
+        this.skipped.push(other.path)
         continue
       }
-      writes.push({ path: file.path, text: target })
-      changed.push({ rel: file.rel.replace(/\\/g, '/'), kind: isCard ? '卡片入链' : '文档入链', changed: changedCount, samples })
-      broken.push(...detectBrokenLinks(nextBody, { oldTitle, oldId: card.id ?? undefined, newTitle: title }))
+      const parsed = parseFrontmatter(content)
+      const fresh = rewriteCardLinks(parsed.body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
+      let freshBody = fresh.text
+      let freshChanged = fresh.changed
+      const freshSamples = [...fresh.samples]
+      if (other.kind === 'card') {
+        const wiki = rewriteWikilinks(freshBody, plan.oldBase, plan.newBase)
+        freshBody = wiki.text
+        freshChanged += wiki.changed
+        freshSamples.push(...wiki.samples)
+      }
+      broken.push(...detectBrokenLinks(freshBody, { oldTitle, oldId: card.id ?? undefined, newTitle: title, checkFormat: false }))
+      if (freshChanged === 0) continue
+      const fileHead = content.slice(0, content.length - parsed.body.length)
+      writes.push({ path: other.path, text: `${fileHead}${freshBody}` })
+      changed.push({ rel: other.fullRel, kind: other.kind === 'card' ? '卡片入链' : '文档入链', changed: freshChanged, samples: freshSamples })
     }
-    if (opts.dryRun) {
-      return formatRenameReport({ id: card.id, oldTitle, newTitle: title, plan, filesChanged: changed, broken, dryRun: true })
-    }
-    await atomicWrite(card.path, `${selfText}\n`)
-    for (const write of writes) await atomicWrite(write.path, write.text)
-    let finalRel = card.rel.replace(/\\/g, '/')
+    // ── 全部冲突校验前置（BIZ-2）：任何写入之前完成 ──
+    let targetPath: string | null = null
     if (plan.renameFile) {
-      const targetPath = join(card.path.slice(0, card.path.length - card.fileName.length), `${plan.newBase}.md`)
-      if (canonicalRootKey(targetPath) !== canonicalRootKey(card.path)) {
-        if (await this.fileExists(targetPath)) throw new Error(`目标文件名已存在：${plan.newBase}.md（请先处理同名文件）`)
-        await atomicWrite(targetPath, `${selfText}\n`)
-        await fsp.rm(card.path, { force: true })
-        finalRel = targetPath.slice(this.layout.vaultRoot.length + 1).replace(/\\/g, '/')
+      const candidate = join(card.path.slice(0, card.path.length - card.fileName.length), `${plan.newBase}.md`)
+      if (canonicalRootKey(candidate) !== canonicalRootKey(card.path)) {
+        if (await this.fileExists(candidate)) {
+          throw new Error(`目标文件名已存在：${plan.newBase}.md（请先处理同名文件）；未做任何写入`)
+        }
+        targetPath = candidate
       }
     }
-    this.sig = null
-    return `${formatRenameReport({ id: card.id, oldTitle, newTitle: title, plan, filesChanged: changed, broken, dryRun: false })}\n已写入：${finalRel}`
+    return { id: card.id, card, oldTitle, title, plan, selfText: `${selfText}\n`, writes, changed, broken, targetPath }
+  }
+
+  /** 提交改名：写本卡 → 写全库入链 → 改文件名；任一失败按已写文件回滚 */
+  private async commitRename(action: RenameAction): Promise<string> {
+    const notes: string[] = []
+    const targets: Array<{ path: string; text: string }> = [
+      { path: action.card.path, text: action.selfText },
+      ...action.writes,
+    ]
+    const backups: Array<{ path: string; content: string | null }> = []
+    const written: string[] = []
+    try {
+      for (const target of targets) {
+        let before: string | null = null
+        try {
+          before = await fsp.readFile(target.path, 'utf8')
+        } catch {
+          before = null
+        }
+        backups.push({ path: target.path, content: before })
+        await atomicWrite(target.path, target.text)
+        written.push(target.path)
+      }
+    } catch (error) {
+      // 回滚：把已写文件恢复成写前内容（读失败的新建文件则删除）
+      for (const backup of [...backups].reverse()) {
+        try {
+          if (backup.content === null) await fsp.rm(backup.path, { force: true })
+          else await atomicWrite(backup.path, backup.content)
+        } catch {
+          notes.push(`⚠ 回滚失败：${backup.path}（请检查该文件）`)
+        }
+      }
+      this.invalidate()
+      throw new Error(`改名失败并已回滚：${(error as Error).message}`)
+    }
+    let finalRel = action.card.rel.replace(/\\/g, '/')
+    if (action.targetPath) {
+      try {
+        await atomicWrite(action.targetPath, action.selfText)
+        await fsp.rm(action.card.path, { force: true })
+        finalRel = action.targetPath.slice(this.layout.vaultRoot.length + 1).replace(/\\/g, '/')
+      } catch (error) {
+        // 改名阶段失败：清掉可能已写的新文件，并把已写文件全部恢复原状
+        await fsp.rm(action.targetPath, { force: true }).catch(() => {})
+        for (const backup of [...backups].reverse()) {
+          try {
+            if (backup.content !== null) await atomicWrite(backup.path, backup.content)
+          } catch {
+            notes.push(`⚠ 回滚失败：${backup.path}（请检查该文件）`)
+          }
+        }
+        this.invalidate()
+        throw new Error(`改名失败并已回滚：${(error as Error).message}`)
+      }
+    }
+    this.invalidate()
+    const report = formatRenameReport({
+      id: action.id,
+      oldTitle: action.oldTitle,
+      newTitle: action.title,
+      plan: action.plan,
+      filesChanged: action.changed,
+      broken: action.broken,
+      dryRun: false,
+      notes,
+    })
+    return `${report}\n已写入：${finalRel}${this.noteSkips()}`
   }
 
   private async fileExists(path: string): Promise<boolean> {
@@ -564,19 +783,22 @@ export class VaultStore {
     pendingQuestions?: string[]
     touchedCardIds?: string[]
   }): Promise<string> {
+    if (!['get', 'set', 'clear'].includes(action)) {
+      throw new Error(`study_progress 未知 action "${action}"（可用 get/set/clear）`)
+    }
     const file = this.stateFile()
+    await this.assertVault()
     if (action === 'clear') {
       await writeProgress(file, {})
       return '学习进度已清空。'
     }
     const current = await readProgress(file)
     if (action === 'get') return fmtProgress(current)
-    if (action !== 'set') throw new Error(`study_progress 未知 action "${action}"（可用 get/set/clear）`)
     const next: ProgressState = { ...current }
     if (fields.material !== undefined) next.currentMaterial = String(fields.material).trim()
     if (fields.section !== undefined) next.currentSection = String(fields.section).trim()
-    if (fields.pendingQuestions !== undefined) next.pendingQuestions = fields.pendingQuestions
-    if (fields.touchedCardIds !== undefined) next.touchedCardIds = fields.touchedCardIds
+    if (fields.pendingQuestions !== undefined) next.pendingQuestions = normalizeQueue(fields.pendingQuestions, 'pendingQuestions')
+    if (fields.touchedCardIds !== undefined) next.touchedCardIds = normalizeQueue(fields.touchedCardIds, 'touchedCardIds')
     if (
       fields.material === undefined && fields.section === undefined
       && fields.pendingQuestions === undefined && fields.touchedCardIds === undefined
@@ -588,69 +810,77 @@ export class VaultStore {
     return fmtProgress(next)
   }
 
+  /** `study_memory get`：单键或全量（含进度句过期提示） */
+  private memoryGet(state: MemoryState, key?: string): string {
+    if (key !== undefined) {
+      const k = String(key).trim()
+      if (k === AUTO_PREFS_KEY) return formatAutoPrefs(state.notes[AUTO_PREFS_KEY])
+      const normalized = normalizeMemoryKey(k)
+      const value = state.notes[normalized]
+      return value !== undefined ? `${normalized}：${value}` : `（无此键：${normalized}）`
+    }
+    const text = formatMemory(state)
+    // 进度单一来源：prefs.* 里出现"现学/正在学"类进度句 → 提示可能与 study_progress 过期不同步
+    const stale = findProgressSentences(state.notes)
+    if (stale.length === 0) return text
+    const lines = stale.map((h) => `- ${h.key}：「${h.snippet}…」`)
+    return `${text}\n\n⚠ 提示：上述记忆键含进度句，可能与 study_progress 不一致——进度位置以 study_progress 为准。建议把进度句迁移或标注为「历史快照」，偏好键只存偏好/惯例：\n${lines.join('\n')}`
+  }
+
+  /** `_autoPrefs` 控制键：只接受 set / remove（不接受 append） */
+  private async setControlKey(file: string, state: MemoryState, action: string, rawValue?: string): Promise<string> {
+    if (action === 'append') throw new Error('自迭代开关不支持 append；用 set 切换 on/off，或用 remove 删除（回到默认关闭）')
+    if (action === 'remove') {
+      if (!Object.prototype.hasOwnProperty.call(state.notes, AUTO_PREFS_KEY)) {
+        return '（无此键：_autoPrefs，无需删除；当前为默认关闭）'
+      }
+      const next: MemoryState = { notes: { ...state.notes } }
+      delete next.notes[AUTO_PREFS_KEY]
+      await writeMemory(file, next)
+      return '已关闭自迭代记忆（开关键已删除，回到默认关闭）。'
+    }
+    const value = normalizeAutoPrefsValue(rawValue ?? '')
+    await writeMemory(file, { notes: { ...state.notes, [AUTO_PREFS_KEY]: value } })
+    return value === 'on'
+      ? '已开启自迭代记忆：无需再说"请记住"，偏好/约定会自动写入 prefs.* 键（每次写入会在回复中标注）。'
+      : '已关闭自迭代记忆：回到"记住…"手动模式。'
+  }
+
+  /** 普通键：set / append / remove */
+  private async writeNote(file: string, state: MemoryState, action: string, key: string, rawValue?: string): Promise<string> {
+    const next: MemoryState = { notes: { ...state.notes } }
+    if (action === 'remove') {
+      if (!Object.prototype.hasOwnProperty.call(next.notes, key)) return `（无此键：${key}，无需删除）`
+      delete next.notes[key]
+      await writeMemory(file, next)
+      return `已删除记忆：${key}`
+    }
+    const value = checkMemoryValue(rawValue ?? '')
+    next.notes[key] = action === 'append' && next.notes[key] !== undefined
+      ? checkMemoryValue(`${next.notes[key]}\n${value}`)
+      : value
+    await writeMemory(file, next)
+    return `已记忆 ${key}：${next.notes[key]}\n\n${formatMemory(next)}`
+  }
+
   async memory(action: string, fields: { key?: string; value?: string }): Promise<string> {
+    if (!['get', 'set', 'append', 'remove', 'clear'].includes(action)) {
+      throw new Error(`study_memory 未知 action "${action}"（可用 get/set/append/remove/clear）`)
+    }
     const file = this.memoryFile()
+    // BIZ-11g：vaultRoot 写错时不得静默在错误路径创建 .study/memory.json
+    await this.assertVault()
     if (action === 'clear') {
       // 彻底重来：清空全部记忆，包括自迭代开关（回到默认关闭）
       await writeMemory(file, { notes: {} })
       return '记忆已清空。'
     }
     const current = await readMemory(file)
-    if (action === 'get') {
-      if (fields.key !== undefined) {
-        const key = String(fields.key).trim()
-        if (key === AUTO_PREFS_KEY) return formatAutoPrefs(current.notes[AUTO_PREFS_KEY])
-        const normalized = normalizeMemoryKey(key)
-        const value = current.notes[normalized]
-        return value !== undefined ? `${normalized}：${value}` : `（无此键：${normalized}）`
-      }
-      const text = formatMemory(current)
-      // 进度单一来源：prefs.* 里出现"现学/正在学"类进度句 → 提示可能与 study_progress 过期不同步
-      const stale = findProgressSentences(current.notes)
-      if (stale.length === 0) return text
-      const lines = stale.map((h) => `- ${h.key}：「${h.snippet}…」`)
-      return `${text}\n\n⚠ 提示：上述记忆键含进度句，可能与 study_progress 不一致——进度位置以 study_progress 为准。建议把进度句迁移或标注为「历史快照」，偏好键只存偏好/惯例：\n${lines.join('\n')}`
-    }
-    if (action !== 'set' && action !== 'append' && action !== 'remove') {
-      throw new Error(`study_memory 未知 action "${action}"（可用 get/set/append/remove/clear）`)
-    }
-    // 自迭代开关（保留控制键）：独占校验，不接受 append
+    if (action === 'get') return this.memoryGet(current, fields.key)
     if (String(fields.key ?? '').trim() === AUTO_PREFS_KEY) {
-      if (action === 'append') throw new Error('自迭代开关不支持 append；用 set 切换 on/off，或用 remove 删除（回到默认关闭）')
-      if (action === 'remove') {
-        if (!Object.prototype.hasOwnProperty.call(current.notes, AUTO_PREFS_KEY)) {
-          return '（无此键：_autoPrefs，无需删除；当前为默认关闭）'
-        }
-        const next: MemoryState = { notes: { ...current.notes } }
-        delete next.notes[AUTO_PREFS_KEY]
-        await writeMemory(file, next)
-        return '已关闭自迭代记忆（开关键已删除，回到默认关闭）。'
-      }
-      const value = normalizeAutoPrefsValue(fields.value ?? '')
-      const next: MemoryState = { notes: { ...current.notes, [AUTO_PREFS_KEY]: value } }
-      await writeMemory(file, next)
-      return value === 'on'
-        ? '已开启自迭代记忆：无需再说"请记住"，偏好/约定会自动写入 prefs.* 键（每次写入会在回复中标注）。'
-        : '已关闭自迭代记忆：回到"记住…"手动模式。'
+      return this.setControlKey(file, current, action, fields.value)
     }
-    const key = normalizeMemoryKey(fields.key ?? '')
-    const next: MemoryState = { notes: { ...current.notes } }
-    if (action === 'remove') {
-      if (!Object.prototype.hasOwnProperty.call(next.notes, key)) {
-        return `（无此键：${key}，无需删除）`
-      }
-      delete next.notes[key]
-      await writeMemory(file, next)
-      return `已删除记忆：${key}`
-    }
-    const value = checkMemoryValue(fields.value ?? '')
-    if (action === 'append' && next.notes[key] !== undefined) {
-      next.notes[key] = checkMemoryValue(`${next.notes[key]}\n${value}`)
-    } else {
-      next.notes[key] = value
-    }
-    await writeMemory(file, next)
-    return `已记忆 ${key}：${next.notes[key]}\n\n${formatMemory(next)}`
+    return this.writeNote(file, current, action, normalizeMemoryKey(fields.key ?? ''), fields.value)
   }
 }
 

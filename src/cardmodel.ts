@@ -21,6 +21,18 @@ export interface CardSection {
   end: number
 }
 
+/**
+ * 单行字段收敛：把换行折成空格并压掉多余空白（SEC-1）。
+ *
+ * 用途是**渲染兜底**：frontmatter 标量、一句话定义、`### 版本更新（来源：…）`、
+ * MOC 标题里出现换行时，会让 `parseFrontmatter` 的非贪婪正则在注入的 `---`
+ * 处提前闭合，导致后半段元数据静默降级为正文（索引/lint/改名全部依据错）。
+ * 校验层仍会拒绝换行（fail-loud），本函数是纵深防御，不替代校验。
+ */
+export function inlineText(value: unknown): string {
+  return String(value ?? '').replace(/[\r\n]+/g, ' ').replace(/[ \t]{2,}/g, ' ').trim()
+}
+
 export interface SplitBody {
   /** 首个标题之前的引言（一句话定义引用块等） */
   lead: string
@@ -37,8 +49,8 @@ const HEADING_RE = /^(#{1,6})[ \t]+(\S.*?)[ \t]*$/gm
 export function splitSections(body: string): SplitBody {
   const text = String(body ?? '')
   const marks: Array<{ level: number; title: string; index: number; end: number }> = []
-  HEADING_RE.lastIndex = 0
-  for (let m = HEADING_RE.exec(text); m !== null; m = HEADING_RE.exec(text)) {
+  // matchAll 内部克隆正则，不共享 lastIndex（CPLX-10：避免"共享可变正则状态"）
+  for (const m of text.matchAll(HEADING_RE)) {
     marks.push({ level: m[1].length, title: m[2].trim(), index: m.index, end: m.index + m[0].length })
   }
   if (marks.length === 0) return { lead: text.replace(/\s+$/, ''), sections: [] }
@@ -94,22 +106,30 @@ export function hasSection(sections: CardSection[], title: string): boolean {
   return findSection(sections, title) !== undefined
 }
 
-/** 取首个匹配小节的正文（不存在则空串） */
-export function sectionBody(sections: CardSection[], title: string): string {
-  return findSection(sections, title)?.body ?? ''
-}
-
-/** 正文中是否出现某个规范小节标题（含变体） */
-export function hasHeading(body: string, title: string): boolean {
-  return hasSection(splitSections(body).sections, title)
-}
-
-/** 小节标题在全文中的行号（1 基；不存在返回 0） */
-export function headingLine(body: string, title: string): number {
-  const text = String(body ?? '')
-  const section = findSection(splitSections(text).sections, title)
-  if (!section) return 0
-  return text.slice(0, section.start).split('\n').length
+/**
+ * 构造「下标 → 行号（1 基）」查询函数（PERF-4）。
+ *
+ * 旧写法 `text.slice(0, index).split('\n').length` 对每个小节都做一次
+ * 前缀切片 + split，整卡成本 ≈ 正文长度 × 小节数（`cross` 对全库跑时放大）。
+ * 这里预计算一次换行位置并二分查找，纯函数、可复用。
+ */
+export function makeLineOf(text: string): (index: number) => number {
+  const src = String(text ?? '')
+  const breaks: number[] = []
+  for (let i = 0; i < src.length; i++) {
+    if (src.charCodeAt(i) === 10) breaks.push(i)
+  }
+  return (index: number): number => {
+    const at = Math.max(0, Math.min(Number(index) || 0, src.length))
+    let lo = 0
+    let hi = breaks.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (breaks[mid] < at) lo = mid + 1
+      else hi = mid
+    }
+    return lo + 1
+  }
 }
 
 /**

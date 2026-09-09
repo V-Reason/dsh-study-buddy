@@ -69,6 +69,24 @@ describe('template 模板注册表', () => {
     expect(inferTemplate({ title: '蒙特卡洛积分', domain: '数学', mappedFolder: '数学' })).toBe('理论型')
   })
 
+  // EXT-3：领域族判定不再用子串包含（"渲染数学"曾被误判工程型并被要求写验证实验）
+  test('inferTemplate：领域键精确/前缀命中，不做子串包含', () => {
+    expect(inferTemplate({ title: '渲染数学基础', domain: '渲染数学', mappedFolder: '数学/渲染数学' })).toBe('理论型')
+    expect(inferTemplate({ title: 'IBL 接入', domain: '渲染', mappedFolder: '游戏开发/图形学' })).toBe('工程型')
+    expect(inferTemplate({ title: '法线贴图', domain: '图形学-纹理与采样', mappedFolder: '游戏开发/图形学/纹理与采样' })).toBe('工程型')
+    // 目录路径段精确等于领域键才算命中（"Shader与URP" 不等于 "Shader"）
+    expect(inferTemplate({ title: '一个普通概念', domain: '其它', mappedFolder: '其它/Shader与URP' })).toBe('理论型')
+  })
+
+  test('inferTemplate：config.templateHints 可覆盖判定表（新增领域不必改源码）', () => {
+    const hints = { engineeringDomains: ['Rust'], engineeringTitles: ['踩坑'], comparisonTitles: ['之争'] }
+    expect(inferTemplate({ title: '所有权模型', domain: 'Rust', hints })).toBe('工程型')
+    expect(inferTemplate({ title: 'Rust 与 C++ 之争', domain: 'Rust', hints })).toBe('对比型')
+    expect(inferTemplate({ title: '编译期踩坑', domain: '其他', hints })).toBe('工程型')
+    // 覆盖后不再命中内置表（图形学 → 理论型）
+    expect(inferTemplate({ title: '光照模型', domain: '图形学-光照模型', hints })).toBe('理论型')
+  })
+
   test('sectionHints / templateTable 可读输出', () => {
     expect(sectionHints(templateSpec('工程型').required)).toContain('### 验证实验（')
     const table = templateTable()
