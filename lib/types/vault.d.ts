@@ -66,6 +66,11 @@ export interface VaultLayout {
     includeSessionCwd?: boolean;
     /** 是否允许把关联写入没有 ID 的旧笔记，默认 false（旧笔记不碰不动） */
     linkIntoNotes?: boolean;
+    /** lint 口径（可选）：会话残留级别与禁用规则 */
+    lint?: {
+        residueLevel?: 'off' | 'warn' | 'error';
+        rulesOff?: string[];
+    };
 }
 /** 解析某领域卡片的落盘目录：优先映射表，未映射落入 fallbackDir/<领域名> */
 export declare function cardDirFor(layout: VaultLayout, domain: string): string;

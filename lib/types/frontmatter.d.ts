@@ -10,6 +10,8 @@ export interface CardMeta {
     domain?: string;
     source?: string;
     status?: string;
+    /** 模板类型（理论型/工程型/对比型，2026-09 新增，可选） */
+    template?: string;
 }
 export interface ParsedNote {
     /** 解析出的标量 meta；文件以 `---` 开头但字段为空时是空对象，无 frontmatter 时为 null */

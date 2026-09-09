@@ -19,8 +19,8 @@ description: 增量更新（活笔记）三步细则：定位提醒、补充/推
 
 | 情形 | 判定 | 建议 | card_update 模式 |
 | :-- | :-- | :-- | :-- |
-| 补充 | 不推翻旧结论 | 尾部加"版本更新（[来源]）" | `append-version`（changes+source） |
-| 推翻 | 推翻旧结论 | 保留旧内容加"勘误"（注明纠正原因） | `errata`（changes 含原因） |
+| 补充 | 不推翻旧结论 | 加"版本更新（[来源]）"（插在「关联卡片」之前） | `append-version`（changes+source） |
+| 推翻 | 推翻旧结论 | 保留旧内容加"勘误"（注明纠正原因，同样插在关联卡片之前） | `errata`（changes 含原因） |
 | 无关 | 完全无关 | 新卡 + 旧卡加"后续"关联 | `card_create` + `card_link(kind=next)` |
 
 先用表格贴"旧 vs 新"对比，再 `ask_user_question` 请用户确认。
@@ -28,5 +28,8 @@ description: 增量更新（活笔记）三步细则：定位提醒、补充/推
 ## 步骤 3：执行
 
 - 确认后调用；输出整张更新后卡片（含新旧内容）供复制替换。
+- 阅读顺序（2026-09 修复）：正文小节 → 版本更新/勘误 → 关联卡片。旧版把更新块追加到文件末尾，顺序是错的。
+- 更新后跑一次 `card_lint({ref})` 看有没有把新内容写歪（缺节/未标语言/无答案）。
+- 历史块越积越多时：`card_history({ref, action:'list'})` 看清单 → 用户同意后 `card_history({ref, action:'strip'})` 清除（先校验 `<details>` 配对）。
 - 更新 `study_progress` 的 touchedCardIds。
 - 用户拒绝 → 不写任何文件。

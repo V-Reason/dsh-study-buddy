@@ -83,27 +83,59 @@ describe('study preset skills', () => {
     expect(body).toContain('_autoPrefs')
   })
 
-  test('card-format 技能含阶梯式解剖模板五小节', () => {
+  test('card-format 技能含通用骨架必填小节与四层序号规则', () => {
     const skill = listSkills().find(({ dir }) => dir === 'card-format')
     expect(skill).toBeDefined()
     const body = skill!.skill.body
-    for (const section of ['核心思想', '阶梯式解剖', '实例走查', '易错点', '自测题']) {
+    for (const section of ['核心思想', '主干线', '阶梯式解剖', '实例走查', '易错点', '自测题']) {
       expect(body, `card-format 应包含小节：${section}`).toContain(section)
     }
+    // 2026-09 新增的四个小节
+    for (const section of ['重入点', '前置检查', '验证实验', '排障判据']) {
+      expect(body, `card-format 应包含新增小节：${section}`).toContain(section)
+    }
     expect(body).toContain('第 1 层 · 直觉')
-    expect(body).toContain('四层顺序')
+    expect(body).toContain('4~6')
     expect(body).toContain('存量旧卡')
+    // 分型与反堆砌三规则
+    expect(body).toContain('理论型')
+    expect(body).toContain('工程型')
+    expect(body).toContain('对比型')
+    expect(body).toContain('主干线唯一')
+    expect(body).toContain('删除测试')
+    expect(body).toContain('前置检查')
+  })
+
+  test('card-format 技能：取消正文字数、保留定义硬限、三问自检', () => {
+    const body = listSkills().find(({ dir }) => dir === 'card-format')!.skill.body
+    expect(body).toContain('≤60 字硬上限')
+    expect(body).toContain('不设上下限')
+    // 旧的暗示性字数约束必须已删除
+    expect(body).not.toContain('≥~400 字')
+    expect(body).not.toContain('600~1500')
+    expect(body).not.toContain('≥~500 字')
+    // 完备性三问
+    expect(body).toContain('信息完备性')
   })
 
   test('card-format 技能含定义长度终局规则与完整领域键名表', () => {
     const body = listSkills().find(({ dir }) => dir === 'card-format')!.skill.body
-    // 定义长度：≤60 硬上限、31~60 允许放行（不再让 agent 纠结改不改）
+    // 定义长度：≤60 硬上限（工具硬拒，见 card.ts）；31~60 放行口径在 persona
     expect(body).toContain('≤60 字硬上限')
-    expect(body).toContain('允许放行')
+    expect(body).toContain('检索契约')
     // 键名表：含易错键"图形学-动画特效"（无"与"）与映射目录
     expect(body).toContain('图形学-动画特效')
     expect(body).toContain('动画与特效')
     expect(body).toContain('近似')
+  })
+
+  test('card-format 技能含卡片维护三件套（lint/history/rename）与版本块位置口径', () => {
+    const body = listSkills().find(({ dir }) => dir === 'card-format')!.skill.body
+    expect(body).toContain('card_lint')
+    expect(body).toContain('card_history')
+    expect(body).toContain('card_rename')
+    expect(body).toContain('关联卡片')
+    expect(body).toContain('标题或 ID 任一命中')
   })
 
   test('domain-adaptation 技能覆盖数学/数值分析条目', () => {

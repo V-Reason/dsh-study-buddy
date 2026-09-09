@@ -3,24 +3,16 @@
  * 纯文本变换（不碰文件系统），便于单元测试。
  * @module card
  */
+import { type TemplateType } from './template.ts';
 export declare const VALID_STATUS: readonly ["草稿", "已确认", "需更新"];
-/** 阶梯式解剖模板必需小节（缺失出 warning 提示，不阻塞落盘；硬强制在 persona/归档清单） */
-export declare const TEMPLATE_SECTIONS: readonly [{
-    readonly title: "核心思想";
-    readonly hint: "一句话讲清 + 为什么重要 + 记忆锚点";
-}, {
-    readonly title: "阶梯式解剖";
-    readonly hint: "第 1 层直觉 → 第 2 层机制 → 第 3 层细节推导 → 第 4 层边界反例";
-}, {
-    readonly title: "实例走查";
-    readonly hint: "代入具体数字/代码逐步走完";
-}, {
-    readonly title: "易错点";
-    readonly hint: "坑 + 为什么错";
-}, {
-    readonly title: "自测题";
-    readonly hint: "2~3 题，先答再看答案";
-}];
+/**
+ * 模板必填小节（向后兼容的常量视图：理论型必填小节）。
+ * 分型后的完整规则见 template.ts；此处保留导出避免破坏既有调用方。
+ */
+export declare const TEMPLATE_SECTIONS: ReadonlyArray<{
+    title: string;
+    hint: string;
+}>;
 export interface CardLinks {
     prev?: string[];
     next?: string[];
@@ -36,6 +28,8 @@ export interface CardInput {
     definition: string;
     /** 核心内容 Markdown */
     content: string;
+    /** 模板类型：理论型/工程型/对比型；缺省按领域与标题自动推断 */
+    template?: string;
     /** 额外中文领域标签（如 线性代数） */
     tags?: string[];
     links?: CardLinks;
@@ -56,7 +50,22 @@ export declare const DEFINITION_TARGET = 30;
 export declare const DEFINITION_MAX = 60;
 /** 校验单条一句话定义（validateCard 与 card_update definition 模式共用） */
 export declare function validateDefinition(definition: string): ValidateResult;
-export declare function validateCard(input: CardInput): ValidateResult;
+export interface ValidateOptions {
+    /** 已解析的模板类型（缺省按 domain/title 推断） */
+    template?: string;
+    /** domainFolders[domain] 的落盘目录，用于按领域族推断模板 */
+    mappedFolder?: string;
+}
+/** 解析卡片模板：显式声明优先（非法值报错），否则按领域与标题推断 */
+export declare function resolveTemplate(input: {
+    title?: string;
+    domain?: string;
+    template?: string;
+}, opts?: ValidateOptions): {
+    type: TemplateType;
+    error?: string;
+};
+export declare function validateCard(input: CardInput, opts?: ValidateOptions): ValidateResult;
 /**
  * 渲染整卡 Markdown（用户定稿格式）：
  * frontmatter 后空一行 → 一句话定义（裸 > 引用块）→ 自由 ### 小节正文
@@ -74,6 +83,8 @@ export interface UpdatePayload {
     definition?: string;
     /** replace 模式的新卡内容（id 沿用旧卡） */
     card?: Omit<CardInput, 'id'>;
+    /** replace 模式：domainFolders 映射出的落盘目录（用于模板推断） */
+    mappedFolder?: string;
 }
 export interface UpdateResult {
     text: string;
@@ -92,10 +103,21 @@ export declare function applyUpdate(raw: string, id: string, payload: UpdatePayl
  */
 export declare function stripMocDatePrefix(title: string): string;
 export type LinkKind = 'prev' | 'next' | 'conflict';
+/** 关联目标：从展示标签里剥出标题（去掉尾部 `（ID）` / `（路径.md）` 与反引号） */
+export declare function linkTargetTitle(label: string): string;
+/** 关联目标：从展示标签里剥出 ID / 路径锚点（无则空串） */
+export declare function linkTargetId(label: string): string;
 /**
- * 在卡片正文维护关联卡片：新增 `- 标签：目标` 行；目标已存在则跳过。保留原 frontmatter。
- * 去重规则：有 targetId 时按 `（ID）` 判重（标题变更后仍能识别已关联）；
- * 旧笔记无 ID 时回退为按目标标签文本判重。
+ * 归一关联行标签：`标题（ID）` → `` `标题`（ID） ``（P0-6）。
+ * 标题已带反引号时保持原样；标题含反引号时跳过归一（避免破坏内容）。
+ */
+export declare function normalizeLinkLabel(label: string): string;
+/**
+ * 在卡片正文维护关联卡片：新增 `- 标签：目标` 行。
+ *
+ * 去重规则（P0-6）：**标题或 ID 任一命中即跳过**——既覆盖"标题改了但 ID 未变"
+ * （按 ID 判重），也覆盖"标题相同但没写 ID / ID 写错"（按标题判重），
+ * 于是同一目标不会再出现两行。保留原 frontmatter。
  */
 export declare function addLink(raw: string, kind: LinkKind, targetLabel: string, targetId?: string): string;
 export interface MocEntry {

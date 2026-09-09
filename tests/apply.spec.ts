@@ -16,7 +16,7 @@ afterEach(async () => {
 
 const CARD_TOOLS = [
   'card_search', 'card_get', 'card_id', 'card_create', 'card_update', 'card_link', 'card_moc',
-  'study_progress', 'study_memory',
+  'card_lint', 'card_history', 'card_rename', 'study_progress', 'study_memory',
 ]
 
 interface FakeCtx {
@@ -53,7 +53,7 @@ function fakeCtx(register?: (def: { name: string }) => () => void): FakeCtx {
 }
 
 describe('apply（fail-loud 与 vaultRoot==cwd 回归）', () => {
-  test('vaultRoot 等于工作目录时注册全部 9 个工具（launcher 以 vault 为 cwd 的部署回归）', () => {
+  test('vaultRoot 等于工作目录时注册全部 12 个工具（launcher 以 vault 为 cwd 的部署回归）', () => {
     const prev = process.cwd()
     try {
       process.chdir(dir)

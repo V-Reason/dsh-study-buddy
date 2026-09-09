@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import {
-  addLink, applyUpdate, generateId, renderCard, renderMoc, stripMocDatePrefix, todayLocal, validateCard, validateDefinition,
+  addLink, applyUpdate, generateId, renderCard, renderMoc, resolveTemplate, stripMocDatePrefix, todayLocal, validateCard, validateDefinition,
   type CardInput,
 } from '../src/card.ts'
 
@@ -10,11 +10,15 @@ const base: CardInput = {
   source: 'GAMES101 L04',
   status: '草稿',
   definition: '透视投影矩阵可拆解为缩放、平移与齐次除三步',
+  template: '理论型',
   content: [
     '### 核心思想',
     '**一句话讲清**：先缩放后平移，最后齐次除，三步把透视世界变成矩形视口。',
     '**为什么**：透视投影的关键是 w 除，其余都是仿射铺垫。',
     '**记忆锚点**：先裁窗后贴到屏幕。',
+    '',
+    '### 主干线',
+    '透视除法算不起 → 齐次坐标把平移线性化 → 一次矩阵乘法 + w 除 → 代价是 w=0 的无穷远点 → 验证看近大远小。',
     '',
     '### 阶梯式解剖',
     '**第 1 层 · 直觉**：近大远小 = 对 w 做除法。',
@@ -49,7 +53,8 @@ describe('card', () => {
 
   test('validateCard', () => {
     expect(validateCard(base).errors).toEqual([])
-    expect(validateCard(base).warnings).toEqual([])
+    // 模板已分型：只应有"推荐小节（重入点/前置检查）"这类提示，不得有必填缺节警告
+    expect(validateCard(base).warnings.join()).not.toContain('必填')
 
     const bad = { ...base, status: '奇怪状态' }
     expect(validateCard(bad).errors.join()).toContain('status')
@@ -96,29 +101,52 @@ describe('card', () => {
     expect(stripMocDatePrefix('  ')).toBe('')
   })
 
-  test('validateCard 警告缺失的阶梯式解剖模板小节（不阻塞）', () => {
-    // 少了 实例走查 / 易错点 / 自测题
+  test('validateCard 警告缺失的模板必填小节（不阻塞）', () => {
+    // 少了 主干线 / 实例走查 / 易错点 / 自测题
     const partial = { ...base, content: '### 核心思想\n一句话。\n\n### 阶梯式解剖\n第 1 层。' }
     const result = validateCard(partial)
     expect(result.errors).toEqual([])
     const warnings = result.warnings.join()
+    expect(warnings).toContain('"### 主干线"')
     expect(warnings).toContain('"### 实例走查"')
     expect(warnings).toContain('"### 易错点"')
     expect(warnings).toContain('"### 自测题"')
+    expect(warnings).toContain('理论型必填')
     expect(warnings).not.toContain('"### 核心思想"')
     expect(warnings).not.toContain('"### 阶梯式解剖"')
-    // 五小节齐全则不产生模板警告
-    expect(validateCard(base).warnings.filter(w => w.includes('模板必需'))).toEqual([])
+    // 小节齐全则不产生模板警告
+    expect(validateCard(base).warnings.filter(w => w.includes('必填'))).toEqual([])
     // content 为空时已有 error，不再叠加模板警告
-    expect(validateCard({ ...base, content: '' }).warnings.join()).not.toContain('模板必需')
+    expect(validateCard({ ...base, content: '' }).warnings.join()).not.toContain('必填')
+  })
+
+  test('validateCard 模板分型：工程型要求验证实验与排障判据；非法 template 报错', () => {
+    const eng = validateCard({ ...base, template: '工程型' })
+    const warnings = eng.warnings.join()
+    expect(warnings).toContain('"### 验证实验"')
+    expect(warnings).toContain('"### 排障判据"')
+    expect(warnings).toContain('工程型必填')
+    // 推荐小节单独提示（不算必填）
+    expect(warnings).toContain('推荐')
+    const bad = validateCard({ ...base, template: '随笔型' })
+    expect(bad.errors.join()).toContain('template 必须是')
+  })
+
+  test('resolveTemplate：显式优先、非法值报错、缺省按领域推断', () => {
+    expect(resolveTemplate({ title: 'IBL 接入', domain: '图形学-光照模型', template: '工程型' }).type).toBe('工程型')
+    expect(resolveTemplate({ title: '红黑树插入', domain: '数据结构与算法' }).type).toBe('理论型')
+    expect(resolveTemplate({ title: '光传输算法谱系对比', domain: '图形学' }).type).toBe('对比型')
+    expect(resolveTemplate({ title: 'x', domain: 'y', template: '乱写' }).error).toContain('理论型/工程型/对比型')
+    // 领域目录族参与推断（mappedFolder）
+    expect(resolveTemplate({ title: 'URP 变体', domain: 'Unity' }, { mappedFolder: '游戏开发/Unity' }).type).toBe('工程型')
   })
 
   test('renderCardMatchesFinalFormat', () => {
     const text = renderCard({ ...base, id: '202608161430_ab12', links: { prev: ['正交投影'] } })
     expect(text).toContain('ID: 202608161430_ab12')
     expect(text).toContain('领域: #图形学与渲染 #线性代数')
-    // frontmatter 后空一行，定义是裸引用块
-    expect(text).toContain('状态: 草稿\n---\n\n> 透视投影矩阵可拆解')
+    // frontmatter 后空一行，定义是裸引用块；模板字段写在状态之后（可选字段）
+    expect(text).toContain('状态: 草稿\n模板: 理论型\n---\n\n> 透视投影矩阵可拆解')
     // 无固定"核心内容"包裹标题、无尾部标签行
     expect(text).not.toContain('### 核心内容')
     expect(text).not.toContain('#Doing')
@@ -206,14 +234,14 @@ describe('card', () => {
     const raw = '# 标题\n正文'
     const text = addLink(raw, 'prev', '前置卡片（id1）')
     expect(text).toContain('### 关联卡片')
-    expect(text).toContain('- 前置：前置卡片（id1）')
+    expect(text).toContain('- 前置：`前置卡片`（id1）')
     expect(text).toContain('正文')
   })
 
   test('addLinkAppendsUnderExistingSection', () => {
     const raw = '# 标题\n\n### 关联卡片\n- 前置：旧卡片\n\n正文尾'
     const text = addLink(raw, 'next', '延伸卡片（id2）')
-    const idxNext = text.indexOf('- 后续：延伸卡片（id2）')
+    const idxNext = text.indexOf('- 后续：`延伸卡片`（id2）')
     const idxOld = text.indexOf('- 前置：旧卡片')
     expect(idxNext).toBeGreaterThan(-1)
     expect(idxNext).toBeLessThan(idxOld)
@@ -223,7 +251,7 @@ describe('card', () => {
   test('addLinkSkipsExistingTarget', () => {
     const raw = '# 标题\n- 前置：已有（id3）'
     const text = addLink(raw, 'prev', '已有（id3）')
-    expect(text.match(/已有（id3）/g)?.length).toBe(1)
+    expect(text.match(/已有/g)?.length).toBe(1)
   })
 
   test('addLinkDedupesByIdAcrossTitleChanges', () => {
@@ -234,9 +262,30 @@ describe('card', () => {
     expect(text).toContain('旧标题（202608161430_ab12）')
   })
 
+  test('addLinkDedupesByTitleWhenIdDiffersOrMissing（P0-6 双向去重）', () => {
+    // 标题相同、ID 不同（或没写 ID）：仍视为同一目标，不重复添加
+    const raw = '# 标题\n\n### 关联卡片\n- 前置：`投影矩阵`（id-old）\n'
+    const byTitle = addLink(raw, 'prev', '投影矩阵（id-new）', 'id-new')
+    expect(byTitle.match(/投影矩阵/g)?.length).toBe(1)
+    const noId = addLink(raw, 'prev', '`投影矩阵`')
+    expect(noId.match(/投影矩阵/g)?.length).toBe(1)
+    // 不同标题、不同 ID：正常追加
+    const other = addLink(raw, 'prev', '光栅化（id-other）', 'id-other')
+    expect(other.match(/- 前置：/g)?.length).toBe(2)
+  })
+
+  test('addLink 归一为 `标题`（ID） 写法', () => {
+    const text = addLink('# 标题\n正文', 'next', '光栅化（id9）')
+    expect(text).toContain('- 后续：`光栅化`（id9）')
+    // 已带反引号时不重复加
+    expect(addLink('# 标题\n正文', 'next', '`光栅化`（id9）')).toContain('- 后续：`光栅化`（id9）')
+    // 旧笔记按路径寻址（无 ID）：保留路径括号
+    expect(addLink('# 标题\n正文', 'next', '旧笔记标题（工作目录/旧笔记.md）')).toContain('- 后续：`旧笔记标题`（工作目录/旧笔记.md）')
+  })
+
   test('addLinkFallsBackToLabelDedupWithoutId', () => {
     // 旧笔记无 ID：回退为按标签文本判重
-    const raw = '# 标题\n\n### 关联卡片\n- 后续：旧笔记（计算机/图形学/旧.md）\n'
+    const raw = '# 标题\n\n### 关联卡片\n- 后续：`旧笔记`（计算机/图形学/旧.md）\n'
     const text = addLink(raw, 'next', '旧笔记（计算机/图形学/旧.md）')
     expect(text.match(/- 后续：/g)?.length).toBe(1)
   })
@@ -246,7 +295,7 @@ describe('card', () => {
     const text = addLink(raw, 'prev', '前置（x）')
     expect(text).toContain('---\nID: 202608161430_ab12')
     expect(text).toContain('### 关联卡片')
-    expect(text).toContain('- 前置：前置（x）')
+    expect(text).toContain('- 前置：`前置`（x）')
     expect(text).toContain('> 定义')
   })
 

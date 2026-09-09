@@ -11,6 +11,8 @@ export interface CardMeta {
   domain?: string
   source?: string
   status?: string
+  /** 模板类型（理论型/工程型/对比型，2026-09 新增，可选） */
+  template?: string
 }
 
 export interface ParsedNote {
@@ -39,6 +41,7 @@ export function parseFrontmatter(raw: string): ParsedNote {
     else if (key === '领域') meta.domain = value
     else if (key === '来源') meta.source = value
     else if (key === '状态') meta.status = value
+    else if (key === '模板') meta.template = value
   }
   return { meta, body: raw.slice(m[0].length), raw }
 }
@@ -50,6 +53,7 @@ export function renderFrontmatter(meta: CardMeta): string {
   if (meta.domain) lines.push(`领域: ${meta.domain}`)
   if (meta.source) lines.push(`来源: ${meta.source}`)
   if (meta.status) lines.push(`状态: ${meta.status}`)
+  if (meta.template) lines.push(`模板: ${meta.template}`)
   lines.push('---', '')
   return lines.join('\n')
 }

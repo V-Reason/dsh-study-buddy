@@ -11,7 +11,11 @@
  * @module index
  */
 import { type CardInput, type LinkKind, type UpdatePayload } from './card.ts';
+import { type HistoryKind } from './history.ts';
+import { type ToolDef } from './tools.ts';
 import { type VaultLayout } from './vault.ts';
+export type { ToolDef, ToolExecLike } from './tools.ts';
+export { buildToolDefs } from './tools.ts';
 export declare const name = "study-buddy";
 export declare const inject: string[];
 export interface StudyConfig {
@@ -33,32 +37,10 @@ export interface StudyConfig {
     includeSessionCwd?: boolean;
     /** 是否允许把关联写入无 ID 的旧笔记，默认 false（旧笔记不碰不动；只写卡片侧） */
     linkIntoNotes?: boolean;
-}
-interface ToolDef {
-    name: string;
-    description: string;
-    parameters: Record<string, unknown>;
-    output: {
-        schema: {
-            type: string;
-        };
-        render: (_args: unknown, value: string) => Array<{
-            type: string;
-            text: string;
-        }>;
-    };
-    isConcurrencySafe?: () => boolean;
-    /** exec 由 DSH 工具注册表注入：调用方会话信息（agent.session.header.cwd） */
-    execute: (args: Record<string, unknown>, exec?: ToolExecLike) => Promise<string> | string;
-}
-/** 工具方会话信息的最小结构类型（不引入 @deepseek-ai 类型，保持构建 external） */
-interface ToolExecLike {
-    agent?: {
-        session?: {
-            header?: {
-                cwd?: string;
-            };
-        };
+    /** lint 口径（可选）：residueLevel=off/warn/error（默认 warn），rulesOff=禁用的规则 id 列表 */
+    lint?: {
+        residueLevel?: 'off' | 'warn' | 'error';
+        rulesOff?: string[];
     };
 }
 interface PluginContext {
@@ -112,6 +94,31 @@ export declare class VaultStore {
     }, call?: {
         sessionCwd?: string;
     }): Promise<string>;
+    /** 单卡/批量质量体检（card_lint）+ 跨卡一致性 / 质量趋势 / 可执行性评级（P2） */
+    lint(opts: {
+        ref?: string;
+        scope?: 'vault' | 'all';
+        limit?: number;
+        rule?: string;
+        cross?: boolean;
+        trend?: boolean;
+        rating?: boolean;
+    }, call?: {
+        sessionCwd?: string;
+    }): Promise<string>;
+    /** 版本更新 / 勘误 / 历史折叠块管理（card_history） */
+    history(ref: string, action: 'list' | 'strip', opts?: {
+        kinds?: HistoryKind[];
+        dryRun?: boolean;
+    }, call?: {
+        sessionCwd?: string;
+    }): Promise<string>;
+    /** 改标题并同步文件名 / 全库入链 / 断链检测（card_rename） */
+    rename(ref: string, newTitle: string, opts?: {
+        dryRun?: boolean;
+        sessionCwd?: string;
+    }): Promise<string>;
+    private fileExists;
     progress(action: string, fields: {
         material?: string;
         section?: string;
@@ -123,6 +130,4 @@ export declare class VaultStore {
         value?: string;
     }): Promise<string>;
 }
-export declare function buildToolDefs(store: VaultStore): ToolDef[];
 export declare function apply(ctx: PluginContext, config?: StudyConfig): void;
-export {};

@@ -88,7 +88,7 @@ describe('VaultStore 端到端', () => {
     expect(linkedAgain).toContain('已建立关联')
     const file1 = await readFile(join(dir, '游戏开发/图形学/透视投影矩阵的三步分解.md'), 'utf8')
     expect(file1.match(/- 后续：/g)?.length).toBe(1)
-    expect(file1).toContain(`- 后续：光栅化（${id2}）`)
+    expect(file1).toContain(`- 后续：\`光栅化\`（${id2}）`)
     const file2 = await readFile(join(dir, '游戏开发/图形学/光栅化.md'), 'utf8')
     expect(file2).toContain('- 前置：')
 
@@ -470,7 +470,7 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
     expect(linked).toContain('未修改旧笔记')
     expect(await readFile(noteFile, 'utf8')).toBe(before)
     const cardFile = join(dir, '未分类/数据结构与算法/红黑树插入.md')
-    expect(await readFile(cardFile, 'utf8')).toContain(`- 后续：迭代器主要方法（${basename(extra)}/CS/迭代器笔记.md）`)
+    expect(await readFile(cardFile, 'utf8')).toContain(`- 后续：\`迭代器主要方法\`（${basename(extra)}/CS/迭代器笔记.md）`)
 
     // 开启 linkIntoNotes：两侧都写
     const noteOnly = await mkdtemp(join(tmpdir(), 'study-buddy-note-'))
@@ -506,6 +506,207 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
     expect(moc).toContain('旧笔记不收录')
     expect(moc).toContain('[[红黑树插入]]')
     expect(moc).not.toContain('[[迭代器主要方法]]')
+  })
+
+  test('card_lint：单卡报告 + 批量汇总 + 规则过滤', async () => {
+    const store = new VaultStore(layout())
+    const created = await store.create({
+      title: 'IBL 接入',
+      domain: '图形学与渲染',
+      source: 'URP 文档',
+      status: '已确认',
+      definition: 'IBL 接入 = 环境侧喂数据 + shader 两行采样',
+      content: [
+        '### 核心思想',
+        '环境侧喂数据。',
+        '',
+        '### 主干线',
+        '间接光算不起 → 预计算 → 采样 → 验证暗部。',
+        '',
+        '### 阶梯式解剖',
+        '**第 1 层 · 直觉**：查表。',
+        '**第 2 层 · 机制**：SampleSH。',
+        '**第 3 层 · 细节**：签名。',
+        '**第 4 层 · 边界**：烘死的。',
+        '',
+        '### 实例走查',
+        'r=0.31 → mip≈2.76。',
+        '',
+        '### 验证实验',
+        '1. 主光归零：暗部仍亮 → SH 通。',
+        '2. 环境归零：整体塌黑 → 数据源确认。',
+        '3. 金属球 + 探针：映出物体 → cubemap 通。',
+        '',
+        '### 排障判据',
+        '| 症状 | 判据 | 修复 |',
+        '| :-- | :-- | :-- |',
+        '| 反射平色 | 无探针 | 加探针 |',
+        '',
+        '### 易错点',
+        '- 改了主光没变化：间接光是烘死的。',
+        '',
+        '### 自测题',
+        '- **Q1**：谁生产 SH？ → 环境侧烘焙。',
+        '',
+        '### 关联卡片',
+        '- 前置：`间接光`（202609092139_2c27）',
+      ].join('\n'),
+    })
+    const id = /ID: (\d{12}_[0-9a-f]{4})/.exec(created.text)![1]
+    // 工程型由领域目录族推断
+    expect(created.text).toContain('模板：工程型')
+    const single = await store.lint({ ref: id })
+    expect(single).toContain('模板：工程型')
+    expect(single).toContain('总分：')
+    expect(single).toContain('正文')
+    // 该卡有前置关联但缺前置检查 → 命中 prereq-check
+    const byRule = await store.lint({ ref: id, rule: 'prereq-check' })
+    expect(byRule).toContain('prereq-check')
+    expect(byRule).toContain('前置检查')
+    const batch = await store.lint({ scope: 'vault' })
+    expect(batch).toContain('批量 lint：1 张卡')
+    expect(batch).toContain('规则命中')
+    const ruleBatch = await store.lint({ scope: 'vault', rule: 'template-sections' })
+    expect(ruleBatch).toContain('规则 template-sections')
+  })
+
+  test('card_lint：会话残留规则与白名单（端到端）', async () => {
+    const store = new VaultStore(layout())
+    const created = await store.create({
+      title: '残留样本',
+      domain: '图形学与渲染',
+      source: 'X',
+      status: '草稿',
+      definition: '会话残留样本卡',
+      content: '### 核心思想\n本工程实测发现你的 shader 在 L182 行有问题。\n\n### 主干线\nx\n\n### 阶梯式解剖\n第 1 层\n第 2 层\n第 3 层\n第 4 层\n\n### 实例走查\nx\n\n### 易错点\nx\n\n### 自测题\n- **Q1**：a → b',
+    })
+    const id = /ID: (\d{12}_[0-9a-f]{4})/.exec(created.text)![1]
+    const report = await store.lint({ ref: id, rule: 'session-residue' })
+    expect(report).toContain('未通过')
+    expect(report).toContain('本工程')
+    // 白名单：球谐带 L0/L1/L2 与讲义引用不报
+    const clean = await store.create({
+      title: '白名单样本',
+      domain: '图形学与渲染',
+      source: 'X',
+      status: '草稿',
+      definition: '白名单样本卡',
+      content: '### 核心思想\nURP 的 SampleSH 只取 L0/L1/L2 三带（来源：GAMES101 L15）。\n\n### 主干线\nx\n\n### 阶梯式解剖\n第 1 层\n第 2 层\n第 3 层\n第 4 层\n\n### 实例走查\nx\n\n### 易错点\nx\n\n### 自测题\n- **Q1**：a → b',
+    })
+    const cleanId = /ID: (\d{12}_[0-9a-f]{4})/.exec(clean.text)![1]
+    expect(await store.lint({ ref: cleanId, rule: 'session-residue' })).toContain('✓ 通过')
+  })
+
+  test('card_history：list / dryRun / strip 端到端（版本块在关联卡片之前）', async () => {
+    const store = new VaultStore(layout())
+    const created = await store.create({
+      title: '版本块样本',
+      domain: '图形学与渲染',
+      source: 'X',
+      status: '草稿',
+      definition: '版本块样本卡',
+      content: '### 核心思想\nx\n\n### 关联卡片\n- 前置：`A`（id1）',
+    })
+    const id = /ID: (\d{12}_[0-9a-f]{4})/.exec(created.text)![1]
+    const updated = await store.update(id, { mode: 'append-version', source: 'L16', changes: '补充：A' })
+    expect(updated.indexOf('### 版本更新')).toBeLessThan(updated.indexOf('### 关联卡片'))
+    const file = join(dir, '游戏开发/图形学/版本块样本.md')
+    expect(await readFile(file, 'utf8')).toContain('### 版本更新（来源：L16）')
+
+    const listed = await store.history(id, 'list')
+    expect(listed).toContain('历史块 1 个')
+    expect(listed).toContain('[版本更新]')
+    const dry = await store.history(id, 'strip', { dryRun: true })
+    expect(dry).toContain('[dryRun]')
+    expect(await readFile(file, 'utf8')).toContain('### 版本更新（来源：L16）') // dryRun 不写盘
+    const stripped = await store.history(id, 'strip', {})
+    expect(stripped).toContain('已清除')
+    const after = await readFile(file, 'utf8')
+    expect(after).not.toContain('版本更新')
+    expect(after).toContain('- 前置：`A`（id1）')
+    // 无历史块时幂等
+    expect(await store.history(id, 'strip', {})).toContain('无历史块可清除')
+  })
+
+  test('card_rename：改标题 + 同步文件名 + 全库入链重写 + dryRun', async () => {
+    const store = new VaultStore(layout())
+    const a = await store.create({
+      title: 'URP IBL 接入',
+      domain: '图形学与渲染',
+      source: 'X',
+      status: '草稿',
+      definition: 'IBL 接入 = 环境侧喂数据 + shader 采样',
+      content: '### 核心思想\nx',
+    })
+    const idA = /ID: (\d{12}_[0-9a-f]{4})/.exec(a.text)![1]
+    const b = await store.create({
+      title: '间接光通道',
+      domain: '图形学与渲染',
+      source: 'X',
+      status: '草稿',
+      definition: '间接光分漫反射与镜面两个通道',
+      content: '### 核心思想\nx',
+      links: { next: [`\`URP IBL 接入\`（${idA}）`] },
+    })
+    const idB = /ID: (\d{12}_[0-9a-f]{4})/.exec(b.text)![1]
+    const bFile = join(dir, '游戏开发/图形学/间接光通道.md')
+    expect(await readFile(bFile, 'utf8')).toContain(`\`URP IBL 接入\`（${idA}）`)
+
+    // dryRun：不写盘
+    const dry = await store.rename(idA, 'URP IBL 接入与探针', { dryRun: true })
+    expect(dry).toContain('[dryRun]')
+    expect(dry).toContain('URP IBL 接入.md → URP IBL 接入与探针.md')
+    expect(await readFile(bFile, 'utf8')).toContain('`URP IBL 接入`')
+    expect(await readFile(join(dir, '游戏开发/图形学/URP IBL 接入.md'), 'utf8')).toContain('标题: URP IBL 接入')
+
+    const result = await store.rename(idA, 'URP IBL 接入与探针', {})
+    expect(result).toContain('已写入：游戏开发/图形学/URP IBL 接入与探针.md')
+    expect(result).toContain('断链检测：无')
+    const renamed = await readFile(join(dir, '游戏开发/图形学/URP IBL 接入与探针.md'), 'utf8')
+    expect(renamed).toContain('标题: URP IBL 接入与探针')
+    expect(renamed).toContain(`ID: ${idA}`)
+    expect(await readFile(bFile, 'utf8')).toContain(`\`URP IBL 接入与探针\`（${idA}）`)
+    // 旧文件已移除，检索到新标题
+    await expect(readFile(join(dir, '游戏开发/图形学/URP IBL 接入.md'), 'utf8')).rejects.toThrow()
+    const search = await store.search('URP IBL 接入与探针')
+    expect(search).toContain('URP IBL 接入与探针')
+    // 同标题冲突检测
+    await expect(store.rename(idB, 'URP IBL 接入与探针')).rejects.toThrow(/已存在同名卡片/)
+    // 同标题无改动
+    expect(await store.rename(idB, '间接光通道')).toContain('无改动')
+  })
+
+  test('card_rename：旧笔记（无 ID）拒绝改名', async () => {
+    await mkdir(join(extra, 'CS'), { recursive: true })
+    await writeFile(join(extra, 'CS/迭代器笔记.md'), '# 迭代器主要方法\n正文')
+    const store = new VaultStore({ ...layout(), searchRoots: [extra] })
+    await expect(store.rename(`${basename(extra)}/CS/迭代器笔记.md`, '新标题')).rejects.toThrow(/旧笔记/)
+  })
+
+  test('card_lint 跨卡洞察：cross 冲突 / trend 趋势 / rating 可执行性', async () => {
+    const store = new VaultStore(layout())
+    const make = (title: string, content: string) => store.create({
+      title,
+      domain: '图形学与渲染',
+      source: 'X',
+      status: '草稿',
+      definition: `${title} 的一句话定义`,
+      content,
+    })
+    await make('圆周率用法一', '### 阶梯式解剖\n| 常量 | 取值 |\n| :-- | :-- |\n| 圆周率 π | 3.14 |')
+    await make('圆周率用法二', '### 阶梯式解剖\n| 常量 | 取值 |\n| :-- | :-- |\n| 圆周率 π | 3.1416 |')
+    const cross = await store.lint({ scope: 'vault', cross: true })
+    expect(cross).toContain('跨卡一致性')
+    expect(cross).toContain('圆周率 π')
+    expect(cross).toContain('3.1416')
+    const trend = await store.lint({ scope: 'vault', trend: true })
+    expect(trend).toContain('质量趋势')
+    expect(trend).toContain('2026-W')
+    const rated = await store.lint({ scope: 'vault', rating: true })
+    expect(rated).toContain('可执行性分布')
+    // 单卡默认带可执行性评级
+    const single = await store.lint({ ref: '圆周率用法一' })
+    expect(single).toContain('可执行性：')
   })
 })
 

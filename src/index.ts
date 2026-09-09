@@ -14,9 +14,13 @@
 import { promises as fsp } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
-  addLink, applyUpdate, generateId, renderCard, renderMoc, stripMocDatePrefix, todayLocal, validateCard, VALID_STATUS,
+  addLink, applyUpdate, generateId, renderCard, renderMoc, resolveTemplate, stripMocDatePrefix, todayLocal, validateCard,
   type CardInput, type LinkKind, type MocEntry, type UpdatePayload,
 } from './card.ts'
+import { parseFrontmatter } from './frontmatter.ts'
+import { extractHistory, formatHistory, stripHistory, type HistoryKind } from './history.ts'
+import { crossCardConflicts, executabilityOf, executabilitySummary, formatConflicts, formatTrend, qualityTrend } from './insight.ts'
+import { formatBatch, formatReport, lintCard, ruleTitle, summarizeLint, type LintReport } from './lint.ts'
 import {
   AUTO_PREFS_KEY, checkMemoryValue, findProgressSentences, formatAutoPrefs, formatMemory,
   normalizeAutoPrefsValue, normalizeMemoryKey, readMemory, writeMemory, type MemoryState,
@@ -25,12 +29,17 @@ import {
   MANDATE, OPENER_SECTION_NAME, OPENER_SECTION_ORDER,
   applyOpenerDecision, buildOpenerReminder, hasPriorUserMessage, shouldInjectOpener,
 } from './opener.ts'
+import { cardTitleOf, detectBrokenLinks, formatRenameReport, planRename, replaceCardTitle, rewriteCardLinks, rewriteWikilinks } from './rename.ts'
 import { indexNote, SearchIndex, type IndexedCard, type SearchHit } from './search.ts'
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
+import { buildToolDefs, type ToolDef } from './tools.ts'
 import {
   atomicWrite, canonicalRootKey, cardDirFor, dedupeFiles, dedupeRoots, findSimilarDomainKeys, mocPathFor, resolveSearchRoots, sanitizeFilename, skipSetFor, uniqueCardPath, walkRoots, withinRoot,
   type SearchRoot, type VaultLayout,
 } from './vault.ts'
+
+export type { ToolDef, ToolExecLike } from './tools.ts'
+export { buildToolDefs } from './tools.ts'
 
 export const name = 'study-buddy'
 export const inject = ['tools']
@@ -54,24 +63,11 @@ export interface StudyConfig {
   includeSessionCwd?: boolean
   /** 是否允许把关联写入无 ID 的旧笔记，默认 false（旧笔记不碰不动；只写卡片侧） */
   linkIntoNotes?: boolean
-}
-
-interface ToolDef {
-  name: string
-  description: string
-  parameters: Record<string, unknown>
-  output: {
-    schema: { type: string }
-    render: (_args: unknown, value: string) => Array<{ type: string; text: string }>
+  /** lint 口径（可选）：residueLevel=off/warn/error（默认 warn），rulesOff=禁用的规则 id 列表 */
+  lint?: {
+    residueLevel?: 'off' | 'warn' | 'error'
+    rulesOff?: string[]
   }
-  isConcurrencySafe?: () => boolean
-  /** exec 由 DSH 工具注册表注入：调用方会话信息（agent.session.header.cwd） */
-  execute: (args: Record<string, unknown>, exec?: ToolExecLike) => Promise<string> | string
-}
-
-/** 工具方会话信息的最小结构类型（不引入 @deepseek-ai 类型，保持构建 external） */
-interface ToolExecLike {
-  agent?: { session?: { header?: { cwd?: string } } }
 }
 
 interface PluginContext {
@@ -82,9 +78,6 @@ interface PluginContext {
   /** Cordis 服务读取（systemPrompt 用；可选服务一律特性探测） */
   get?: (key: string) => unknown
 }
-
-const renderText = (_args: unknown, value: string) => [{ type: 'text', text: value }]
-const output = { schema: { type: 'string' as const }, render: renderText }
 
 function normalizeConfig(config: StudyConfig | undefined): VaultLayout {
   if (!config?.vaultRoot || !String(config.vaultRoot).trim()) {
@@ -107,12 +100,8 @@ function normalizeConfig(config: StudyConfig | undefined): VaultLayout {
     searchRoots: Array.isArray(config.searchRoots) ? config.searchRoots.map(String) : [],
     includeSessionCwd: config.includeSessionCwd === true,
     linkIntoNotes: config.linkIntoNotes === true,
+    lint: config.lint,
   }
-}
-
-function sessionCwdOf(exec?: ToolExecLike): string | undefined {
-  const cwd = exec?.agent?.session?.header?.cwd
-  return cwd && String(cwd).trim() ? String(cwd) : undefined
 }
 
 /** 引用解析：按路径/文件名取唯一候选；多个候选报歧义（提示根限定路径） */
@@ -246,7 +235,11 @@ export class VaultStore {
 
   async create(input: CardInput): Promise<{ text: string; rel: string }> {
     await this.assertVault()
-    const result = validateCard(input)
+    const mapped = this.layout.domainFolders?.[input.domain]
+    // 模板：显式 > 按领域目录族/标题推断；推断结果写入 frontmatter（可选字段，旧卡不强迁）
+    const resolved = resolveTemplate(input, { mappedFolder: mapped })
+    const card: CardInput = { ...input, template: resolved.type }
+    const result = validateCard(card, { mappedFolder: mapped })
     if (result.errors.length > 0) throw new Error(`卡片校验失败：${result.errors.join('；')}`)
     const warnings = [...result.warnings]
     const infoLines: string[] = []
@@ -256,14 +249,14 @@ export class VaultStore {
       warnings.push(`标题含非法字符/引号，已清洗为文件名「${baseName}」（实际文件名以"已写入"为准）`)
     }
     const id = generateId()
-    const text = renderCard({ ...input, id })
+    const text = renderCard({ ...card, id })
     const dir = cardDirFor(this.layout, input.domain)
     const dirRel = dir.slice(this.layout.vaultRoot.length + 1).replace(/\\/g, '/')
     // 领域键映射可见性：精确命中回显映射；未映射给出 fallback + 可用键列表 + 近似键建议
     const keys = Object.keys(this.layout.domainFolders ?? {})
-    const mapped = this.layout.domainFolders?.[input.domain]
     if (mapped) {
       infoLines.push(`领域映射：${input.domain} → ${dirRel}`)
+      infoLines.push(`模板：${resolved.type}${input.template ? '（显式）' : '（按领域/标题推断，可用 template 覆盖）'}`)
     } else if (keys.length > 0) {
       const similar = findSimilarDomainKeys(input.domain, keys)
       const simText = similar.length > 0
@@ -276,6 +269,7 @@ export class VaultStore {
       )
     } else {
       warnings.push(`领域键 "${input.domain}" 未配置映射（domainFolders 为空），已落 fallbackDir：${this.layout.fallbackDir}/${input.domain}`)
+      infoLines.push(`模板：${resolved.type}（按标题推断）`)
     }
     const file = await uniqueCardPath(dir, input.title, id)
     await atomicWrite(file, text)
@@ -288,7 +282,8 @@ export class VaultStore {
 
   async update(id: string, payload: UpdatePayload): Promise<string> {
     const { card, raw } = await this.resolveCard(id)
-    const result = applyUpdate(raw, card.id ?? id, payload)
+    const mappedFolder = payload.card?.domain ? this.layout.domainFolders?.[payload.card.domain] : undefined
+    const result = applyUpdate(raw, card.id ?? id, { ...payload, mappedFolder })
     await atomicWrite(card.path, result.text)
     this.sig = null
     const rel = card.rel.replace(/\\/g, '/')
@@ -366,6 +361,201 @@ export class VaultStore {
     await atomicWrite(file, text)
     const rel = file.slice(this.layout.vaultRoot.length + 1).replace(/\\/g, '/')
     return `MOC 已写入：${rel}（标题：${title}，日期：${date}）${skippedNotes.length ? `\n（旧笔记不收录：${skippedNotes.join('、')}）` : ''}\n\n${text}`
+  }
+
+  /** 单卡/批量质量体检（card_lint）+ 跨卡一致性 / 质量趋势 / 可执行性评级（P2） */
+  async lint(opts: {
+    ref?: string
+    scope?: 'vault' | 'all'
+    limit?: number
+    rule?: string
+    cross?: boolean
+    trend?: boolean
+    rating?: boolean
+  }, call?: { sessionCwd?: string }): Promise<string> {
+    const index = await this.refresh(call?.sessionCwd)
+    const ctx = {
+      knownDomains: Object.keys(this.layout.domainFolders ?? {}),
+      residueLevel: this.layout.lint?.residueLevel,
+      rulesOff: this.layout.lint?.rulesOff,
+    }
+    const reportOf = (raw: string, card: IndexedCard): LintReport => {
+      const parsed = parseFrontmatter(raw)
+      return lintCard({
+        title: parsed.meta?.title ?? card.title,
+        definition: card.definition ?? '',
+        body: parsed.body,
+        template: parsed.meta?.template,
+        tags: card.tags,
+      }, ctx)
+    }
+    if (opts.ref) {
+      const { card, raw } = await this.resolveCard(opts.ref, call?.sessionCwd)
+      const report = reportOf(raw, card)
+      if (opts.rule) {
+        const hits = report.findings.filter((f) => f.rule === opts.rule)
+        const passed = report.passed[opts.rule]
+        return `卡片：${report.title}  规则：${opts.rule}  ${passed ? '✓ 通过' : '✗/⚠ 未通过'}\n`
+          + (hits.length > 0 ? hits.map((f) => `  ${f.message}${f.suggestion ? `\n    建议：${f.suggestion}` : ''}`).join('\n') : '  （该规则无发现）')
+      }
+      const body = parseFrontmatter(raw).body
+      const rating = opts.rating === false ? '' : `\n  可执行性：${executabilityOf(body)}`
+      return `${formatReport(report)}${rating}`
+    }
+    const cards = index.all().filter((c) => (opts.scope === 'all' ? true : c.id !== null))
+    if (cards.length === 0) return '未找到可体检的卡片。'
+    const reports: LintReport[] = []
+    const titles: string[] = []
+    const bodies: string[] = []
+    const ids: Array<string | null> = []
+    for (const card of cards) {
+      let raw = ''
+      try {
+        raw = await fsp.readFile(card.path, 'utf8')
+      } catch {
+        continue
+      }
+      const report = reportOf(raw, card)
+      reports.push(report)
+      titles.push(card.fullRel)
+      bodies.push(parseFrontmatter(raw).body)
+      ids.push(card.id)
+    }
+    if (opts.rule) {
+      const hit = reports.filter((r) => r.findings.some((f) => f.rule === opts.rule))
+      const lines = [`规则 ${opts.rule}（${ruleTitle(opts.rule)}）：${hit.length}/${reports.length} 张卡命中`]
+      for (const r of hit.slice(0, opts.limit ?? 20)) {
+        for (const f of r.findings.filter((x) => x.rule === opts.rule)) lines.push(`  - ${r.title}：${f.message}`)
+      }
+      return lines.join('\n')
+    }
+    if (opts.cross) {
+      const groups = crossCardConflicts(bodies.map((body, i) => ({ label: titles[i], body })))
+      return formatConflicts(groups, opts.limit ?? 20)
+    }
+    if (opts.trend) {
+      return formatTrend(qualityTrend(reports.map((report, i) => ({ id: ids[i], report }))))
+    }
+    const parts = [formatBatch(summarizeLint(reports, titles), opts.limit ?? 20)]
+    if (opts.rating) {
+      const summary = executabilitySummary(bodies.map((body) => ({ body })))
+      parts.push(`可执行性分布：${summary.map((s) => `${s.rating} ${s.count} 张`).join('，')}`)
+    }
+    return parts.join('\n')
+  }
+
+  /** 版本更新 / 勘误 / 历史折叠块管理（card_history） */
+  async history(ref: string, action: 'list' | 'strip', opts: { kinds?: HistoryKind[]; dryRun?: boolean } = {}, call?: { sessionCwd?: string }): Promise<string> {
+    const { card, raw } = await this.resolveCard(ref, call?.sessionCwd)
+    const parsed = parseFrontmatter(raw)
+    const blocks = extractHistory(parsed.body)
+    if (action === 'list') {
+      return `卡片：${card.title}（${card.id ?? '旧笔记'}）历史块 ${blocks.length} 个\n${formatHistory(blocks)}`
+    }
+    if (action !== 'strip') throw new Error(`card_history 未知 action "${action}"（可用 list/strip）`)
+    const result = stripHistory(parsed.body, { kinds: opts.kinds })
+    if (opts.dryRun) {
+      return `[dryRun] 卡片：${card.title}，将删除 ${result.removed.length} 个历史块：\n${formatHistory(result.removed)}${result.warnings.length ? `\n提示：${result.warnings.join('；')}` : ''}`
+    }
+    if (result.removed.length === 0) {
+      return `卡片：${card.title} 无历史块可清除。${result.warnings.length ? `\n提示：${result.warnings.join('；')}` : ''}`
+    }
+    const head = raw.slice(0, raw.length - parsed.body.length)
+    await atomicWrite(card.path, `${head}${result.text}\n`)
+    this.sig = null
+    const warn = result.warnings.length > 0 ? `\n提示：${result.warnings.join('；')}` : ''
+    return `已清除：${card.rel.replace(/\\/g, '/')}（删除 ${result.removed.length} 个历史块）\n${formatHistory(result.removed)}${warn}`
+  }
+
+  /** 改标题并同步文件名 / 全库入链 / 断链检测（card_rename） */
+  async rename(ref: string, newTitle: string, opts: { dryRun?: boolean; sessionCwd?: string } = {}): Promise<string> {
+    const { card, raw } = await this.resolveCard(ref, opts.sessionCwd)
+    if (card.id === null) {
+      throw new Error(`"${card.title}" 是旧笔记（无 ID），不支持改名；请用 Obsidian 重命名，或用 card_update(replace) 原地升级为卡片`)
+    }
+    const title = String(newTitle ?? '').trim()
+    if (!title) throw new Error('newTitle 不能为空')
+    const oldTitle = cardTitleOf(raw) || card.title
+    if (title === oldTitle) return `新标题与旧标题相同（${title}），无改动。`
+    const index = await this.refresh(opts.sessionCwd)
+    const clash = index.byTitle(title)
+    if (clash && clash.id !== card.id) throw new Error(`已存在同名卡片 "${title}"（${clash.fullRel}），请换标题`)
+    const plan = planRename({ fileName: card.fileName, oldTitle, newTitle: title })
+    const rewritten = replaceCardTitle(raw, title)
+    const selfRewrite = rewriteCardLinks(parseFrontmatter(rewritten).body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
+    const selfText = `${rewritten.slice(0, rewritten.length - parseFrontmatter(rewritten).body.length)}${selfRewrite.text}`
+    const changed: Array<{ rel: string; kind: string; changed: number; samples: string[] }> = [
+      { rel: card.fullRel, kind: '本卡标题', changed: 1, samples: [`${oldTitle} → ${title}`] },
+    ]
+    if (selfRewrite.changed > 0) changed.push({ rel: card.fullRel, kind: '本卡关联卡片', changed: selfRewrite.changed, samples: selfRewrite.samples })
+    // 全库扫描入链：只写 vault 内文件（searchRoots / 工作目录只读）
+    const roots = this.rootsFor(opts.sessionCwd)
+    const files = dedupeFiles(await walkRoots(roots, skipSetFor(this.layout.skipDirs)))
+    const writes: Array<{ path: string; text: string }> = []
+    const broken: ReturnType<typeof detectBrokenLinks> = []
+    for (const file of files) {
+      if (canonicalRootKey(file.path) === canonicalRootKey(card.path)) continue
+      let content = ''
+      try {
+        content = await fsp.readFile(file.path, 'utf8')
+      } catch {
+        continue
+      }
+      const parsed = parseFrontmatter(content)
+      const isCard = Boolean(parsed.meta?.id)
+      const linkRewrite = rewriteCardLinks(parsed.body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
+      let nextBody = linkRewrite.text
+      let changedCount = linkRewrite.changed
+      const samples = [...linkRewrite.samples]
+      // MOC 用文件名建链：卡片文件内的 wikilink 同步（旧笔记按文件名寻址，不动）
+      if (isCard) {
+        const wiki = rewriteWikilinks(nextBody, plan.oldBase, plan.newBase)
+        nextBody = wiki.text
+        changedCount += wiki.changed
+        samples.push(...wiki.samples)
+      }
+      if (changedCount === 0) continue
+      const head = content.slice(0, content.length - parsed.body.length)
+      const target = `${head}${nextBody}`
+      if (file.root !== 'vault') {
+        // 只读根：报告但不写
+        changed.push({ rel: file.rel, kind: `只读根(${file.root}) 未写入`, changed: changedCount, samples })
+        continue
+      }
+      if (opts.dryRun) {
+        changed.push({ rel: file.rel.replace(/\\/g, '/'), kind: isCard ? '卡片入链' : '文档入链', changed: changedCount, samples })
+        continue
+      }
+      writes.push({ path: file.path, text: target })
+      changed.push({ rel: file.rel.replace(/\\/g, '/'), kind: isCard ? '卡片入链' : '文档入链', changed: changedCount, samples })
+      broken.push(...detectBrokenLinks(nextBody, { oldTitle, oldId: card.id ?? undefined, newTitle: title }))
+    }
+    if (opts.dryRun) {
+      return formatRenameReport({ id: card.id, oldTitle, newTitle: title, plan, filesChanged: changed, broken, dryRun: true })
+    }
+    await atomicWrite(card.path, `${selfText}\n`)
+    for (const write of writes) await atomicWrite(write.path, write.text)
+    let finalRel = card.rel.replace(/\\/g, '/')
+    if (plan.renameFile) {
+      const targetPath = join(card.path.slice(0, card.path.length - card.fileName.length), `${plan.newBase}.md`)
+      if (canonicalRootKey(targetPath) !== canonicalRootKey(card.path)) {
+        if (await this.fileExists(targetPath)) throw new Error(`目标文件名已存在：${plan.newBase}.md（请先处理同名文件）`)
+        await atomicWrite(targetPath, `${selfText}\n`)
+        await fsp.rm(card.path, { force: true })
+        finalRel = targetPath.slice(this.layout.vaultRoot.length + 1).replace(/\\/g, '/')
+      }
+    }
+    this.sig = null
+    return `${formatRenameReport({ id: card.id, oldTitle, newTitle: title, plan, filesChanged: changed, broken, dryRun: false })}\n已写入：${finalRel}`
+  }
+
+  private async fileExists(path: string): Promise<boolean> {
+    try {
+      await fsp.access(path)
+      return true
+    } catch {
+      return false
+    }
   }
 
   async progress(action: string, fields: {
@@ -469,273 +659,6 @@ function fmtProgress(state: ProgressState): string {
   const q = state.pendingQuestions?.length ? state.pendingQuestions.join('；') : '无'
   const c = state.touchedCardIds?.length ? state.touchedCardIds.join('、') : '无'
   return `位置：${pos}\n追问：${q}\n卡片：${c}`
-}
-
-export function buildToolDefs(store: VaultStore): ToolDef[] {
-  return [
-    {
-      name: 'card_search',
-      description:
-        '全库检索 vault 卡片与旧笔记（含配置 searchRoots 与工作目录旧笔记——旧笔记=无 ID 的 .md）。'
-        + '摄入新资料、引用旧卡、增量更新判断前必查重叠。'
-        + '返回候选的标题/ID/类型（卡片或旧笔记）/路径/领域/状态/来源/定义/片段；召回由插件做，语义判断由你完成。',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: '检索词（概念/术语/标题片段）' },
-          domain: { type: 'string', description: '领域过滤（如 图形学）' },
-          status: { type: 'string', description: '状态过滤：草稿/已确认/需更新' },
-          kind: { type: 'string', enum: ['card', 'note'], description: '类型过滤：card=卡片，note=旧笔记' },
-          limit: { type: 'number', description: '返回条数，默认 5' },
-        },
-        required: ['query'],
-      },
-      output,
-      isConcurrencySafe: () => true,
-      execute: (args, exec) => store.search(String(args.query ?? ''), {
-        domain: args.domain ? String(args.domain) : undefined,
-        status: args.status ? String(args.status) : undefined,
-        kind: args.kind === 'card' || args.kind === 'note' ? args.kind : undefined,
-        limit: Number(args.limit) > 0 ? Number(args.limit) : undefined,
-      }, { sessionCwd: sessionCwdOf(exec) }),
-    },
-    {
-      name: 'card_get',
-      description: '按 ID、标题、根限定路径（如 "工作目录/子目录/笔记.md"）、相对路径或文件名读取一篇文档的完整原文（卡片或旧笔记）。',
-      parameters: {
-        type: 'object',
-        properties: {
-          ref: { type: 'string', description: '卡片 ID、标题或路径/文件名（跨根路径歧义时用"根/相对路径"）' },
-        },
-        required: ['ref'],
-      },
-      output,
-      isConcurrencySafe: () => true,
-      execute: (args, exec) => store.get(String(args.ref ?? ''), { sessionCwd: sessionCwdOf(exec) }),
-    },
-    {
-      name: 'card_id',
-      description:
-        '生成卡片 ID（YYYYMMDDHHmm_随机4位）。注意：card_create 会自动生成 ID，不消费本工具的预取值——'
-        + '需要引用时以 card_create 返回的 ID 为准；本工具仅用于查看 ID 格式。',
-      parameters: {
-        type: 'object',
-        properties: {
-          count: { type: 'number', description: '数量，默认 1，上限 20' },
-        },
-      },
-      output,
-      isConcurrencySafe: () => true,
-      execute: (args) => {
-        const n = Math.min(Math.max(1, Math.trunc(Number(args?.count) || 1)), 20)
-        return Array.from({ length: n }, () => generateId()).join('\n')
-      },
-    },
-    {
-      name: 'card_create',
-      description:
-        '把一张原子卡片写入 vault 对应分类目录（领域→目录映射；未映射落"未分类"并回显可用领域键与近似键建议）。知识即卡片：与旧笔记同库。'
-        + '自动生成唯一 ID、写 frontmatter（ID/标题/领域/来源/状态）；正文=裸引用块定义+自由 ### 小节+关联卡片（前置/后续/易混淆），格式见 card-format 技能。'
-        + '返回整卡；返回文本含"领域映射"行（键 → 目录）与标题清洗提示（非法字符/引号会被清洗，文件名以返回的 rel 为准）。',
-      parameters: {
-        type: 'object',
-        properties: {
-          title: { type: 'string', description: '概念名称，如"光线与表面的两种交互：散射与吸收"（避免 / \\ : * ? " < > | 与引号；会被自动清洗）' },
-          domain: { type: 'string', description: '领域键，决定落盘目录（键名表见 card-format 技能；未映射会回显可用键与近似键）' },
-          tags: { type: 'array', items: { type: 'string' }, description: '额外中文领域标签' },
-          source: { type: 'string', description: '资料名称' },
-          status: { type: 'string', enum: [...VALID_STATUS], description: '草稿/已确认/需更新' },
-          definition: { type: 'string', description: '一句话定义：≤30 字最佳，≤60 字硬上限（31~60 字仅提示精简）' },
-          content: {
-            type: 'string',
-            description: '正文 Markdown（阶梯式解剖模板五小节：### 核心思想 / ### 阶梯式解剖 / ### 实例走查 / ### 易错点 / ### 自测题，缺一警告；公式块级 LaTeX 编号；代码标语言）',
-          },
-          links: {
-            type: 'object',
-            description: '关联卡片（可预格式化，如"`漫反射模型`（Lambert）"）',
-            properties: {
-              prev: { type: 'array', items: { type: 'string' }, description: '前置' },
-              next: { type: 'array', items: { type: 'string' }, description: '后续' },
-              conflict: { type: 'array', items: { type: 'string' }, description: '易混淆' },
-            },
-          },
-        },
-        required: ['title', 'domain', 'source', 'status', 'definition', 'content'],
-      },
-      output,
-      execute: (args) => store.create({
-        title: String(args.title ?? ''),
-        domain: String(args.domain ?? ''),
-        source: String(args.source ?? ''),
-        status: String(args.status ?? ''),
-        definition: String(args.definition ?? ''),
-        content: String(args.content ?? ''),
-        tags: Array.isArray(args.tags) ? args.tags.map(String) : undefined,
-        links: (args.links && typeof args.links === 'object'
-          ? {
-            prev: Array.isArray((args.links as Record<string, unknown>).prev) ? ((args.links as Record<string, unknown>).prev as unknown[]).map(String) : undefined,
-            next: Array.isArray((args.links as Record<string, unknown>).next) ? ((args.links as Record<string, unknown>).next as unknown[]).map(String) : undefined,
-            conflict: Array.isArray((args.links as Record<string, unknown>).conflict) ? ((args.links as Record<string, unknown>).conflict as unknown[]).map(String) : undefined,
-          }
-          : undefined),
-      }).then((r) => r.text),
-    },
-    {
-      name: 'card_update',
-      description:
-        '增量更新：append-version=尾部加"版本更新（来源）"（补充不推翻旧结论）；errata=保留旧内容加"勘误"（changes 含纠正原因）；'
-        + 'definition=只替换一句话定义（字段级微调：不重传正文、不产生历史折叠，不算知识更新）；'
-        + 'replace=整卡替换（旧版入历史折叠块，可传 links 重建关联卡片）。先给用户新旧对比、确认后才调用；决定权在用户。返回整卡。',
-      parameters: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: '卡片 ID/标题/路径' },
-          mode: { type: 'string', description: 'append-version/errata/definition/replace' },
-          changes: { type: 'string', description: 'append/errata 的追加内容' },
-          source: { type: 'string', description: '版本更新来源（append-version 用）' },
-          title: { type: 'string', description: 'replace：新标题' },
-          domain: { type: 'string', description: 'replace：领域键' },
-          tags: { type: 'array', items: { type: 'string' }, description: 'replace：额外领域标签' },
-          status: { type: 'string', enum: [...VALID_STATUS], description: 'replace：草稿/已确认/需更新' },
-          definition: { type: 'string', description: 'definition/replace：一句话定义（≤30 字最佳，≤60 字硬上限）' },
-          content: { type: 'string', description: 'replace：新正文 Markdown（同 card_create：阶梯式解剖模板五小节）' },
-          links: {
-            type: 'object',
-            description: 'replace：新关联卡片（可选；不传则新卡无关联小节，旧关联留在历史折叠块）',
-            properties: {
-              prev: { type: 'array', items: { type: 'string' }, description: '前置' },
-              next: { type: 'array', items: { type: 'string' }, description: '后续' },
-              conflict: { type: 'array', items: { type: 'string' }, description: '易混淆' },
-            },
-          },
-        },
-        required: ['id', 'mode'],
-      },
-      output,
-      execute: (args) => {
-        const mode = String(args.mode ?? '')
-        const payload: UpdatePayload = { mode: mode as UpdatePayload['mode'] }
-        if (mode === 'append-version' || mode === 'errata') {
-          payload.changes = args.changes ? String(args.changes) : undefined
-          if (mode === 'append-version' && args.source) payload.source = String(args.source)
-        }
-        if (mode === 'definition') {
-          payload.definition = args.definition ? String(args.definition) : undefined
-        }
-        if (mode === 'replace') {
-          payload.card = {
-            title: String(args.title ?? ''),
-            domain: String(args.domain ?? ''),
-            source: String(args.source ?? ''),
-            status: String(args.status ?? ''),
-            definition: String(args.definition ?? ''),
-            content: String(args.content ?? ''),
-            tags: Array.isArray(args.tags) ? args.tags.map(String) : undefined,
-            links: (args.links && typeof args.links === 'object'
-              ? {
-                prev: Array.isArray((args.links as Record<string, unknown>).prev) ? ((args.links as Record<string, unknown>).prev as unknown[]).map(String) : undefined,
-                next: Array.isArray((args.links as Record<string, unknown>).next) ? ((args.links as Record<string, unknown>).next as unknown[]).map(String) : undefined,
-                conflict: Array.isArray((args.links as Record<string, unknown>).conflict) ? ((args.links as Record<string, unknown>).conflict as unknown[]).map(String) : undefined,
-              }
-              : undefined),
-          }
-        }
-        return store.update(String(args.id ?? ''), payload)
-      },
-    },
-    {
-      name: 'card_link',
-      description:
-        '维护两篇文档的关联（前置/后续/易混淆），双向写入卡片侧。'
-        + '无 ID 的旧笔记默认不写入（旧笔记不碰不动）：卡片↔旧笔记只写卡片侧；旧笔记↔旧笔记需 config.linkIntoNotes 开启。',
-      parameters: {
-        type: 'object',
-        properties: {
-          fromId: { type: 'string', description: '卡片 ID/标题/路径（旧笔记用"工作目录/相对路径"）' },
-          toId: { type: 'string', description: '卡片 ID/标题/路径' },
-          kind: { type: 'string', description: 'prev=toId 是 fromId 的前置 / next=后续 / conflict=易混淆' },
-        },
-        required: ['fromId', 'toId', 'kind'],
-      },
-      output,
-      execute: (args, exec) => {
-        const kind = String(args.kind ?? '') as LinkKind
-        if (!['prev', 'next', 'conflict'].includes(kind)) throw new Error('kind 必须是 prev / next / conflict')
-        return store.link(String(args.fromId ?? ''), String(args.toId ?? ''), kind, { sessionCwd: sessionCwdOf(exec) })
-      },
-    },
-    {
-      name: 'card_moc',
-      description:
-        '生成 MOC（领域分组 + Obsidian wikilink）写入"目录"目录并返回文本。归档收尾时用：传本次涉及的卡片 ID。'
-        + '只收录有 ID 的卡片，旧笔记自动跳过。'
-        + 'title 只传主题名（如 "图形学 MOC 目录"）——日期前缀与文件名由工具自动生成（文件名 = 日期_标题.md），'
-        + '返回文本回显 文件名/标题/日期；标题带日期前缀会被自动剥离，勿再手写日期。',
-      parameters: {
-        type: 'object',
-        properties: {
-          title: { type: 'string', description: 'MOC 主题名，只写主题（如 图形学 MOC 目录；默认 知识目录，日期由工具自动生成）' },
-          cardIds: { type: 'array', items: { type: 'string' }, description: '本次涉及的卡片 ID/标题' },
-          domain: { type: 'string', description: '可选：只收录该领域' },
-        },
-        required: ['cardIds'],
-      },
-      output,
-      execute: (args, exec) => store.moc({
-        title: args.title ? String(args.title) : undefined,
-        cardIds: Array.isArray(args.cardIds) ? args.cardIds.map(String) : [],
-        domain: args.domain ? String(args.domain) : undefined,
-      }, { sessionCwd: sessionCwdOf(exec) }),
-    },
-    {
-      name: 'study_progress',
-      description:
-        '读写学习进度（持久，跨会话有效）：资料/小节/未答追问/触及卡片。'
-        + '"接着讲"前 get；小节推进 set；归档（整理笔记）前检查 pendingQuestions。',
-      parameters: {
-        type: 'object',
-        properties: {
-          action: { type: 'string', description: 'get/set/clear' },
-          material: { type: 'string', description: 'set：资料名' },
-          section: { type: 'string', description: 'set：小节' },
-          pendingQuestions: { type: 'array', items: { type: 'string' }, description: 'set：追问队列（整体替换）' },
-          touchedCardIds: { type: 'array', items: { type: 'string' }, description: 'set：触及卡片 ID（整体替换）' },
-        },
-        required: ['action'],
-      },
-      output,
-      execute: (args) => store.progress(String(args.action ?? 'get'), {
-        material: args.material ? String(args.material) : undefined,
-        section: args.section ? String(args.section) : undefined,
-        pendingQuestions: Array.isArray(args.pendingQuestions) ? args.pendingQuestions.map(String) : undefined,
-        touchedCardIds: Array.isArray(args.touchedCardIds) ? args.touchedCardIds.map(String) : undefined,
-      }),
-    },
-    {
-      name: 'study_memory',
-      description:
-        '读写跨会话记忆（vault .study/memory.json，持久有效，重启不丢）：键值笔记。'
-        + '新会话开场先 get（配合 study_progress(get) 给衔接提示）；用户偏好/约定存 prefs 键；'
-        + '告一段落或归档时 set lastSummary=本次小结。清空进度（study_progress clear）不影响记忆。'
-        + 'get 全量输出会对含"现学/正在学"等进度句的键给出过期提示——进度位置以 study_progress 为准（单一来源）。'
-        + '保留控制键 _autoPrefs（自迭代记忆开关，值 on/off，默认关闭）：set 切换、remove 回默认、不支持 append；'
-        + '开启后无需用户"请记住"，按 memory-auto 技能把持久偏好/约定自动写入 prefs.* 键（每类约定一个键、覆盖更新）。',
-      parameters: {
-        type: 'object',
-        properties: {
-          action: { type: 'string', description: 'get（key 可选，默认全量）/set/append/remove/clear' },
-          key: { type: 'string', description: '记忆键名（≤64 字符；lastSummary=上次小结，置顶显示；_autoPrefs=自迭代开关，值 on/off）' },
-          value: { type: 'string', description: 'set/append：记忆内容（≤4000 字符）' },
-        },
-        required: ['action'],
-      },
-      output,
-      execute: (args) => store.memory(String(args.action ?? 'get'), {
-        key: args.key !== undefined && args.key !== null ? String(args.key) : undefined,
-        value: args.value !== undefined && args.value !== null ? String(args.value) : undefined,
-      }),
-    },
-  ]
 }
 
 export function apply(ctx: PluginContext, config?: StudyConfig): void {

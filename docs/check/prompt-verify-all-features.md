@@ -23,17 +23,27 @@
 
 ## 2 · 卡片生命周期（card_id / card_create / card_update / card_link / card_moc）
 8. `card_id` 生成 3 个：核对 `YYYYMMDDHHmm_xxxx` 格式。
-9. `card_create` 一张**映射领域**卡：标题以 `【验证】` 开头、定义 ≤30 字；核对落盘目录 = 映射目录、返回含 ID。
+9. `card_create` 一张**映射领域**卡：标题以 `【验证】` 开头、定义 ≤30 字；核对落盘目录 = 映射目录、返回含 ID 与 `模板：…` 行。
 10. `card_create` 一张**未映射领域**卡（domain 用 `验证专用`）：核对落入 `未分类/验证专用/`。
 11. `card_create` 传空 title：应报“卡片校验失败”（fail-loud，不落盘）。
 12. `card_search` 检索第 9 步的卡：核对结果含 `- 定义：` 行。
-13. `card_update` append-version：尾部出现 `### 版本更新（来源：…）`，旧内容保留。
-14. `card_update` errata：出现 `### 勘误`，旧结论保留。
+13. `card_update` append-version：出现 `### 版本更新（来源：…）`，旧内容保留，**且该小节位于 `### 关联卡片` 之前**。
+14. `card_update` errata：出现 `### 勘误`，旧结论保留，同样在关联卡片之前。
 15. `card_update` replace（带 `links` 传 prev/next）：标题/状态更新、旧版进“历史版本”折叠块、新卡含关联小节。
-16. `card_link` prev / next / conflict 三向各一次：核对两卡**双向**更新。
-17. 对同一对卡重复 `card_link` 同 kind：核对不产生重复行（按 ID 去重）。
+16. `card_link` prev / next / conflict 三向各一次：核对两卡**双向**更新、关联行格式为 `` - 标签：`标题`（ID） ``。
+17. 对同一对卡重复 `card_link` 同 kind：核对不产生重复行（按标题或 ID 任一命中去重）。
 18. `card_link` 传非法 kind（如 `sideways`）：应报错。
 19. `card_moc` 传入本次涉及卡片 ID：核对按领域分组 + Obsidian wikilink + 落入 `目录/` 目录。
+
+## 2b · 卡片维护三件套（card_lint / card_history / card_rename）
+19a. `card_lint` 单卡（第 9 步的卡）：核对输出含 `模板：`、`总分：`、逐项 ✓/⚠ 与建议。
+19b. `card_lint` 传一条不满足的规则（如 `rule: "session-residue"`）：核对“未通过”与命中行。
+19c. `card_lint` 批量 `scope: "vault"`：核对返回均分、分数分布、规则命中、最低分明细。
+19d. `card_lint` `cross: true` / `trend: true` / `rating: true`：核对分别返回冲突组 / 周均分 / 可执行性分布。
+19e. `card_history` `action: "list"`：核对列出第 13/14 步产生的版本块与勘误。
+19f. `card_history` `action: "strip"` + `dryRun: true`：核对只报告不写盘；再去掉 dryRun 执行：核对历史块消失、正文与关联保留。
+19g. `card_rename`（对第 9 步的卡，先 `dryRun: true`）：核对返回文件名变更与入链清单且未写盘；再正式执行：核对文件已改名、另一张引用它的卡入链同步、`card_search` 用新标题能命中。
+19h. `card_rename` 传旧笔记（无 ID）：应报“旧笔记…不支持改名”。
 
 ## 3 · 进度与记忆（study_progress / study_memory）
 20. `study_progress` set（material/section/pendingQuestions/touchedCardIds 全字段）→ get 核对 → clear 核对。
