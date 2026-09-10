@@ -4,7 +4,9 @@
 >
 > 📖 完整上手请读 [docs/用户使用指南.md](docs/用户使用指南.md)：安装部署、逐键配置详解、全部 12 个工具参考、卡片格式规范、Obsidian 配合、检索技巧与故障排查手册。
 >
-> 🧭 其他文档：[设计文档](docs/设计文档.md)（为什么这样设计）· [技术文档](docs/技术文档.md)（API / 规则 / 配置 / 测试）· [经验文档](docs/经验文档.md)（本轮踩坑与可复用技巧）· [归档索引](docs/archive/README.md)（历史提案与复盘）
+> 🗺️ 文档地图见 [docs/README.md](docs/README.md)（哪份文档负责什么、改代码要同步哪些文档）· 🧭 其他文档：[设计文档](docs/设计文档.md)（为什么这样设计）· [技术文档](docs/技术文档.md)（API / 规则 / 配置 / 测试）· [经验文档](docs/经验文档.md)（踩坑与可复用技巧）· [审查报告](docs/review/README.md)（2026-09 两轮审查与修复状态）· [归档索引](docs/archive/README.md)（历史提案与复盘）
+>
+> 版本基线：v0.9.1 ｜ 协议：MIT ｜ 逐版变更见 [更新记录](#更新记录)
 
 ## 特性
 
@@ -22,11 +24,11 @@
 - **指令驱动（听指挥）**：读取 ≠ 讲解——"读取 X"只输出读取报告，说"讲解"才开始讲；读取 PDF/PNG/PPT 等文件走内置 `file-reading` 技能（PDF/PPTX/DOCX 的**内嵌图片自动提取**并逐张 `read_image`，不漏掉课件里的图），不摸索工具
 - **MOC 知识目录**：归档时自动生成按领域分组的知识地图
 - **轻量**：每次请求固定开销约 15KB（比标准模式低 ~30%）；技能按需加载；会话早期自动压缩历史（阈值 30%）
-- 261 项单元测试覆盖卡片渲染、检索索引（含多根旧笔记）、增量更新、进度与记忆持久化、原子写与路径安全、以及两轮审查修复回归
+- 263 项单元测试覆盖卡片渲染、检索索引（含多根旧笔记）、增量更新、进度与记忆持久化、原子写与路径安全、两轮审查修复回归，以及文档链接/锚点与版本基线守卫
 
 ## 更新记录
 
-- **v0.9.1（2026-09-10）— 复审（`docs/review/07`）N1~N15 修复**：① `card_link` 一侧位于只读检索根时**先校验后写盘**（旧实现先写 A 再在 B 处报错，留下单向入链）——改为两侧全部规划完再落盘，中途失败按写前内容回滚；② `card_create` 不再为同名提示触发全库重扫（改 `titleHints` O(1) 查询，1000 卡从 232~265ms/次回到 ~0 额外 IO）；③ 索引 TTL 的可见性回归修复：**未命中/找不到卡片的路径强制重扫一次**，Obsidian 里刚写的笔记立即可搜；④ 其余 12 项 nit：`addLink` 无尾换行粘行、`⚠ 跳过 N 项`按**原因**分组且 `card_moc` 也回显、`maxWalkFiles` 可配置且超限改为**截断 + 警告**（不再让全部工具失败）、`residueLevel:'off'` 不再误报"✓ 通过"、`sectionHints` 投入使用、分数桶封顶 100、`inlineText` 不再压空格、`rulesOff` 未知 id 挂载即报错、`card_history` 透传会话 cwd、含 `[]` 的历史文件名改名同步、`planRename` 同口径归一、ID 回退后缀取末 6 位。测试 248 → 261；逐条状态见 `docs/review/README.md` §八。
+- **v0.9.1（2026-09-10）— 复审（`docs/review/07`）N1~N15 修复**：① `card_link` 一侧位于只读检索根时**先校验后写盘**（旧实现先写 A 再在 B 处报错，留下单向入链）——改为两侧全部规划完再落盘，中途失败按写前内容回滚；② `card_create` 不再为同名提示触发全库重扫（改 `titleHints` O(1) 查询，1000 卡从 232~265ms/次回到 ~0 额外 IO）；③ 索引 TTL 的可见性回归修复：**未命中/找不到卡片的路径强制重扫一次**，Obsidian 里刚写的笔记立即可搜；④ 其余 12 项 nit：`addLink` 无尾换行粘行、`⚠ 跳过 N 项`按**原因**分组且 `card_moc` 也回显、`maxWalkFiles` 可配置且超限改为**截断 + 警告**（不再让全部工具失败）、`residueLevel:'off'` 不再误报"✓ 通过"、`sectionHints` 投入使用、分数桶封顶 100、`inlineText` 不再压空格、`rulesOff` 未知 id 挂载即报错、`card_history` 透传会话 cwd、含 `[]` 的历史文件名改名同步、`planRename` 同口径归一、ID 回退后缀取末 6 位。另新增 `tests/docs.spec.ts`（文档链接/锚点 + 版本基线守卫）与 `docs/README.md`（文档地图）。测试 248 → 263；逐条状态见 `docs/review/README.md` §八。
 - **v0.9.0（2026-09-10）— 依据 `docs/review/` 的审查修复**：3 个 blocker 全部修复（`card_history strip` 行号漂移会删错正文 → 改「先删 `<details>` 再按段落模型过滤小节」；标题/定义含换行会截断 frontmatter → 入口拒绝 + 渲染兜底；`card_rename` 冲突校验在所有写入之后 → 拆「先校验后提交 + 失败回滚」）。另修复 15 个 warning 与 12 个 nit：`card_update` 透传会话 cwd、`scope=all` 旧笔记只体检通用规则、禁用规则时不再报"未通过"、关联判重限关联卡片小节、读取失败计数回显、同名卡提示、`hasPriorUserMessage` 兑现兜底、断链检测对象纠正、跨盘符根守卫（`isFsRoot`）、`[`/`]` 与设备名清洗、记忆保留键拒绝、外部资源 info 规则、ID 6 位 hex、进度队列上限等。可维护性/性能：lint 规则收敛为 `RULES` 注册表 + 规格驱动（删除与 `template-sections` 重复的 `walkthrough`，新增 `external-resource`）、索引 TTL（`indexTtlMs`）、批量 lint 复用索引正文、`rename` 索引预筛、`matchAll`/`makeLineOf`/Map 索引。工具仍 12 个，测试 209 → 248；逐条修复状态见 `docs/review/README.md` §七。
 - **v0.8.0（2026-09-10）— P1/P2 收口**：模板分型（理论型/工程型/对比型，自动推断 + `template` 覆盖）与四个新小节（重入点/前置检查/验证实验/排障判据）落进代码与文档；`card_lint` 增 `cross`（跨卡一致性）/`trend`（质量趋势）/`rating`（可执行性评级）三个分析开关；persona、card-format、study-loop、incremental-update、用户指南、README 全面同步"正文不设字数上限 + 反堆砌三规则"。测试 203 → 209。
 - **v0.6.0（2026-09-10）— 卡片质量可检测（P0）**：依据重设计提案（现归档于 `docs/archive/design/`）完成框架重设计与 P0 全部 6 项——① 新增 `card_lint`（14 条规则打分：会话残留/模板小节/主干线/重入点/验证实验/排障判据/代码块语言/自测题答案率/层级序号/关联块格式/领域标签…，全部警告级）；② 会话残留规则集含白名单（`L0/L1/L2` 球谐带、`GAMES101 L15` 讲义引用、代码块与 `<details>` 内不扫）；③ `append-version`/`errata` 改为插在「关联卡片」**之前**（阅读顺序不再被破坏）；④ 新增 `card_history`（list/strip + `<details>` 配对校验）；⑤ 新增 `card_rename`（改标题同步文件名 + 全库入链 + 断链检测 + dryRun）；⑥ 关联块归一为 `` - 前置：`标题`（ID） ``，去重改为"标题或 ID 任一命中即跳过"。工具 9 → 12，测试 136 → 201；新增 `src/cardmodel.ts`（段落模型）/`src/template.ts`（模板注册表）/`src/lint.ts`（规则引擎）/`src/history.ts`/`src/rename.ts`/`src/tools.ts`。
@@ -136,7 +138,7 @@ ID: 202608161430_ab12
 git clone https://github.com/V-Reason/dsh-study-buddy.git
 cd dsh-study-buddy
 pnpm install
-pnpm run check          # typecheck + 248 项测试 + 构建 lib/index.js
+pnpm run check          # typecheck + 263 项测试 + 构建 lib/index.js
 
 # 2. 把插件装进你的 DSH profile（<profileDir> 通常是 %DSH_HOME%\profiles\web）
 #    在 <profileDir>\package.json 的 dependencies 里加入：
@@ -217,7 +219,7 @@ Copy-Item -Recurse presets/study "$env:DSH_HOME\.agent-presets\study"
 
 ```bash
 pnpm install
-pnpm run check     # typecheck + vitest（261 项）+ esbuild 构建
+pnpm run check     # typecheck + vitest（263 项）+ esbuild 构建
 ```
 
 - 源码在 `src/`（零运行时依赖，仅 Node 内置模块），构建产物 `lib/index.js`（`@deepseek-ai/*` 保持 external）
@@ -229,7 +231,7 @@ pnpm run check     # typecheck + vitest（261 项）+ esbuild 构建
 ```
 dsh-study-buddy/
 ├── src/                 # 插件源码（vault 适配 / 检索索引 / 卡片模型 / 模板 / lint / 历史块 / 改名 / 工具 / 入口）
-├── tests/               # 261 项单元与端到端测试
+├── tests/               # 263 项单元与端到端测试
 ├── presets/study/       # 「学习」Agent 预设（persona + 工具行 + 6 个技能）
 │   └── skills/          # file-reading / study-loop / card-format / incremental-update / domain-adaptation / memory-auto
 ├── docs/                # 当前文档：用户使用指南、设计文档、技术文档、经验文档

@@ -9,7 +9,7 @@
 2. **已取代**：内容被更新版本文档覆盖（如卡片格式规范 → `presets/study/skills/card-format/SKILL.md`）；
 3. **仅供溯源**：需求/设计的历史原稿，保留用于解释"为什么当初这样设计"。
 
-**不归档**：当前文档——操作手册 `docs/用户使用指南.md`、设计文档 `docs/设计文档.md`、
+**不归档**：当前文档——文档地图 `docs/README.md`、操作手册 `docs/用户使用指南.md`、设计文档 `docs/设计文档.md`、
 技术文档 `docs/技术文档.md`、经验文档 `docs/经验文档.md`、验证脚本 `docs/check/prompt-verify-all-features.md`。
 
 ## 目录
@@ -46,6 +46,7 @@
 
 | 想了解 | 看这里 |
 | :-- | :-- |
+| **全部文档地图（先看这个）** | `docs/README.md` |
 | 怎么用（安装/配置/工具/格式/排障） | `docs/用户使用指南.md` |
 | 卡片该写成什么样 | `presets/study/skills/card-format/SKILL.md` |
 | 为什么这样设计（架构、模板、决策取舍） | `docs/设计文档.md` |
