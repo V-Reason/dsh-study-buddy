@@ -717,7 +717,7 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
   })
 })
 
-/** 2026-09 审查修复的回归用例（对应 docs/review/ 的探针编号） */
+/** 2026-09 审查修复的回归用例（对应 `docs/审查修复记录.md` 的探针编号） */
 describe('审查修复回归（BIZ / SEC）', () => {
   const mk = (store: VaultStore, title: string, content = '### 核心思想\nx') => store.create({
     title,

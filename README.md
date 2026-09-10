@@ -4,7 +4,7 @@
 >
 > 📖 完整上手请读 [docs/用户使用指南.md](docs/用户使用指南.md)：安装部署、逐键配置详解、全部 12 个工具参考、卡片格式规范、Obsidian 配合、检索技巧与故障排查手册。
 >
-> 🗺️ 文档地图见 [docs/README.md](docs/README.md)（哪份文档负责什么、改代码要同步哪些文档）· 🧭 其他文档：[设计文档](docs/设计文档.md)（为什么这样设计）· [技术文档](docs/技术文档.md)（API / 规则 / 配置 / 测试）· [经验文档](docs/经验文档.md)（踩坑与可复用技巧）· [审查报告](docs/review/README.md)（2026-09 两轮审查与修复状态）· [归档索引](docs/archive/README.md)（历史提案与复盘）
+> 🗺️ 文档地图见 [docs/README.md](docs/README.md)（哪份文档负责什么、改代码要同步哪些文档）· 🧭 其他文档：[设计文档](docs/设计文档.md)（为什么这样设计）· [技术文档](docs/技术文档.md)（API / 规则 / 配置 / 测试）· [经验文档](docs/经验文档.md)（踩坑与可复用技巧）· [审查修复记录](docs/审查修复记录.md)（两轮审查结论与修复状态）· [归档索引](docs/archive/README.md)（历史提案与复盘）
 >
 > 版本基线：v0.9.1 ｜ 协议：MIT ｜ 逐版变更见 [更新记录](#更新记录)
 
@@ -28,8 +28,8 @@
 
 ## 更新记录
 
-- **v0.9.1（2026-09-10）— 复审（`docs/review/07`）N1~N15 修复**：① `card_link` 一侧位于只读检索根时**先校验后写盘**（旧实现先写 A 再在 B 处报错，留下单向入链）——改为两侧全部规划完再落盘，中途失败按写前内容回滚；② `card_create` 不再为同名提示触发全库重扫（改 `titleHints` O(1) 查询，1000 卡从 232~265ms/次回到 ~0 额外 IO）；③ 索引 TTL 的可见性回归修复：**未命中/找不到卡片的路径强制重扫一次**，Obsidian 里刚写的笔记立即可搜；④ 其余 12 项 nit：`addLink` 无尾换行粘行、`⚠ 跳过 N 项`按**原因**分组且 `card_moc` 也回显、`maxWalkFiles` 可配置且超限改为**截断 + 警告**（不再让全部工具失败）、`residueLevel:'off'` 不再误报"✓ 通过"、`sectionHints` 投入使用、分数桶封顶 100、`inlineText` 不再压空格、`rulesOff` 未知 id 挂载即报错、`card_history` 透传会话 cwd、含 `[]` 的历史文件名改名同步、`planRename` 同口径归一、ID 回退后缀取末 6 位。另新增 `tests/docs.spec.ts`（文档链接/锚点 + 版本基线守卫）与 `docs/README.md`（文档地图）。测试 248 → 263；逐条状态见 `docs/review/README.md` §八。
-- **v0.9.0（2026-09-10）— 依据 `docs/review/` 的审查修复**：3 个 blocker 全部修复（`card_history strip` 行号漂移会删错正文 → 改「先删 `<details>` 再按段落模型过滤小节」；标题/定义含换行会截断 frontmatter → 入口拒绝 + 渲染兜底；`card_rename` 冲突校验在所有写入之后 → 拆「先校验后提交 + 失败回滚」）。另修复 15 个 warning 与 12 个 nit：`card_update` 透传会话 cwd、`scope=all` 旧笔记只体检通用规则、禁用规则时不再报"未通过"、关联判重限关联卡片小节、读取失败计数回显、同名卡提示、`hasPriorUserMessage` 兑现兜底、断链检测对象纠正、跨盘符根守卫（`isFsRoot`）、`[`/`]` 与设备名清洗、记忆保留键拒绝、外部资源 info 规则、ID 6 位 hex、进度队列上限等。可维护性/性能：lint 规则收敛为 `RULES` 注册表 + 规格驱动（删除与 `template-sections` 重复的 `walkthrough`，新增 `external-resource`）、索引 TTL（`indexTtlMs`）、批量 lint 复用索引正文、`rename` 索引预筛、`matchAll`/`makeLineOf`/Map 索引。工具仍 12 个，测试 209 → 248；逐条修复状态见 `docs/review/README.md` §七。
+- **v0.9.1（2026-09-10）— 复审（`docs/archive/review/07`）N1~N15 修复**：① `card_link` 一侧位于只读检索根时**先校验后写盘**（旧实现先写 A 再在 B 处报错，留下单向入链）——改为两侧全部规划完再落盘，中途失败按写前内容回滚；② `card_create` 不再为同名提示触发全库重扫（改 `titleHints` O(1) 查询，1000 卡从 232~265ms/次回到 ~0 额外 IO）；③ 索引 TTL 的可见性回归修复：**未命中/找不到卡片的路径强制重扫一次**，Obsidian 里刚写的笔记立即可搜；④ 其余 12 项 nit：`addLink` 无尾换行粘行、`⚠ 跳过 N 项`按**原因**分组且 `card_moc` 也回显、`maxWalkFiles` 可配置且超限改为**截断 + 警告**（不再让全部工具失败）、`residueLevel:'off'` 不再误报"✓ 通过"、`sectionHints` 投入使用、分数桶封顶 100、`inlineText` 不再压空格、`rulesOff` 未知 id 挂载即报错、`card_history` 透传会话 cwd、含 `[]` 的历史文件名改名同步、`planRename` 同口径归一、ID 回退后缀取末 6 位。另新增 `tests/docs.spec.ts`（文档链接/锚点 + 版本基线守卫）与 `docs/README.md`（文档地图）。测试 248 → 263；逐条状态见 `docs/审查修复记录.md` §三。
+- **v0.9.0（2026-09-10）— 依据首轮审查（明细已归档到 `docs/archive/review/`）**：3 个 blocker 全部修复（`card_history strip` 行号漂移会删错正文 → 改「先删 `<details>` 再按段落模型过滤小节」；标题/定义含换行会截断 frontmatter → 入口拒绝 + 渲染兜底；`card_rename` 冲突校验在所有写入之后 → 拆「先校验后提交 + 失败回滚」）。另修复 15 个 warning 与 12 个 nit：`card_update` 透传会话 cwd、`scope=all` 旧笔记只体检通用规则、禁用规则时不再报"未通过"、关联判重限关联卡片小节、读取失败计数回显、同名卡提示、`hasPriorUserMessage` 兑现兜底、断链检测对象纠正、跨盘符根守卫（`isFsRoot`）、`[`/`]` 与设备名清洗、记忆保留键拒绝、外部资源 info 规则、ID 6 位 hex、进度队列上限等。可维护性/性能：lint 规则收敛为 `RULES` 注册表 + 规格驱动（删除与 `template-sections` 重复的 `walkthrough`，新增 `external-resource`）、索引 TTL（`indexTtlMs`）、批量 lint 复用索引正文、`rename` 索引预筛、`matchAll`/`makeLineOf`/Map 索引。工具仍 12 个，测试 209 → 248；逐条修复状态见 `docs/审查修复记录.md` §二。
 - **v0.8.0（2026-09-10）— P1/P2 收口**：模板分型（理论型/工程型/对比型，自动推断 + `template` 覆盖）与四个新小节（重入点/前置检查/验证实验/排障判据）落进代码与文档；`card_lint` 增 `cross`（跨卡一致性）/`trend`（质量趋势）/`rating`（可执行性评级）三个分析开关；persona、card-format、study-loop、incremental-update、用户指南、README 全面同步"正文不设字数上限 + 反堆砌三规则"。测试 203 → 209。
 - **v0.6.0（2026-09-10）— 卡片质量可检测（P0）**：依据重设计提案（现归档于 `docs/archive/design/`）完成框架重设计与 P0 全部 6 项——① 新增 `card_lint`（14 条规则打分：会话残留/模板小节/主干线/重入点/验证实验/排障判据/代码块语言/自测题答案率/层级序号/关联块格式/领域标签…，全部警告级）；② 会话残留规则集含白名单（`L0/L1/L2` 球谐带、`GAMES101 L15` 讲义引用、代码块与 `<details>` 内不扫）；③ `append-version`/`errata` 改为插在「关联卡片」**之前**（阅读顺序不再被破坏）；④ 新增 `card_history`（list/strip + `<details>` 配对校验）；⑤ 新增 `card_rename`（改标题同步文件名 + 全库入链 + 断链检测 + dryRun）；⑥ 关联块归一为 `` - 前置：`标题`（ID） ``，去重改为"标题或 ID 任一命中即跳过"。工具 9 → 12，测试 136 → 201；新增 `src/cardmodel.ts`（段落模型）/`src/template.ts`（模板注册表）/`src/lint.ts`（规则引擎）/`src/history.ts`/`src/rename.ts`/`src/tools.ts`。
 - **v0.5.0（2026-09-07）— dsh 0.1.3-alpha.1 平台适配**：宿主侧仍零 `@deepseek-ai` 运行时导入（加载层无需改动，不会因平台重构 fail-loud）；唯一 API 漂移是 2026-08-28 起 session 重构移除 `session.events`（改为 `session.snapshotEvents()`），已将开场门禁的恢复会话判定改为**双形状特性探测**（新旧平台均兼容：新平台恢复会话不再误注入预步提醒，旧平台行为不变）。同步版本元数据（package.json / dsh.plugin.json 均 0.5.0）并新增本更新记录。
@@ -223,7 +223,7 @@ pnpm run check     # typecheck + vitest（263 项）+ esbuild 构建
 ```
 
 - 源码在 `src/`（零运行时依赖，仅 Node 内置模块），构建产物 `lib/index.js`（`@deepseek-ai/*` 保持 external）
-- 测试在 `tests/`：段落模型与模板分型、lint 规则与白名单反例、历史块与改名、frontmatter 往返、卡片渲染/增量更新/关联、CJK+英文混合检索、原子写与路径越界、临时 vault 端到端全链路、`docs/review/` 审查修复回归（blocker/静默错误/注入）
+- 测试在 `tests/`：段落模型与模板分型、lint 规则与白名单反例、历史块与改名、frontmatter 往返、卡片渲染/增量更新/关联、CJK+英文混合检索、原子写与路径越界、临时 vault 端到端全链路、两轮审查修复回归（blocker/静默错误/注入）
 - CI：push/PR 自动跑 `pnpm run check`（`.github/workflows/check.yml`，Node 22）
 
 ## 目录结构
