@@ -169,7 +169,7 @@
 | CPLX-5 | ✅ 已修复 | `memory()` 拆 `memoryGet` / `setControlKey` / `writeNote` |
 | CPLX-6 | ✅ 已修复 | `refresh` → `ensureIndex`（JSDoc 写明每次可能全库 stat）；`SearchIndex.all()` 返回 `readonly`，新增 `roots()` |
 | CPLX-7 | ✅ 已修复 | 抽 `REENTRY_CHARS` / `ERROR_SCORE_CAP` / `SCORE_BUCKET` / `MAX_FILENAME` / `FIELD_WEIGHTS`；`lint.ts` 直接 import `DEFINITION_MAX`（无环） |
-| CPLX-8 | ✅ 已修复 | 删 `TEMPLATE_SECTIONS`/`sectionBody`/`hasHeading`/`headingLine`/`byRel`；`sectionHints`/`templateTable` 真正用于生成工具描述；`rename.ts` 复用 `sanitizeFilename` |
+| CPLX-8 | ✅ 已修复 | 删 `TEMPLATE_SECTIONS`/`sectionBody`/`hasHeading`/`headingLine`/`byRel`；`templateTable` 用于生成工具描述（`src/tools.ts:144`）；**`sectionHints` 已用于 `validateCard` 的缺节提示（N8）**；`rename.ts` 复用 `sanitizeFilename` |
 | CPLX-9 | ✅ 已修复 | 删 persona 重复「格式红线」；`card_lint` 描述由 `RULES` 生成；`scope=all` 描述改为与实现一致 |
 | CPLX-10 | ✅ 已修复 | `splitSections` 改 `matchAll`，删手动 `lastIndex` |
 | CPLX-11 | ✅ 已修复 | 补两条回归用例（探针 P2 / F），断言"关联小节与关联行仍在、无未闭合 `<details>`" |
@@ -191,11 +191,11 @@
 
 | 编号 | 状态 | 落点 |
 | --- | --- | --- |
-| BIZ-3 | ✅ 已修复 | `update(id, payload, call?: {sessionCwd})`；`tools.ts` 传 `sessionCwdOf(exec)` |
+| BIZ-3 | ✅ 已修复 | `update(id, payload, call?: {sessionCwd})`；`tools.ts` 全部卡片工具传 `sessionCwdOf(exec)`（**`card_history` 已于复审轮补上，N15**） |
 | BIZ-4 | ✅ 已修复 | `LintContext.kind`；结构类规则 `scope:'card'`，旧笔记跳过且不写 `passed`；批量报告单列旧笔记数 |
 | BIZ-5 | ✅ 已修复 | `passed === undefined` → 「未启用或不适用于此类文档（检查 config.lint.rulesOff）」 |
 | BIZ-6 | ✅ 已修复 | `addLink` 判重限定「关联卡片」小节；返回文本区分「新增 N 侧关联行 / 两侧均已存在」 |
-| BIZ-7 | ✅ 已修复 | `walk`/`walkRoots` 增加 `onSkip` 上报；`ensureIndex`/`rename` 累计 `skipped`，`search`/`lint`/`rename`/`moc` 追加 `⚠ 跳过 N 个文件` |
+| BIZ-7 | ✅ 已修复 | `walk`/`walkRoots` 增加 `onSkip` 上报；`ensureIndex`/`rename` 累计 `{path,reason}`，`search`/`lint`/`rename`/**`moc`** 追加 `⚠ 跳过 N 项未完整处理：<原因>（…）`（复审轮补 `moc` 与**原因分组**，N5） |
 | BIZ-8 | ✅ 已修复 | `create()` 查 `byTitle`，命中时**不阻断**但给出「建议 card_update 增量更新」提示 |
 | BIZ-9 | ✅ 已修复 | `hasPriorUserMessage` 加 `try/catch → false` + 回归用例 |
 | BIZ-10 | ✅ 已修复 | 断链检测对象改本卡改写后正文；其它文件只报「仍指向旧标题」（`checkFormat:false`）；`dryRun` 与实写同路径 |
@@ -240,3 +240,48 @@
 2. **`walkthrough` 规则删除**：报告只要求"由规格驱动"，实现发现它与 `template-sections` 完全重复且对对比型误报，
    故合并删除（规则数保持 14：13 + 新增 `external-resource`）。
 3. **SEC-4 保留绝对路径**：见 7.2 说明。
+
+---
+
+## 八、复审（2026-09-10 第二次审查，v0.9.0 验收）
+
+> 完整报告见 **`07-复审-修复验收.md`**。复审方式：全量 diff 走查 + 23 个探针用例复现 + 400/1000 卡性能复测；`tsc` 通过、`vitest run` 248/248 通过、工作树干净。
+
+**结论**：三个 blocker（BIZ-1 / SEC-1 / BIZ-2）全部**真修复**且通过探针验收（含 rename 回滚路径实测）；首轮 47 项发现中 **38 项 ✅ 真修复、5 项 🟡 部分修复、2 项 ⏭️ 明确不做、1 项 📄 文档化、1 项无需动作**（理由均成立）。**但修复本身新引入 3 个副作用**（v0.9.1 已全部修复，见 8.1）：
+
+| 编号 | 级别 | 一句话 | 位置 |
+| --- | --- | --- | --- |
+| N1 | warning | `card_link` 一侧只读时**先写后错**，留下单向入链（探针 P1 实测 A.md 已写、B.md 未写） | `src/index.ts:392-413` |
+| N2 | warning | `card_create` 每次触发全库重扫+重建索引（1000 卡 232~265ms/次，修复前 0 IO） | `src/index.ts:325,360` |
+| N3 | warning | `indexTtlMs` 默认 2s：外部新建/编辑的文件在窗口内不可见（探针 N 实测） | `src/index.ts:242-248` |
+
+另有 12 条 nit（`addLink` 无尾换行粘行、moc 缺跳过提示、`MAX_WALK_FILES` 硬失败、`residueLevel: off` 仍报"✓ 通过"、死代码 `sectionHints`、分布桶 `100~109`、文档 3 处漂移、`inlineText` 压空格、`card_history` 漏传 sessionCwd 等），明细与最小改法见 `07` 报告 §5。
+
+**发布建议**：先修 N1（~5 行）与 N2（~10 行）再发 0.9.0；N3/N4 随下一轮。建议为 N1~N4 各补一条回归用例——它们对应的正是"修复副作用"这一类风险。
+
+### 8.1 N1~N15 处置（2026-09-10 回填，v0.9.1）
+
+**全部 15 条已修复**（`pnpm run check` 全绿，测试 248 → 261）。逐条落点：
+
+| 编号 | 处置 | 落点 / 回归用例 |
+| --- | --- | --- |
+| N1 | ✅ 已修复 | `link()` 改为「规划两侧（含 `assertWritable`）→ 再落盘」，中途失败按写前内容逆序回滚：`src/index.ts`；回归 `tests/store.spec.ts`（只读根两侧字节级未变） |
+| N2 | ✅ 已修复 | `titleHints: Map<小写标题,{title,fullRel,id}>`（`ensureIndex` 重建时填充，`create`/`replace`/`rename` 后增量维护），`create` 不再调 `ensureIndex`；回归用 `vi.spyOn(SearchIndex.prototype,'rebuild')` 断言两次建卡 0 次重建、读一次后同名提示仍在 |
+| N3 | ✅ 已修复 | `ensureIndex(cwd,{force})` + `servedFromCache`：`search` 未命中、`resolveCard` 找不到、`moc` 有缺失引用时**强制重扫一次**；回归 `tests/store.spec.ts`（TTL 窗口内外建卡立刻 `get`/`search` 可见） |
+| N4 | ✅ 已修复 | `addLink` 无尾换行时补 `\n`：`src/card.ts`；回归 `tests/card.spec.ts`（关联行是独立列表项 + 再关联能判重） |
+| N5 | ✅ 已修复 | `skipped` 改 `{path,reason}`，`noteSkips()` 按原因分组输出 `⚠ 跳过 N 项未完整处理：…`，`moc()` 追加；回归断言"目录深度超过 16 层"作为原因出现 |
+| N6 | ✅ 已修复 | `config.maxWalkFiles`（默认 20000）+ `walk(..., maxFiles)`：超限**截断 + `onSkip` 上报**，不再抛错；回归 `tests/store.spec.ts`、`tests/vault.spec.ts`、`tests/apply.spec.ts` |
+| N7 | ✅ 已修复 | `Rule.run` 返回 `LintFinding[] \| null`，`null` = 未执行；`LintReport.notRun`，报告输出 `⊘ 未执行（不计入通过）`；回归 `tests/lint.spec.ts` |
+| N8 | ✅ 已修复 | `sectionHints` 用于 `validateCard` 的缺节警告（`src/card.ts`）；回归 `tests/card.spec.ts` |
+| N9 | ✅ 已修复 | `normalizeConfig` 用 `ruleIds()` 校验 `lint.rulesOff`，未知 id 挂载即抛错并列可用集；回归 `tests/apply.spec.ts` |
+| N10 | ✅ 已修复 | 分布桶上界 `Math.min(lo + SCORE_BUCKET - 1, 100)`，满分桶显示 `100`；回归 `tests/lint.spec.ts` |
+| N11 | ✅ 已修复 | 用户指南规则口径改「13 条警告级 + 1 条 info 级」；本文件 7.3/7.5 三行失真已修正；新增测试钉住「SKILL.md / 用户指南的规则清单 == `ruleCatalog()`」 |
+| N12 | ✅ 已修复 | `inlineText` 只折换行（`.replace(/\s*[\r\n]+\s*/g,' ')`），压空格留给 `sanitizeFilename`/`wikilinkTarget`；回归 `tests/cardmodel.spec.ts`、`tests/card.spec.ts` |
+| N13 | ✅ 已修复 | `planRename` 对 `oldBase` 同口径归一后比较（`sanitizeFilename(oldBase) === expected`）；回归 `tests/rename.spec.ts` |
+| N14 | ✅ 已修复 | `uniqueCardPath` 二次回退 `id.slice(-6)`；回归 `tests/vault.spec.ts` |
+| N15 | ✅ 已修复 | `card_history` 的 `execute(args, exec)` 传 `sessionCwdOf(exec)`；回归 `tests/tools.spec.ts` |
+
+**与复审建议的差异**：① N2 采用建议 ①（增量标题表）而非"索引新鲜才查"，因为后者会让同名提示在多数会话里失效；
+② N6 同时采用"可配置"与"截断降级"两种手段（复审列为二选一），理由是既让大库可用、又保留自救入口；
+③ N12 只把压空格下移到 `sanitizeFilename`/`wikilinkTarget`，未在定义渲染处额外压缩（定义里的连续空格同样属合法输入）。
+④ 复审"不建议本轮做"的 EXT-4 / EXT-7 / BIZ-12 两条新规则**仍未做**，理由见 §七 7.4 与 7.5。

@@ -98,8 +98,13 @@ describe('vault', () => {
     const d = join(dir, '计算机/图形学')
     await mkdir(d, { recursive: true })
     await writeFile(join(d, '同名卡片.md'), '一')
-    const p = await uniqueCardPath(d, '同名卡片', '202608161430_ab12')
-    expect(p).toBe(join(d, '同名卡片_ab12.md'))
+    // ID 为 6 位 hex（BIZ-11b）：回退后缀同步取末 6 位（N14）
+    const p = await uniqueCardPath(d, '同名卡片', '202608161430_ab12cd')
+    expect(p).toBe(join(d, '同名卡片_ab12cd.md'))
+    // 第三张同名卡才用完整 ID
+    await writeFile(join(d, '同名卡片_ab12cd.md'), '二')
+    const p3 = await uniqueCardPath(d, '同名卡片', '202608161430_ab12cd')
+    expect(p3).toBe(join(d, '同名卡片_202608161430_ab12cd.md'))
   })
 
   test('walkSkipsHiddenDirs', async () => {
@@ -134,6 +139,20 @@ describe('vault', () => {
   test('mocPathForUnderMocDir', () => {
     const p = mocPathFor(layout(), '知识目录', '2026-08-16')
     expect(p).toBe(join(dir, '目录', '2026-08-16_知识目录.md'))
+  })
+
+  // N6：文件数安全阀超限时截断 + 上报原因（旧实现直接 throw，让大库用户整体不可用）
+  test('N6：walk 超过 maxFiles 时截断并上报（不抛错）', async () => {
+    for (const name of ['a', 'b', 'c', 'd']) await writeFile(join(dir, `${name}.md`), 'x')
+    const skipped: Array<{ path: string; reason: string }> = []
+    const files = await walk(dir, skipSetFor(), 'vault', (entry) => skipped.push(entry), true, 2)
+    expect(files).toHaveLength(2)
+    expect(skipped).toHaveLength(1)
+    expect(skipped[0].reason).toContain('扫描文件数已达上限 2')
+    expect(skipped[0].reason).toContain('config.maxWalkFiles')
+    // 未超限时不受影响
+    const all = await walk(dir, skipSetFor(), 'vault', undefined, true, 10)
+    expect(all).toHaveLength(4)
   })
 
   test('containsRoot 判定包含关系', () => {

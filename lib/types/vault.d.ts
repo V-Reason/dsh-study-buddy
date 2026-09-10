@@ -59,10 +59,14 @@ export type SkipReporter = (entry: {
 /**
  * 递归收集 root 下所有 .md（跳过 skip 集合，默认内置通用目录）；rootLabel 标注来源。
  * 读取失败与安全阀超限都通过 `onSkip` 上报，绝不静默吞掉。
+ *
+ * `maxFiles` 是**每根**的文件数安全阀（默认 `MAX_WALK_FILES`，可用
+ * `config.maxWalkFiles` 调整）：超限时**截断扫描并上报**，不再抛错（N6）——
+ * 安全阀的语义是"拦住异常根"，不是"让大型 vault 彻底不可用"。
  */
-export declare function walk(root: string, skip?: Set<string>, rootLabel?: string, onSkip?: SkipReporter, writable?: boolean): Promise<WalkedFile[]>;
-/** 跨根扫描：逐根 walk 后拼接（rel 为各根内相对路径，root 标注来源） */
-export declare function walkRoots(roots: SearchRoot[], skip?: Set<string>, onSkip?: SkipReporter): Promise<WalkedFile[]>;
+export declare function walk(root: string, skip?: Set<string>, rootLabel?: string, onSkip?: SkipReporter, writable?: boolean, maxFiles?: number): Promise<WalkedFile[]>;
+/** 跨根扫描：逐根 walk 后拼接（rel 为各根内相对路径，root 标注来源）；`maxFiles` 为每根上限 */
+export declare function walkRoots(roots: SearchRoot[], skip?: Set<string>, onSkip?: SkipReporter, maxFiles?: number): Promise<WalkedFile[]>;
 /** 规范化路径键：Windows 下大小写不敏感，用于跨根去重（cwd 与 vault 相同时只索引一次） */
 export declare function canonicalRootKey(p: string): string;
 /** outer 是否包含 inner（按规范化绝对路径前缀判断；同路径视为包含） */
@@ -104,12 +108,14 @@ export interface VaultLayout {
     lint?: LintConfig;
     /** 索引缓存 TTL（毫秒）：默认 2000；0 = 每次调用都重扫全库（外部编辑立即可见） */
     indexTtlMs?: number;
+    /** 每根扫描文件数上限（默认 20000）：超限截断扫描并回显警告，不再让工具整体失败（N6） */
+    maxWalkFiles?: number;
     /** 模板推断提示词表（缺省用内置默认值） */
     templateHints?: TemplateHints;
 }
 /** 解析某领域卡片的落盘目录：优先映射表，未映射落入 fallbackDir/<领域名> */
 export declare function cardDirFor(layout: VaultLayout, domain: string): string;
-/** 生成唯一文件名：`标题.md`，冲突时追加 ID 后缀，再冲突用完整 ID */
+/** 生成唯一文件名：`标题.md`，冲突时追加 ID 后缀（末 6 位），再冲突用完整 ID */
 export declare function uniqueCardPath(dir: string, title: string, id: string): Promise<string>;
 export declare function fileNameOf(p: string): string;
 /** MOC 落盘路径：mocDir/日期_标题.md */

@@ -1,10 +1,11 @@
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { todayLocal } from '../src/card.ts'
 import { VaultStore } from '../src/index.ts'
-import type { VaultLayout } from '../src/vault.ts'
+import { SearchIndex } from '../src/search.ts'
+import { MAX_WALK_DEPTH, type VaultLayout } from '../src/vault.ts'
 
 let dir: string
 
@@ -15,6 +16,11 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
+
+/** 构造一张最小卡片（外部写入用，绕过 store.create） */
+function rawCard(id: string, title: string, keyword: string): string {
+  return `---\nID: ${id}\n标题: ${title}\n领域: #其它\n来源: 验证\n状态: 草稿\n---\n\n> ${keyword} 的定义\n`
+}
 
 function layout(): VaultLayout {
   return {
@@ -882,8 +888,111 @@ describe('审查修复回归（BIZ / SEC）', () => {
     }
     const store = new VaultStore({ ...layout(), indexTtlMs: 0 })
     const out = await store.search('任意词')
-    expect(out).toContain('⚠ 跳过 1 个文件')
+    // N5：文案改为按原因分组的「跳过 N 项」
+    expect(out).toContain('⚠ 跳过 1 项未完整处理')
     expect(out).toContain('断链.md')
+  })
+
+  // N5：跳过原因必须如实回显（旧实现一律写成"读取失败/无权限"，会把用户引向错误方向）
+  test('N5：深度超限的跳过原因是"目录深度"而非"读取失败"，且 moc 也回显跳过项', async () => {
+    let deep = dir
+    for (let i = 0; i <= MAX_WALK_DEPTH + 1; i++) deep = join(deep, `d${i}`)
+    await mkdir(deep, { recursive: true })
+    await writeFile(join(deep, '深处的卡.md'), '# x\n')
+    const store = new VaultStore({ ...layout(), indexTtlMs: 0 })
+    const out = await store.search('任意词')
+    expect(out).toContain('目录深度超过')
+    expect(out).not.toContain('读取失败/无权限')
+    const created = await store.create({
+      title: 'MOC 用的卡',
+      domain: '图形学与渲染',
+      source: '验证',
+      status: '草稿',
+      definition: '定义',
+      content: '正文',
+    })
+    const moc = await store.moc({ cardIds: [created.rel] })
+    expect(moc).toContain('MOC 已写入')
+    expect(moc).toContain('⚠ 跳过 1 项未完整处理')
+  })
+
+  // N6：安全阀从"直接抛错、插件整体不可用"降级为"截断 + 显式警告"
+  test('N6：maxWalkFiles 超限时截断扫描并回显警告（不再让工具整体失败）', async () => {
+    for (const name of ['a', 'b', 'c']) await writeFile(join(dir, `${name}.md`), '# x\n')
+    const store = new VaultStore({ ...layout(), indexTtlMs: 0, maxWalkFiles: 1 })
+    const out = await store.search('x')
+    expect(out).toContain('扫描文件数已达上限 1')
+    expect(out).toContain('config.maxWalkFiles')
+    // 工具仍然可用（只是结果不完整）
+    expect(out).toMatch(/命中|未命中/)
+  })
+
+  // ── 复审 N1~N4 回归（修复副作用类风险）──
+
+  // N1：旧实现先写 from 再在 to 里 assertWritable → "报错但已写盘"的单向入链
+  test('N1：card_link 一侧位于只读检索根时先校验后写盘（不留半写盘）', async () => {
+    const ro = await mkdtemp(join(tmpdir(), 'study-buddy-ro-'))
+    try {
+      await writeFile(join(ro, 'B卡.md'), rawCard('202601010000_bbbbbb', 'B卡', 'B 的定义'), 'utf8')
+      const store = new VaultStore({ ...layout(), searchRoots: [ro] })
+      await store.create({
+        title: 'A卡',
+        domain: '图形学与渲染',
+        source: '验证',
+        status: '草稿',
+        definition: 'A 的定义',
+        content: '正文',
+      })
+      const aPath = join(dir, '游戏开发/图形学/A卡.md')
+      const bPath = join(ro, 'B卡.md')
+      const aBefore = await readFile(aPath, 'utf8')
+      const bBefore = await readFile(bPath, 'utf8')
+      await expect(store.link('A卡', 'B卡', 'prev')).rejects.toThrow(/只读检索根/)
+      // 关键：两侧都字节级未变（不再留下 A→B 的单向入链）
+      expect(await readFile(aPath, 'utf8')).toBe(aBefore)
+      expect(await readFile(bPath, 'utf8')).toBe(bBefore)
+      expect(aBefore).not.toContain('关联卡片')
+    } finally {
+      await rm(ro, { recursive: true, force: true })
+    }
+  })
+
+  // N2：旧实现 create 为了一条同名提示调用 ensureIndex → 每次建卡全库重扫
+  test('N2：card_create 不再触发全库重建索引，且同名提示仍生效', async () => {
+    const spy = vi.spyOn(SearchIndex.prototype, 'rebuild')
+    try {
+      const store = new VaultStore(layout())
+      const input = {
+        domain: '图形学与渲染',
+        source: '验证',
+        status: '草稿',
+        definition: '定义',
+        content: '正文',
+      }
+      await store.create({ ...input, title: '甲卡' })
+      await store.create({ ...input, title: '乙卡' })
+      expect(spy).toHaveBeenCalledTimes(0)
+      // 一次读工具让索引建立（之后 titleHints 才有数据）
+      await store.search('甲卡')
+      expect(spy).toHaveBeenCalledTimes(1)
+      const dup = await store.create({ ...input, title: '甲卡' })
+      expect(dup.text).toContain('已存在同名卡片')
+      expect(spy).toHaveBeenCalledTimes(1)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  // N3：TTL 窗口内外部新建的文件对 search/get 立即可见（未命中强制重扫一次）
+  test('N3：TTL 窗口内外部新建的卡，search/get 立即看得到', async () => {
+    const store = new VaultStore(layout())
+    await store.search('预热') // 建立索引（此时库为空）
+    await writeFile(join(dir, '外部新建的卡.md'), rawCard('202601010000_cccccc', '外部新建的卡', '独特关键词QQQ'), 'utf8')
+    // get：未命中 → 强制重扫后命中
+    expect(await store.get('外部新建的卡')).toContain('独特关键词QQQ')
+    // search：再次外部写入后仍立即可见（关键词与上一张卡不共享 token）
+    await writeFile(join(dir, '又一张卡.md'), rawCard('202601010000_dddddd', '又一张卡', '互不重叠的词WWW'), 'utf8')
+    expect(await store.search('互不重叠的词')).toContain('又一张卡')
   })
 })
 

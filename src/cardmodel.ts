@@ -22,15 +22,19 @@ export interface CardSection {
 }
 
 /**
- * 单行字段收敛：把换行折成空格并压掉多余空白（SEC-1）。
+ * 单行字段收敛：**只把换行折成一个空格**（SEC-1）。
  *
  * 用途是**渲染兜底**：frontmatter 标量、一句话定义、`### 版本更新（来源：…）`、
  * MOC 标题里出现换行时，会让 `parseFrontmatter` 的非贪婪正则在注入的 `---`
  * 处提前闭合，导致后半段元数据静默降级为正文（索引/lint/改名全部依据错）。
  * 校验层仍会拒绝换行（fail-loud），本函数是纵深防御，不替代校验。
+ *
+ * 不压缩连续空格（N12）：`C++  STL` 是**合法输入**，静默改写等于"用户看到
+ * 的标题与磁盘上的不是同一个"。需要压空白的场景各自显式处理
+ * （`sanitizeFilename` 压文件名、`wikilinkTarget` 压链接目标）。
  */
 export function inlineText(value: unknown): string {
-  return String(value ?? '').replace(/[\r\n]+/g, ' ').replace(/[ \t]{2,}/g, ' ').trim()
+  return String(value ?? '').replace(/\s*[\r\n]+\s*/g, ' ').trim()
 }
 
 export interface SplitBody {

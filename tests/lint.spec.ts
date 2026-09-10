@@ -188,6 +188,16 @@ describe('lint 引擎与评分', () => {
     const body = `${GOOD_ENGINEERING}\n\n本工程实测。`
     const off = lintCard({ title: 'X', definition: '短定义', body, template: '工程型', tags: TAGS }, { residueLevel: 'off' })
     expect(off.findings.filter((f) => f.rule === 'session-residue')).toEqual([])
+    // N7：未执行 ≠ 通过——不进 passed，报告单列「⊘ 未执行」
+    expect(off.passed['session-residue']).toBeUndefined()
+    expect(off.notRun).toContain('会话残留')
+    const offText = formatReport(off)
+    expect(offText).toContain('⊘ 未执行（不计入通过）：会话残留')
+    expect(offText).not.toContain('通过：会话残留')
+    // 未关闭时照常进 passed
+    const on = lintCard({ title: 'X', definition: '短定义', body, template: '工程型', tags: TAGS })
+    expect(on.passed['session-residue']).toBe(false)
+    expect(on.notRun).toEqual([])
     const disabled = lintCard({ title: 'X', definition: '短定义', body: '### 核心思想\n内容', template: '理论型' }, { rulesOff: ['layer-number', 'template-sections', 'mainline'] })
     expect(disabled.passed['layer-number']).toBeUndefined()
     expect(disabled.passed['template-sections']).toBeUndefined()
@@ -253,6 +263,17 @@ describe('lint 引擎与评分', () => {
     expect(text).toContain('其中旧笔记 1 篇')
     expect(text).toContain('规则命中')
     expect(text).toContain('最低分')
+  })
+
+  // N10：满分区间不存在 109 分，报告数字不能自相矛盾
+  test('N10：满分桶标签封顶 100（不再出现 100~109）', () => {
+    const full = lintCard({ title: 'A', definition: '短定义', body: GOOD_ENGINEERING, template: '工程型', tags: TAGS })
+    expect(full.score).toBe(100)
+    const batch = summarizeLint([full], ['A'])
+    expect(batch.distribution).toEqual([{ range: '100', count: 1 }])
+    const text = formatBatch(batch)
+    expect(text).toContain('分数分布：100 分 1 篇')
+    expect(text).not.toContain('100~')
   })
 
   test('ruleIds / ruleTitle / ruleCatalog 覆盖全部规则', () => {

@@ -97,6 +97,9 @@ describe('rename 改名与入链重写', () => {
     // 新标题含非法字符 → 清洗后作为文件名
     expect(planRename({ fileName: '旧标题.md', oldTitle: '旧标题', newTitle: 'A/B:C' }))
       .toMatchObject({ renameFile: true, newBase: 'A B C' })
+    // N13：既存文件名含已废弃字符（`[]`）时同口径归一后再比，仍同步改名
+    expect(planRename({ fileName: 'A[B].md', oldTitle: 'A[B]', newTitle: 'C' }))
+      .toMatchObject({ renameFile: true, oldBase: 'A[B]', newBase: 'C' })
   })
 
   test('formatRenameReport：dryRun 标记、改动清单与断链', () => {

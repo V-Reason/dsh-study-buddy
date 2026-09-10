@@ -46,6 +46,8 @@ export interface LintReport {
   findings: LintFinding[]
   /** 每条**已执行**规则是否通过（规则 id → 通过）；被禁用/不适用时不含该键 */
   passed: Record<string, boolean>
+  /** 本次**未执行**的规则中文名（`residueLevel: 'off'` 等；报告不得把它当成"通过"，N7） */
+  notRun: string[]
 }
 
 export interface LintContext {
@@ -106,7 +108,8 @@ export interface Rule {
   severity: Severity
   /** `card` = 仅卡片文档（旧笔记跳过结构类规则） */
   scope?: 'card'
-  run: (ctx: RuleCtx) => LintFinding[]
+  /** 返回 `null` 表示**本次未执行**（如 `residueLevel: 'off'`），报告不得计为"通过"（N7） */
+  run: (ctx: RuleCtx) => LintFinding[] | null
 }
 
 /** 构造一条发现（权重默认取规则权重，可逐条覆盖） */
@@ -127,7 +130,7 @@ function finding(
 }
 
 /** 定义一条规则（`run` 能拿到自身元数据用于构造发现） */
-function defineRule(def: Omit<Rule, 'run'> & { run: (ctx: RuleCtx, rule: Rule) => LintFinding[] }): Rule {
+function defineRule(def: Omit<Rule, 'run'> & { run: (ctx: RuleCtx, rule: Rule) => LintFinding[] | null }): Rule {
   const rule: Rule = {
     id: def.id,
     title: def.title,
@@ -153,7 +156,8 @@ export const RULES: Rule[] = [
     weight: 10,
     severity: 'warn',
     run: (c, self) => {
-      if (c.residueLevel === 'off') return []
+      // 关闭时返回 null = 未执行：旧实现返回 []，报告把它当成"✓ 通过"（N7）
+      if (c.residueLevel === 'off') return null
       const severity: Severity = c.residueLevel === 'error' ? 'error' : 'warn'
       return scanResidue(c.body, { blanked: c.residueText }).map((h) => finding(
         self,
@@ -384,10 +388,16 @@ export function lintCard(
   }
   const findings: LintFinding[] = []
   const passed: Record<string, boolean> = {}
+  const notRun: string[] = []
   for (const rule of RULES) {
     if (off.has(rule.id)) continue
     if (rule.scope === 'card' && ruleCtx.kind === 'note') continue
     const out = rule.run(ruleCtx)
+    if (out === null) {
+      // 未执行 ≠ 通过（N7）：不进 passed，报告单列
+      notRun.push(rule.title)
+      continue
+    }
     findings.push(...out)
     passed[rule.id] = out.length === 0
   }
@@ -402,6 +412,7 @@ export function lintCard(
     chars: ruleCtx.bodyChars,
     findings,
     passed,
+    notRun,
   }
 }
 
@@ -413,6 +424,7 @@ export function formatReport(report: LintReport): string {
   const lines: string[] = [`卡片：${report.title}  模板：${template}  总分：${report.score}/100（正文 ${report.chars} 字）`]
   const okRules = Object.entries(report.passed).filter(([, ok]) => ok).map(([rule]) => ruleTitle(rule))
   if (okRules.length > 0) lines.push(`  ✓ 通过：${okRules.join('、')}`)
+  if (report.notRun.length > 0) lines.push(`  ⊘ 未执行（不计入通过）：${report.notRun.join('、')}`)
   for (const f of report.findings) {
     lines.push(`  ${ICON[f.severity]} ${f.title}：${f.message}`)
     if (f.suggestion) lines.push(`      建议：${f.suggestion}`)
@@ -467,7 +479,11 @@ export function summarizeLint(reports: LintReport[], titles: string[]): LintBatc
     total,
     noteCount: reports.filter((r) => r.kind === 'note').length,
     averageScore,
-    distribution: [...buckets.entries()].sort((a, b) => b[0] - a[0]).map(([lo, count]) => ({ range: `${lo}~${lo + SCORE_BUCKET - 1}`, count })),
+    distribution: [...buckets.entries()].sort((a, b) => b[0] - a[0]).map(([lo, count]) => {
+      // 满分桶不能显示 `100~109`（N10）：上界封顶 100，单值桶只显示一个数
+      const hi = Math.min(lo + SCORE_BUCKET - 1, 100)
+      return { range: lo === hi ? `${lo}` : `${lo}~${hi}`, count }
+    }),
     rules: [...ruleMap.entries()]
       .map(([rule, v]) => ({ rule, title: ruleTitle(rule), cards: v.cards, hits: v.hits }))
       .sort((a, b) => b.cards - a.cards || a.rule.localeCompare(b.rule)),

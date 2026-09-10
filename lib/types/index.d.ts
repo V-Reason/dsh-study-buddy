@@ -46,23 +46,42 @@ export declare class VaultStore {
     private sig;
     private lastScanMs;
     private lastScanCwd;
-    /** 上一次索引/扫描跳过的文件（读取失败等），在工具返回文本回显（BIZ-7） */
+    /** 上一次索引/扫描跳过的项（读取失败、安全阀截断等），在工具返回文本回显（BIZ-7） */
     private skipped;
     private extraRoots;
+    /**
+     * 标题 → 卡片摘要：`card_create` 的同名提示用 O(1) 查询（N2）。
+     * 旧实现为了一条提示调用 `ensureIndex`，让每次建卡都全库重扫。
+     * 索引重建时整体填充，写入（create/replace/rename）后增量维护。
+     */
+    private titleHints;
+    /** 上一次 `ensureIndex` 是否命中 TTL 缓存（命中时未命中/找不到的查询要强制重扫一次，N3） */
+    private servedFromCache;
+    /** 上一次索引是否多根（决定展示路径是否带 `vault/` 前缀） */
+    private lastMultiRoot;
     constructor(layout: VaultLayout);
     private stateFile;
     private memoryFile;
     private assertVault;
     /** 当前会话的检索根：vault（可写）优先，随后配置的 searchRoots，最后（可选）会话工作目录（只读） */
     private rootsFor;
-    /** 跳过的文件回显（BIZ-7：报告数字必须与"实际处理了哪些文件"一致） */
+    /**
+     * 跳过的项回显（BIZ-7：报告数字必须与"实际处理了哪些文件"一致）。
+     * 按**原因**分组（N5）：跳过对象可能是目录（深度超限）或截断的根，
+     * 旧实现只留路径、原因一律写成"读取失败/无权限"，会把用户引向错误方向。
+     */
     private noteSkips;
+    /** 展示路径：多根时带 `vault/` 前缀，与索引 `fullRel` 口径一致（N2） */
+    private displayRel;
+    /** 维护标题缓存（N2）：只在旧键确实指向本卡时删除，避免误伤同名卡 */
+    private rememberTitle;
     /** 写缓存失效：任何写操作之后必须调用 */
     private invalidate;
     /**
      * 取索引（必要时重建）。**名实相符**（CPLX-6）：每次调用都可能 `walk` 全库并
      * `stat` 每个文件；受 `config.indexTtlMs`（默认 2000ms）保护——TTL 内且会话
-     * cwd 未变时直接复用缓存。写操作与 `rename` 会显式失效/强制重扫。
+     * cwd 未变时直接复用缓存。写操作会显式失效；**未命中/找不到卡片的路径**用
+     * `{ force: true }` 重扫一次（N3：TTL 窗口内也要看得见外部编辑）。
      */
     private ensureIndex;
     /** 写操作前的可写性校验（EXT-5：可写性策略上移到根定义，不再散落各处） */
@@ -80,7 +99,11 @@ export declare class VaultStore {
     get(ref: string, call?: {
         sessionCwd?: string;
     }): Promise<string>;
-    create(input: CardInput, call?: {
+    /**
+     * 建卡。第三参保留与其他工具一致的 `call` 形状（tools.ts 统一传 `sessionCwd`），
+     * 但建卡本身**不再读索引**（N2），因此会话 cwd 对它没有影响。
+     */
+    create(input: CardInput, _call?: {
         sessionCwd?: string;
     }): Promise<{
         text: string;
@@ -92,6 +115,8 @@ export declare class VaultStore {
     link(fromId: string, toId: string, kind: LinkKind, call?: {
         sessionCwd?: string;
     }): Promise<string>;
+    /** 解析 MOC 引用清单（纯查询，不落盘）：未解析到的与旧笔记分开报告 */
+    private collectMocEntries;
     moc(opts: {
         title?: string;
         cardIds: string[];

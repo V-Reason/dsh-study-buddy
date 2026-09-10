@@ -242,4 +242,31 @@ describe('study preset skills', () => {
     }
     expect([...seen.entries()].filter(([, n]) => n > 1).map(([text]) => text)).toEqual([])
   })
+
+  // N11：规则清单是"后续维护者的对照表"，一旦漂移下次验收就失去基准——用测试钉住
+  test('N11：SKILL.md / 用户指南 / README 的规则清单 == RULES（规则数与中文名都对齐）', async () => {
+    const { RULES, ruleCatalog } = await import('../src/lint.ts')
+    const catalog = ruleCatalog()
+    const skill = listSkills().find(({ dir }) => dir === 'card-format')!.skill.body
+    const root = join(import.meta.dirname, '..')
+    const guide = readFileSync(join(root, 'docs', '用户使用指南.md'), 'utf8')
+    const readme = readFileSync(join(root, 'README.md'), 'utf8')
+    for (const rule of catalog) {
+      expect(skill, `SKILL.md 缺规则「${rule.title}」`).toContain(rule.title)
+      expect(guide, `用户指南缺规则「${rule.title}」`).toContain(rule.title)
+      expect(readme, `README 缺规则「${rule.title}」`).toContain(rule.title)
+    }
+    // 规则数口径：文档里必须写对条数，且 info 级规则不能被说成"全部警告级"
+    expect(skill).toContain(`${RULES.length} 条`)
+    expect(guide).toContain(`${RULES.length} 条规则`)
+    expect(guide).toContain('13 条警告级 + 1 条 info 级')
+    expect(skill).toContain('13 条警告级 + 1 条 info 级')
+    expect(readme).toContain('13 条警告级 + 1 条 info 级')
+    for (const [name, text] of [['SKILL.md', skill], ['用户指南', guide]] as const) {
+      // README 的 v0.6.0 更新记录属历史，不参与该断言
+      expect(text, `${name} 仍声称"全部警告级"`).not.toContain('全部警告级')
+    }
+    expect(catalog.filter((r) => r.severity === 'warn').length).toBe(13)
+    expect(catalog.filter((r) => r.severity === 'info').length).toBe(1)
+  })
 })

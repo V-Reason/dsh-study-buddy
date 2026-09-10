@@ -127,6 +127,10 @@ export type SkipReporter = (entry: { path: string; reason: string }) => void
 /**
  * 递归收集 root 下所有 .md（跳过 skip 集合，默认内置通用目录）；rootLabel 标注来源。
  * 读取失败与安全阀超限都通过 `onSkip` 上报，绝不静默吞掉。
+ *
+ * `maxFiles` 是**每根**的文件数安全阀（默认 `MAX_WALK_FILES`，可用
+ * `config.maxWalkFiles` 调整）：超限时**截断扫描并上报**，不再抛错（N6）——
+ * 安全阀的语义是"拦住异常根"，不是"让大型 vault 彻底不可用"。
  */
 export async function walk(
   root: string,
@@ -134,9 +138,12 @@ export async function walk(
   rootLabel = 'vault',
   onSkip?: SkipReporter,
   writable = rootLabel === 'vault',
+  maxFiles = MAX_WALK_FILES,
 ): Promise<WalkedFile[]> {
   const out: WalkedFile[] = []
+  let truncated = false
   async function rec(dir: string, depth: number): Promise<void> {
+    if (truncated) return
     if (depth > MAX_WALK_DEPTH) {
       onSkip?.({ path: dir, reason: `目录深度超过 ${MAX_WALK_DEPTH} 层（用 config.skipDirs 排除或拆分 searchRoots）` })
       return
@@ -153,14 +160,19 @@ export async function walk(
       if (ent.isDirectory()) {
         if (skip.has(ent.name)) continue
         await rec(full, depth + 1)
+        if (truncated) return
         continue
       }
       if (!ent.isFile() || !ent.name.toLowerCase().endsWith('.md')) continue
-      if (out.length >= MAX_WALK_FILES) {
-        throw new Error(
-          `扫描文件数超过安全上限 ${MAX_WALK_FILES}（根：${root}）；`
-          + '请用 config.skipDirs 排除无关目录，或拆分 searchRoots / 检查是否误配了过大的根目录',
-        )
+      if (out.length >= maxFiles) {
+        // 每根只报一次，且停止继续遍历（避免为大库白跑完整趟 readdir）
+        truncated = true
+        onSkip?.({
+          path: root,
+          reason: `扫描文件数已达上限 ${maxFiles}，仅索引前 ${maxFiles} 个文件`
+            + '（用 config.maxWalkFiles 提高上限，或用 config.skipDirs / searchRoots 缩小范围）',
+        })
+        return
       }
       try {
         const st = await fsp.stat(full)
@@ -174,11 +186,16 @@ export async function walk(
   return out
 }
 
-/** 跨根扫描：逐根 walk 后拼接（rel 为各根内相对路径，root 标注来源） */
-export async function walkRoots(roots: SearchRoot[], skip: Set<string> = skipSetFor(), onSkip?: SkipReporter): Promise<WalkedFile[]> {
+/** 跨根扫描：逐根 walk 后拼接（rel 为各根内相对路径，root 标注来源）；`maxFiles` 为每根上限 */
+export async function walkRoots(
+  roots: SearchRoot[],
+  skip: Set<string> = skipSetFor(),
+  onSkip?: SkipReporter,
+  maxFiles = MAX_WALK_FILES,
+): Promise<WalkedFile[]> {
   const out: WalkedFile[] = []
   for (const r of roots) {
-    out.push(...await walk(r.path, skip, r.label, onSkip, r.writable))
+    out.push(...await walk(r.path, skip, r.label, onSkip, r.writable, maxFiles))
   }
   return out
 }
@@ -275,6 +292,8 @@ export interface VaultLayout {
   lint?: LintConfig
   /** 索引缓存 TTL（毫秒）：默认 2000；0 = 每次调用都重扫全库（外部编辑立即可见） */
   indexTtlMs?: number
+  /** 每根扫描文件数上限（默认 20000）：超限截断扫描并回显警告，不再让工具整体失败（N6） */
+  maxWalkFiles?: number
   /** 模板推断提示词表（缺省用内置默认值） */
   templateHints?: TemplateHints
 }
@@ -290,12 +309,13 @@ export function cardDirFor(layout: VaultLayout, domain: string): string {
   return abs
 }
 
-/** 生成唯一文件名：`标题.md`，冲突时追加 ID 后缀，再冲突用完整 ID */
+/** 生成唯一文件名：`标题.md`，冲突时追加 ID 后缀（末 6 位），再冲突用完整 ID */
 export async function uniqueCardPath(dir: string, title: string, id: string): Promise<string> {
   const base = sanitizeFilename(title)
   const first = join(dir, `${base}.md`)
   if (!(await exists(first))) return first
-  const second = join(dir, `${base}_${id.slice(-4)}.md`)
+  // ID 已是 6 位 hex（BIZ-11b），回退后缀同步取末 6 位（N14）
+  const second = join(dir, `${base}_${id.slice(-6)}.md`)
   if (!(await exists(second))) return second
   const third = join(dir, `${base}_${id}.md`)
   if (!(await exists(third))) return third

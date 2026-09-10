@@ -51,10 +51,15 @@ describe('cardmodel 段落模型', () => {
     expect(findSection(sections, '排障判据')).toBeUndefined()
   })
 
-  test('inlineText 收敛换行与多余空白（SEC-1 渲染兜底）', () => {
+  test('inlineText 只折换行、不压空格（SEC-1 渲染兜底 + N12）', () => {
     expect(inlineText('A\n---\n注入: x')).toBe('A --- 注入: x')
     expect(inlineText('  前后空白  ')).toBe('前后空白')
     expect(inlineText(undefined)).toBe('')
+    // 跨行折叠（含空行）只产生一个空格
+    expect(inlineText('a\n\n  \nb')).toBe('a b')
+    // N12：连续空格是合法输入，不得静默改写
+    expect(inlineText('C++  STL')).toBe('C++  STL')
+    expect(inlineText('C++  STL\n下一行')).toBe('C++  STL 下一行')
   })
 
   test('makeLineOf 下标 → 行号（1 基，含边界）', () => {

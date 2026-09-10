@@ -327,10 +327,10 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         required: ['ref', 'action'],
       },
       output,
-      execute: (args) => store.history(String(args.ref ?? ''), String(args.action ?? '') as 'list' | 'strip', {
+      execute: (args, exec) => store.history(String(args.ref ?? ''), String(args.action ?? '') as 'list' | 'strip', {
         kinds: historyKinds(args.kinds),
         dryRun: args.dryRun === true,
-      }),
+      }, { sessionCwd: sessionCwdOf(exec) }),
     },
     {
       name: 'card_rename',

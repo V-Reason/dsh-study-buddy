@@ -102,19 +102,20 @@ describe('card', () => {
     expect(stripMocDatePrefix('  ')).toBe('')
   })
 
-  test('validateCard 警告缺失的模板必填小节（不阻塞）', () => {
+  test('validateCard 警告缺失的模板必填小节（不阻塞，N8：文案由 sectionHints 生成）', () => {
     // 少了 主干线 / 实例走查 / 易错点 / 自测题
     const partial = { ...base, content: '### 核心思想\n一句话。\n\n### 阶梯式解剖\n第 1 层。' }
     const result = validateCard(partial)
     expect(result.errors).toEqual([])
     const warnings = result.warnings.join()
-    expect(warnings).toContain('"### 主干线"')
-    expect(warnings).toContain('"### 实例走查"')
-    expect(warnings).toContain('"### 易错点"')
-    expect(warnings).toContain('"### 自测题"')
-    expect(warnings).toContain('理论型必填')
-    expect(warnings).not.toContain('"### 核心思想"')
-    expect(warnings).not.toContain('"### 阶梯式解剖"')
+    // N8：sectionHints 生成的形如 `### 主干线（问题 → 关键约束 …）`
+    expect(warnings).toContain('正文缺少必填小节（理论型）')
+    expect(warnings).toContain('### 主干线（')
+    expect(warnings).toContain('### 实例走查（')
+    expect(warnings).toContain('### 易错点（')
+    expect(warnings).toContain('### 自测题（')
+    expect(warnings).not.toContain('### 核心思想（')
+    expect(warnings).not.toContain('### 阶梯式解剖（')
     // 小节齐全则不产生模板警告
     expect(validateCard(base).warnings.filter(w => w.includes('必填'))).toEqual([])
     // content 为空时已有 error，不再叠加模板警告
@@ -124,11 +125,11 @@ describe('card', () => {
   test('validateCard 模板分型：工程型要求验证实验与排障判据；非法 template 报错', () => {
     const eng = validateCard({ ...base, template: '工程型' })
     const warnings = eng.warnings.join()
-    expect(warnings).toContain('"### 验证实验"')
-    expect(warnings).toContain('"### 排障判据"')
-    expect(warnings).toContain('工程型必填')
+    expect(warnings).toContain('正文缺少必填小节（工程型）')
+    expect(warnings).toContain('### 验证实验（')
+    expect(warnings).toContain('### 排障判据（')
     // 推荐小节单独提示（不算必填）
-    expect(warnings).toContain('推荐')
+    expect(warnings).toContain('正文缺少推荐小节（工程型）')
     const bad = validateCard({ ...base, template: '随笔型' })
     expect(bad.errors.join()).toContain('template 必须是')
   })
@@ -253,6 +254,35 @@ describe('card', () => {
     const raw = '# 标题\n\n### 关联卡片\n- 前置：已有（id3）'
     const text = addLink(raw, 'prev', '已有（id3）')
     expect(text.match(/已有/g)?.length).toBe(1)
+  })
+
+  // N4：`### 关联卡片` 是文件最后一行（无尾换行/只有尾换行）时，关联行必须另起一行
+  test('N4：addLink 在小节无内容时不把关联行粘到标题上', () => {
+    for (const raw of ['# 标题\n\n### 关联卡片', '# 标题\n\n### 关联卡片\n', '# 标题\n\n### 关联卡片\n\n']) {
+      const text = addLink(raw, 'prev', '乙（id2）')
+      expect(text).toContain('### 关联卡片\n- 前置：`乙`（id2）')
+      expect(text).not.toContain('### 关联卡片- 前置')
+      // 关联行必须是独立列表项（links-format 规则按 `^[ \t]*-` 识别）
+      expect(text.split(/\r?\n/).some((line) => /^[ \t]*-/.test(line))).toBe(true)
+      // 再关联一次能正确判重（说明该行已被小节正文收录）
+      expect(addLink(text, 'prev', '乙（id2）')).toBe(text)
+    }
+  })
+
+  // N12：合法输入（连续空格）不得被渲染层静默改写
+  test('N12：标题/定义里的连续空格原样保留（只折换行）', () => {
+    const text = renderCard({
+      id: '202608161430_ab12cd',
+      title: 'C++  STL',
+      domain: '计算机',
+      source: '验证',
+      status: '草稿',
+      definition: 'C++  STL 的两层 抽象',
+      content: '### 核心思想\nx',
+    })
+    expect(text).toContain('标题: C++  STL')
+    expect(text).toContain('> C++  STL 的两层 抽象')
+    expect(text).not.toContain('C++ STL')
   })
 
   // 回归（BIZ-6）：判重只限「关联卡片」小节——别的小节里的 `- 前置：X` 不算已关联

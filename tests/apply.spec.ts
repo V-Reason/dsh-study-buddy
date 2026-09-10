@@ -95,6 +95,26 @@ describe('apply（fail-loud 与 vaultRoot==cwd 回归）', () => {
     expect(() => apply(fake.ctx, { vaultRoot: dir })).toThrow(/duplicate card_search/)
   })
 
+  // N9：rulesOff 写错规则 id（或按旧版本配置写已删除的 id）必须 fail-loud，不能"以为关了其实没关"
+  test('N9：lint.rulesOff 含未知规则 id 时抛错，并列出可用 id', () => {
+    const fake = fakeCtx()
+    expect(() => apply(fake.ctx, { vaultRoot: dir, lint: { rulesOff: ['walkthrough', 'typo-rule'] } }))
+      .toThrow(/未识别的规则 id：walkthrough、typo-rule/)
+    expect(fake.registered).toHaveLength(0)
+    // 合法 id 正常挂载
+    const ok = fakeCtx()
+    expect(() => apply(ok.ctx, { vaultRoot: dir, lint: { rulesOff: ['session-residue'] } })).not.toThrow()
+    expect(ok.registered).toHaveLength(CARD_TOOLS.length)
+  })
+
+  // N6：maxWalkFiles 必须是正整数，否则回落默认值（配置写错不该让插件整体失败）
+  test('N6：maxWalkFiles 非法值回落默认，合法值正常挂载', () => {
+    const bad = fakeCtx()
+    expect(() => apply(bad.ctx, { vaultRoot: dir, maxWalkFiles: -1 })).not.toThrow()
+    const ok = fakeCtx()
+    expect(() => apply(ok.ctx, { vaultRoot: dir, maxWalkFiles: 50 })).not.toThrow()
+  })
+
   test('effect 卸载时注册的工具被移除（disposer 由 ctx.effect 持有）', () => {
     const fake = fakeCtx()
     apply(fake.ctx, { vaultRoot: dir })

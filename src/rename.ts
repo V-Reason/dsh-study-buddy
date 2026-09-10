@@ -153,7 +153,11 @@ export function planRename(input: RenamePlanInput): RenamePlan {
   const newBase = sanitizeFilename(input.newTitle)
   const expected = sanitizeFilename(input.oldTitle)
   if (oldBase === newBase) return { renameFile: false, oldBase, newBase, reason: '新标题清洗后与原文件名相同，无需改名' }
-  if (oldBase === expected) return { renameFile: true, oldBase, newBase, reason: '文件名与旧标题一致，同步改名为新标题' }
+  // 既存文件名含已废弃字符（如 `A[B].md`）时，两边同口径归一后再比（N13）：
+  // 否则会被判成"历史遗留"而不再同步文件名
+  if (oldBase === expected || sanitizeFilename(oldBase) === expected) {
+    return { renameFile: true, oldBase, newBase, reason: '文件名与旧标题一致，同步改名为新标题' }
+  }
   return { renameFile: false, oldBase, newBase, reason: `文件名「${oldBase}」与旧标题「${input.oldTitle}」不一致（历史遗留），保留文件名，只改标题与入链` }
 }
 

@@ -175,4 +175,29 @@ describe('buildToolDefs（工具 schema 契约）', () => {
       await rm(cwd, { recursive: true, force: true })
     }
   })
+
+  // N15：card_history 是唯一漏传 sessionCwd 的卡片工具（BIZ-3 的遗漏项）
+  test('N15：card_history 透传会话 cwd（工作目录里的笔记能解析到）', async () => {
+    const vault = await mkdtemp(join(tmpdir(), 'study-buddy-tool-vault-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'study-buddy-tool-cwd-'))
+    try {
+      await writeFile(join(cwd, 'note.md'), '> 概念: x\n# note\n正文\n\n### 版本更新（来源：a）\n补充。', 'utf8')
+      const store = new VaultStore({
+        vaultRoot: vault, stateDir: '.study', fallbackDir: '未分类', mocDir: '目录', includeSessionCwd: true,
+      })
+      const history = buildToolDefs(store).find((d) => d.name === 'card_history')!
+      const out = await history.execute(
+        { ref: '工作目录/note.md', action: 'list' },
+        { agent: { session: { header: { cwd } } } },
+      ) as string
+      expect(out).toContain('历史块 1 个')
+      expect(out).toContain('版本更新')
+      // 不传 cwd 时同样引用解析失败（对照：说明上面命中的是 cwd 透传）
+      await expect(Promise.resolve(history.execute({ ref: '工作目录/note.md', action: 'list' })))
+        .rejects.toThrow(/找不到卡片/)
+    } finally {
+      await rm(vault, { recursive: true, force: true })
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
 })

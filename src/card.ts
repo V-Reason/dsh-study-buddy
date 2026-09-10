@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto'
 import { inlineText, matchesTitle, splitSections } from './cardmodel.ts'
 import { parseFrontmatter, renderFrontmatter } from './frontmatter.ts'
 import { errataBlock, insertHistoryBlock, versionBlock } from './history.ts'
-import { checkTemplate, inferTemplate, isTemplateType, type TemplateHints, type TemplateType } from './template.ts'
+import { checkTemplate, inferTemplate, isTemplateType, sectionHints, type TemplateHints, type TemplateType } from './template.ts'
 
 export const VALID_STATUS = ['草稿', '已确认', '需更新'] as const
 
@@ -140,11 +140,12 @@ export function validateCard(input: CardInput, opts: ValidateOptions = {}): Vali
   if (!input.content?.trim()) errors.push('content（核心内容）不能为空')
   if (String(input.content ?? '').trim()) {
     const check = checkTemplate(template.type, String(input.content))
-    for (const section of check.missing) {
-      warnings.push(`正文缺少 "### ${section.title}" 小节（${template.type}必填：${section.hint}）`)
+    // 缺节提示由 template.sectionHints 统一生成（N8：它此前是零引用死代码）
+    if (check.missing.length > 0) {
+      warnings.push(`正文缺少必填小节（${template.type}）：${sectionHints(check.missing)}`)
     }
-    for (const section of check.missingOptional) {
-      warnings.push(`正文缺少 "### ${section.title}" 小节（${template.type}推荐：${section.hint}）`)
+    if (check.missingOptional.length > 0) {
+      warnings.push(`正文缺少推荐小节（${template.type}）：${sectionHints(check.missingOptional)}`)
     }
   }
   return { errors, warnings }
@@ -343,6 +344,9 @@ export function addLink(raw: string, kind: LinkKind, targetLabel: string, target
   // 插到标题行之后的首个换行后（保留小节内既有内容）
   const nl = bodyText.indexOf('\n', target.start)
   const insertAt = nl === -1 ? body.length : Math.min(nl + 1, body.length)
+  // 标题是正文最后一行（无内容，或只跟一个尾换行）时必须补换行（N4）：否则关联行会
+  // 粘成 `### 关联卡片- 前置：…`——Obsidian 不渲染为列表，links-format 也认不出
+  if (insertAt >= body.length) return `${fm}${body}\n${line}`
   return `${fm}${body.slice(0, insertAt)}${line}${body.slice(insertAt)}`
 }
 

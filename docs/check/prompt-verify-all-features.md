@@ -48,6 +48,16 @@
 19h. `card_rename` 传旧笔记（无 ID）：应报“旧笔记…不支持改名”。
 19i. `card_rename` 改成库里已存在的另一个标题：应报“已存在同名卡片…”且**未做任何写入**（核对被改卡的标题与入链仍是原值）。
 
+## 2c · 复审修复回归（v0.9.1，条件不满足时记 ⚠ 并说明）
+
+19j. **N1 只读根不半写盘**：若配置里有 `searchRoots` 或 `includeSessionCwd`（只读根）：取其中一张卡与本 vault 一张卡执行 `card_link`，应报“位于只读检索根…”，并核对**两侧文件内容都未变**（旧版会先写一侧再报错）。
+19k. **N2 建卡不再全库重扫**：连续 `card_create` 两张卡（应快速返回，不等同于全库体检）；随后 `card_search` 一次，再建一张与第一张同标题的卡：仍应返回“⚠ 已存在同名卡片…建议 card_update”。
+19l. **N3 外部编辑立即可见**：请我（用户）在 Obsidian 里新建一篇含独特关键词 `zzqqunique` 的笔记并保存；我保存后你立刻 `card_search zzqqunique`：应**立即命中**（不必等 2 秒）；再 `card_get` 该笔记也应成功。
+19m. **N7 未执行 ≠ 通过**：若配置里 `lint.residueLevel: 'off'`：`card_lint` 单卡应显示 `⊘ 未执行（不计入通过）：会话残留`，且**不再**出现“✓ 通过：会话残留”。
+19n. **N9 rulesOff 校验**：若配置里 `lint.rulesOff` 含不存在的规则 id（如已删除的 `walkthrough`）：挂载应失败并报“未识别的规则 id…（可用：…）”——说明它不再静默忽略。
+19o. **N10 分布桶封顶**：`card_lint scope:"vault"` 的“分数分布”里不应出现 `100~109`（满分桶显示 `100`）。
+19p. **N5 跳过原因**：若返回文本出现 `⚠ 跳过 N 项未完整处理`，核对括号里的原因与实际情况一致（读取失败 / 目录深度超限 / 扫描文件数达上限），且 `card_moc` 的返回里同样带该提示。
+
 ## 3 · 进度与记忆（study_progress / study_memory）
 20. `study_progress` set（material/section/pendingQuestions/touchedCardIds 全字段）→ get 核对 → clear 核对。
 21. `study_memory`：set prefs → get 单键 → get 全量（核对 lastSummary 置顶）→ append → remove 存在键 → remove 不存在键（应提示“无此键”且不写盘）。
