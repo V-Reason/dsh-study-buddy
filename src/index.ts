@@ -319,6 +319,8 @@ export class VaultStore {
     const sig = `${cwdKey}\n` + files.map((f) => `${f.root}|${f.rel}|${f.mtimeMs}|${f.ctimeMs}|${f.size}`).join('\n')
     if (this.index && sig === this.sig) {
       this.lastScanMs = Date.now()
+      // cwd 同步回写：否则同一会话 cwd 永远命不中 TTL 缓存，每次调用都白扫一趟全库
+      this.lastScanCwd = cwdKey
       this.skipped = skipped
       return this.index
     }
@@ -797,6 +799,8 @@ export class VaultStore {
       try {
         content = await fsp.readFile(other.path, 'utf8')
       } catch (error) {
+        // 必须 push（而不是替换）：跳过清单属于上面那次 ensureIndex 产出的索引代，
+        // 这里是"同一代索引里又一次读盘失败"，清空会丢掉扫描阶段已上报的跳过项（BIZ-7）
         this.skipped.push({ path: other.path, reason: `文件读取失败（${(error as NodeJS.ErrnoException).code ?? '未知错误'}）` })
         continue
       }

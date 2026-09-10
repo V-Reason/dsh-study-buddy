@@ -24,7 +24,7 @@
 - **指令驱动（听指挥）**：读取 ≠ 讲解——"读取 X"只输出读取报告，说"讲解"才开始讲；读取 PDF/PNG/PPT 等文件走内置 `file-reading` 技能（PDF/PPTX/DOCX 的**内嵌图片自动提取**并逐张 `read_image`，不漏掉课件里的图），不摸索工具
 - **MOC 知识目录**：归档时自动生成按领域分组的知识地图
 - **轻量**：每次请求固定开销约 15KB（比标准模式低 ~30%）；技能按需加载；会话早期自动压缩历史（阈值 30%）
-- 263 项单元测试覆盖卡片渲染、检索索引（含多根旧笔记）、增量更新、进度与记忆持久化、原子写与路径安全、两轮审查修复回归，以及文档链接/锚点与版本基线守卫
+- 265 项单元测试覆盖卡片渲染、检索索引（含多根旧笔记）、增量更新、进度与记忆持久化、原子写与路径安全、两轮审查修复回归，以及文档链接/锚点与版本基线守卫
 
 ## 更新记录
 
@@ -138,7 +138,7 @@ ID: 202608161430_ab12
 git clone https://github.com/V-Reason/dsh-study-buddy.git
 cd dsh-study-buddy
 pnpm install
-pnpm run check          # typecheck + 263 项测试 + 构建 lib/index.js
+pnpm run check          # typecheck + 265 项测试 + 构建 lib/index.js
 
 # 2. 把插件装进你的 DSH profile（<profileDir> 通常是 %DSH_HOME%\profiles\web）
 #    在 <profileDir>\package.json 的 dependencies 里加入：
@@ -219,7 +219,7 @@ Copy-Item -Recurse presets/study "$env:DSH_HOME\.agent-presets\study"
 
 ```bash
 pnpm install
-pnpm run check     # typecheck + vitest（263 项）+ esbuild 构建
+pnpm run check     # typecheck + vitest（265 项）+ esbuild 构建
 ```
 
 - 源码在 `src/`（零运行时依赖，仅 Node 内置模块），构建产物 `lib/index.js`（`@deepseek-ai/*` 保持 external）
@@ -231,7 +231,7 @@ pnpm run check     # typecheck + vitest（263 项）+ esbuild 构建
 ```
 dsh-study-buddy/
 ├── src/                 # 插件源码（vault 适配 / 检索索引 / 卡片模型 / 模板 / lint / 历史块 / 改名 / 工具 / 入口）
-├── tests/               # 263 项单元与端到端测试
+├── tests/               # 265 项单元与端到端测试
 ├── presets/study/       # 「学习」Agent 预设（persona + 工具行 + 6 个技能）
 │   └── skills/          # file-reading / study-loop / card-format / incremental-update / domain-adaptation / memory-auto
 ├── docs/                # 当前文档：用户使用指南、设计文档、技术文档、经验文档

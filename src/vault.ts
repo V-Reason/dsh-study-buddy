@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { promises as fsp, statSync } from 'node:fs'
+import { promises as fsp, statSync, type Stats } from 'node:fs'
 import { dirname, isAbsolute, join, parse, relative, resolve, basename } from 'node:path'
 import type { TemplateHints } from './template.ts'
 
@@ -124,9 +124,55 @@ export function isFsRoot(p: string): boolean {
 /** 扫描进度回调（读取失败/超限时收集，供工具返回文本回显，BIZ-7） */
 export type SkipReporter = (entry: { path: string; reason: string }) => void
 
+/** 条目判定结果：`st` 为普通文件的 stat；其余情况由 `reason` 说明（无 reason = 目录，本就不进索引） */
+interface EntryKind {
+  st?: Stats
+  reason?: string
+}
+
+/**
+ * 判定一个目录条目能否当普通文件读（BIZ-7），命中普通文件时**顺带回传 stat**
+ * （命中路径每个文件只 stat 一次，与旧实现开销一致）。
+ *
+ * **绝不用 `dirent.isFile()` 直接当门禁**：断链符号链接的 dirent 是
+ * `isSymbolicLink() === true` / `isFile() === false`，旧实现因此在过滤阶段就把它
+ * 丢掉——它既不在索引里，也不在跳过清单里，`共检索 N 篇` 于是少算一篇而不自知
+ * （设计文档 D18：报告必须与"实际处理了什么"一致）。
+ */
+async function resolveEntry(full: string, ent: { isSymbolicLink(): boolean }): Promise<EntryKind> {
+  const linked = ent.isSymbolicLink()
+  try {
+    const st = await fsp.stat(full)
+    if (st.isFile()) return { st }
+    // 目录不是文件也不是失败：目录本来就不进索引，无需回显
+    if (st.isDirectory()) return {}
+    if (!linked) return { reason: '不是普通文件（跳过）' }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? '未知错误'
+    return { reason: linked ? `符号链接目标不可达（${code}）` : `文件 stat 失败（${code}）` }
+  }
+  // 链接目标不是文件也不是目录：lstat 拿链接自身信息，供回显具体类型
+  try {
+    const lst = await fsp.lstat(full)
+    return { reason: `符号链接目标不是普通文件（${describeType(lst)}）` }
+  } catch {
+    return {}
+  }
+}
+
+/** 文件类型回显名（只用于给用户看的原因文本） */
+function describeType(st: Stats): string {
+  if (st.isFIFO()) return '命名管道'
+  if (st.isSocket()) return '套接字'
+  if (st.isBlockDevice()) return '块设备'
+  if (st.isCharacterDevice()) return '字符设备'
+  return '未知类型'
+}
+
 /**
  * 递归收集 root 下所有 .md（跳过 skip 集合，默认内置通用目录）；rootLabel 标注来源。
- * 读取失败与安全阀超限都通过 `onSkip` 上报，绝不静默吞掉。
+ * `onSkip` 覆盖：目录读取失败、**条目无法当文件读**（stat 失败 / 断链符号链接）、
+ * 目录深度超限、文件数安全阀超限——全部上报，绝不静默吞掉（BIZ-7）。
  *
  * `maxFiles` 是**每根**的文件数安全阀（默认 `MAX_WALK_FILES`，可用
  * `config.maxWalkFiles` 调整）：超限时**截断扫描并上报**，不再抛错（N6）——
@@ -163,7 +209,14 @@ export async function walk(
         if (truncated) return
         continue
       }
-      if (!ent.isFile() || !ent.name.toLowerCase().endsWith('.md')) continue
+      // 名字不像 .md 的一律不看；保留所有 .md 条目再做判定——
+      // `isFile()` 直接当门禁会把断链符号链接静默丢掉（BIZ-7）
+      if (!ent.name.toLowerCase().endsWith('.md')) continue
+      const kind = await resolveEntry(full, ent)
+      if (!kind.st) {
+        if (kind.reason) onSkip?.({ path: full, reason: kind.reason })
+        continue
+      }
       if (out.length >= maxFiles) {
         // 每根只报一次，且停止继续遍历（避免为大库白跑完整趟 readdir）
         truncated = true
@@ -174,12 +227,8 @@ export async function walk(
         })
         return
       }
-      try {
-        const st = await fsp.stat(full)
-        out.push({ path: full, rel: relative(root, full), root: rootLabel, writable, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, size: st.size })
-      } catch (error) {
-        onSkip?.({ path: full, reason: `文件 stat 失败（${(error as NodeJS.ErrnoException).code ?? '未知错误'}）` })
-      }
+      const st = kind.st
+      out.push({ path: full, rel: relative(root, full), root: rootLabel, writable, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, size: st.size })
     }
   }
   await rec(root, 0)

@@ -1,11 +1,57 @@
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { promises as fsp, type Dirent } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { todayLocal } from '../src/card.ts'
 import { VaultStore } from '../src/index.ts'
 import { SearchIndex } from '../src/search.ts'
 import { MAX_WALK_DEPTH, type VaultLayout } from '../src/vault.ts'
+
+/**
+ * 测试替身：`walk` 只读取 dirent 的 `name` / `isDirectory()` / `isSymbolicLink()`。
+ * 故意**只实现这三个**——`walk` 若改用别的成员，替身会当场抛错而不是静默失真。
+ */
+function fakeSymlinkDirent(name: string): Dirent {
+  return {
+    name,
+    isDirectory: () => false,
+    isSymbolicLink: () => true,
+  } as unknown as Dirent
+}
+
+/**
+ * fs 注入（未命中的路径一律直通真实实现），用于制造真实文件系统上造不出来的场景。
+ *
+ * 注入点是 `node:fs` 的 `promises` 对象——它是普通可写对象，`src/index.ts`（`fsp.push/readFile`）
+ * 与 `src/vault.ts`（`fsp.readdir/stat`）用的是同一份引用，所以替换对它俩都可见（已实测）。
+ * 注意**不能**改成 `vi.spyOn(await import('node:fs/promises'), …)`：ESM 命名空间不可配置，
+ * 且静态/动态导入得到的命名空间可配置性还不一致（vitest 4 下时好时坏）。
+ *
+ * 存在的理由：`symlink()` 在无特权/无开发者模式的 Windows 上抛 EPERM，旧用例
+ * `catch { return }` 直接空跑——**本地绿、CI（ubuntu）红的假绿**。这里让 walk 看到一个
+ * 断链符号链接条目（`stat` 仍真实访问文件系统并抛 ENOENT），任何平台都能真正执行该路径。
+ */
+async function spyFs(extra: { entries?: Dirent[]; readFailures?: string[] }): Promise<() => void> {
+  const realReaddir = fsp.readdir
+  const realReadFile = fsp.readFile
+  const failing = new Set((extra.readFailures ?? []).map((p) => resolve(p)))
+  const added = extra.entries ?? []
+  const spies = [
+    vi.spyOn(fsp, 'readdir').mockImplementation((async (p: string, o?: object) => {
+      const real = (o === undefined ? await realReaddir(p) : await realReaddir(p, o as never)) as unknown[]
+      // 只对 vault 根注入（与真实断链所在层级一致）
+      return added.length > 0 && resolve(String(p)) === resolve(dir) ? [...added, ...real] : real
+    }) as typeof fsp.readdir),
+    vi.spyOn(fsp, 'readFile').mockImplementation((async (p: unknown, ...rest: unknown[]) => {
+      if (failing.has(resolve(String(p)))) {
+        throw Object.assign(new Error(`ENOENT: 注入的读盘失败（${basename(String(p))}）`), { code: 'ENOENT' })
+      }
+      return await (realReadFile as (...a: unknown[]) => Promise<unknown>)(p, ...rest)
+    }) as typeof fsp.readFile),
+  ]
+  return () => spies.forEach((s) => s.mockRestore())
+}
 
 let dir: string
 
@@ -879,18 +925,46 @@ describe('审查修复回归（BIZ / SEC）', () => {
 
   // BIZ-7：读取失败/无权限的文件必须计数并回显，报告数字不能假装"完整"
   test('BIZ-7：读取失败的条目在报告里回显（不静默吞掉）', async () => {
-    const link = join(dir, '断链.md')
+    let restore: (() => void) | undefined
     try {
-      await symlink(join(dir, '不存在的目标.md'), link)
+      await symlink(join(dir, '不存在的目标.md'), join(dir, '断链.md'))
     } catch {
-      // Windows 无符号链接权限时跳过；`walk` 的上报路径已在 vault.spec 覆盖
-      return
+      // Windows 无符号链接权限（EPERM）：改用条目替身伪造同一个断链条目，
+      // 让**被测的真实 walk 路径**照常执行。旧实现直接 `return` 空跑，于是
+      // "本地全绿、CI 报错"——这条假绿正是本用例最该被钉住的坑。
+      restore = await spyFs({ entries: [fakeSymlinkDirent('断链.md')] })
     }
+    try {
+      const store = new VaultStore({ ...layout(), indexTtlMs: 0 })
+      const out = await store.search('任意词')
+      // N5：文案改为按原因分组的「跳过 N 项」
+      expect(out).toContain('⚠ 跳过 1 项未完整处理')
+      // 原因必须是"符号链接目标不可达"，而不是笼统的"读取失败/无权限"（N5 的口径）
+      expect(out).toContain('符号链接目标不可达')
+      expect(out).toContain('断链.md')
+    } finally {
+      restore?.()
+    }
+  })
+
+  // 读盘失败（同步盘锁定/文件被删）：只出现在 ensureIndex 的 readFile 分支，
+  // 真实文件系统上无法稳定制造，用注入钉住"计入 + 回显 + 不重复计数"
+  test('BIZ-7：索引阶段读盘失败的文件计入跳过清单（原因 + 计数不重复）', async () => {
+    const file = join(dir, '读失败.md')
+    await writeFile(file, rawCard('202601010000_eeeeee', '读失败', '关键词 ZZZ'), 'utf8')
+    // 先正常建立一次索引（此时读盘成功），再注入失败并让 indexTtlMs:0 触发重扫
     const store = new VaultStore({ ...layout(), indexTtlMs: 0 })
-    const out = await store.search('任意词')
-    // N5：文案改为按原因分组的「跳过 N 项」
-    expect(out).toContain('⚠ 跳过 1 项未完整处理')
-    expect(out).toContain('断链.md')
+    const restore = await spyFs({ readFailures: [file] })
+    try {
+      const out = await store.search('关键词')
+      expect(out).toContain('⚠ 跳过 1 项未完整处理')
+      expect(out).toContain('文件读取失败（ENOENT）')
+      expect(out).toContain('读失败.md')
+      // 该文件没有进索引，也没有被 stat 失败重复计一次
+      expect(out).toContain('未命中（共检索 0 篇）')
+    } finally {
+      restore()
+    }
   })
 
   // N5：跳过原因必须如实回显（旧实现一律写成"读取失败/无权限"，会把用户引向错误方向）

@@ -58,7 +58,8 @@ export type SkipReporter = (entry: {
 }) => void;
 /**
  * 递归收集 root 下所有 .md（跳过 skip 集合，默认内置通用目录）；rootLabel 标注来源。
- * 读取失败与安全阀超限都通过 `onSkip` 上报，绝不静默吞掉。
+ * `onSkip` 覆盖：目录读取失败、**条目无法当文件读**（stat 失败 / 断链符号链接）、
+ * 目录深度超限、文件数安全阀超限——全部上报，绝不静默吞掉（BIZ-7）。
  *
  * `maxFiles` 是**每根**的文件数安全阀（默认 `MAX_WALK_FILES`，可用
  * `config.maxWalkFiles` 调整）：超限时**截断扫描并上报**，不再抛错（N6）——

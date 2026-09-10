@@ -1,12 +1,41 @@
-import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { promises as fsp, type Dirent } from 'node:fs'
+import { mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import {
   atomicWrite, cardDirFor, containsRoot, dedupeFiles, dedupeRoots, findSimilarDomainKeys, isFsRoot, mocPathFor,
   resolveSearchRoots, sanitizeFilename, skipSetFor, uniqueCardPath, walk, withinRoot, MAX_WALK_DEPTH,
   type VaultLayout,
 } from '../src/vault.ts'
+
+/**
+ * 测试替身：`walk` 只读取 dirent 的 `name` / `isDirectory()` / `isSymbolicLink()`。
+ * 故意**只实现这三个**——`walk` 若改用别的成员，替身会当场抛错而不是静默失真。
+ */
+function fakeSymlinkDirent(name: string): Dirent {
+  return {
+    name,
+    isDirectory: () => false,
+    isSymbolicLink: () => true,
+  } as unknown as Dirent
+}
+
+/**
+ * 让 `walk` 的下一趟扫描看到一个额外的目录条目。
+ *
+ * 注入点是 `node:fs` 的 `promises` 对象：普通可写对象，与 `src/vault.ts` 里
+ * `import { promises as fsp } from 'node:fs'` 拿到的是同一份引用，替换对它可见（已实测）。
+ * **不能**用 `vi.spyOn(await import('node:fs/promises'), …)`：ESM 命名空间不可配置。
+ */
+async function spyReaddirWith(extra: Dirent[], at: string): Promise<() => void> {
+  const real = fsp.readdir
+  const spy = vi.spyOn(fsp, 'readdir').mockImplementation((async (p: string, o?: object) => {
+    const entries = (o === undefined ? await real(p) : await real(p, o as never)) as unknown[]
+    return resolve(String(p)) === resolve(at) ? [...extra, ...entries] : entries
+  }) as typeof fsp.readdir)
+  return () => spy.mockRestore()
+}
 
 let dir: string
 
@@ -153,6 +182,36 @@ describe('vault', () => {
     // 未超限时不受影响
     const all = await walk(dir, skipSetFor(), 'vault', undefined, true, 10)
     expect(all).toHaveLength(4)
+  })
+
+  // BIZ-7：断链符号链接既不在索引里，也**不能**在跳过清单里缺席——
+  // 旧实现用 `dirent.isFile()` 当门禁，断链的 dirent 是 isSymbolicLink()，
+  // 于是在过滤阶段被静默丢掉（`共检索 N 篇` 少算一篇且不自知）
+  test('BIZ-7：断链符号链接不再静默丢弃，按"目标不可达"上报', async () => {
+    await writeFile(join(dir, '正常.md'), 'x')
+    // 替身条目与 Linux `readdir(withFileTypes)` 对断链给出的 dirent 语义一致：
+    // isDirectory()=false / isSymbolicLink()=true / isFile()=false；stat 仍真实访问文件系统（ENOENT）
+    const restore = await spyReaddirWith([fakeSymlinkDirent('断链.md')], dir)
+    const skipped: Array<{ path: string; reason: string }> = []
+    let files
+    try {
+      files = await walk(dir, skipSetFor(), 'vault', (entry) => skipped.push(entry))
+    } finally {
+      restore()
+    }
+    expect(files.map((f) => f.rel.replace(/\\/g, '/'))).toEqual(['正常.md'])
+    expect(skipped).toHaveLength(1)
+    expect(skipped[0].path.endsWith('断链.md')).toBe(true)
+    expect(skipped[0].reason).toContain('符号链接目标不可达')
+    // 真造一个断链时走的是同一条上报路径（无符号链接权限的平台由上面的替身覆盖）
+    try {
+      await symlink(join(dir, '不存在的目标.md'), join(dir, '真断链.md'))
+      const realSkipped: Array<{ path: string; reason: string }> = []
+      await walk(dir, skipSetFor(), 'vault', (entry) => realSkipped.push(entry))
+      expect(realSkipped.some((s) => s.path.endsWith('真断链.md') && s.reason.includes('符号链接目标不可达'))).toBe(true)
+    } catch {
+      // Windows 无符号链接权限：跳过真实文件系统这一半，替身那半已覆盖同等逻辑
+    }
   })
 
   test('containsRoot 判定包含关系', () => {
