@@ -38,14 +38,14 @@ describe('buildToolDefs（工具 schema 契约）', () => {
     }
   })
 
-  test('card_create：status 带 enum、required 完整、template 可选枚举', () => {
+  test('card_create：status 带 enum、required 完整、模板参数已退场', () => {
     const def = defOf('card_create')
     const props = def.parameters.properties as Record<string, { enum?: string[] }>
     expect(props.status?.enum).toEqual(['草稿', '已确认', '需更新'])
-    expect(props.template?.enum).toEqual(['理论型', '工程型', '对比型'])
+    // 需求 R6：模板概念退场，参数表里不应再有 template
+    expect(props.template).toBeUndefined()
     const required = def.parameters.required as string[]
     expect(required).toEqual(expect.arrayContaining(['title', 'domain', 'source', 'status', 'definition', 'content']))
-    expect(required).not.toContain('template')
   })
 
   test('card_update：required=[id,mode]，definition 模式参数存在', () => {
@@ -53,16 +53,13 @@ describe('buildToolDefs（工具 schema 契约）', () => {
     expect(def.parameters.required).toEqual(['id', 'mode'])
     const props = def.parameters.properties as Record<string, { type?: string; enum?: string[]; properties?: Record<string, unknown>; description?: string }>
     expect(props.status?.enum).toEqual(['草稿', '已确认', '需更新'])
-    expect(props.template?.enum).toEqual(['理论型', '工程型', '对比型'])
+    expect(props.template).toBeUndefined()
     expect(props.links?.type).toBe('object')
     expect(props.links?.properties?.prev).toBeTruthy()
     expect(props.links?.properties?.next).toBeTruthy()
-    expect(props.links?.properties?.conflict).toBeTruthy()
-    // definition 模式（字段级修定义，不产生历史折叠）
+    // definition 模式（字段级修定位，不产生历史折叠）
     expect(props.definition?.description).toContain('definition/replace')
     expect(def.description).toContain('definition=')
-    // 版本块插入位置写进描述（P0-3 的用户可见口径）
-    expect(def.description).toContain('关联卡片')
   })
 
   test('card_id 工具描述注明"card_create 不消费预取值"', () => {
@@ -78,35 +75,35 @@ describe('buildToolDefs（工具 schema 契约）', () => {
     expect(titleParam?.description).toContain('只写主题')
   })
 
-  test('card_create 定义参数注明 60 字硬上限；description 含领域映射与分型回显', () => {
+  test('card_create 定义参数已解除 60 字硬上限；description 含领域映射', () => {
     const def = defOf('card_create')
     const props = def.parameters.properties as Record<string, { description?: string }>
-    expect(props.definition?.description).toContain('60')
+    // 需求 R7：解除字数约束——参数说明里不能再出现"硬上限/60 字"
+    expect(props.definition?.description).toContain('无长度限制')
+    expect(props.definition?.description).not.toContain('60')
     expect(def.description).toContain('领域映射')
-    expect(props.template?.description).toContain('推断')
-    // 正文小节要求写进 content 描述（正文不设字数上限）
-    expect(props.content?.description).toContain('主干线')
-    expect(props.content?.description).toContain('正文长度不设限')
+    // 写法约束的来源改为《笔记期望.md》，而不是工具描述里的模板小节
+    expect(props.content?.description).toContain('笔记期望')
+    expect(props.content?.description).toContain('不设字数上下限')
+    expect(props.content?.description).not.toContain('主干线')
   })
 
-  test('card_lint：ref/scope/rule 参数与规则枚举，P2 三开关', () => {
+  test('card_lint：ref/scope/rule 参数与规则枚举（无分值、无 P2 开关）', () => {
     const def = defOf('card_lint')
     const props = def.parameters.properties as Record<string, { enum?: string[]; type?: string; description?: string }>
     expect(props.scope?.enum).toEqual(['vault', 'all'])
-    expect(props.rule?.enum).toEqual(expect.arrayContaining(['session-residue', 'template-sections', 'code-language']))
     expect(def.description).toContain('会话残留')
-    expect(def.description).toContain('警告级')
     expect(def.parameters.required).toBeUndefined()
-    // P2：跨卡一致性 / 质量趋势 / 可执行性评级
-    expect(props.cross?.type).toBe('boolean')
-    expect(props.trend?.type).toBe('boolean')
-    expect(props.rating?.type).toBe('boolean')
-    expect(def.description).toContain('跨卡一致性')
+    // 架构选型 A9：100 分制与跨卡洞察三开关随模板一起退场
+    expect(props.cross).toBeUndefined()
+    expect(props.trend).toBeUndefined()
+    expect(props.rating).toBeUndefined()
+    expect(def.description).not.toContain('跨卡一致性')
+    expect(def.description).not.toContain('打分')
     // EXT-1：描述由规则注册表生成，新增规则不会漏改文案
     expect(props.rule?.enum).toEqual(RULES.map((r) => r.id))
     for (const rule of RULES) expect(def.description, rule.id).toContain(rule.title)
-    // BIZ-4：scope=all 的口径写进描述
-    expect(props.scope?.description).toContain('旧笔记仅体检通用规则')
+    expect(props.scope?.description).toContain('含旧笔记')
   })
 
   test('card_history：action 枚举与 kinds', () => {

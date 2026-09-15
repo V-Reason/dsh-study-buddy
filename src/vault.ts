@@ -7,7 +7,6 @@
 import { randomBytes } from 'node:crypto'
 import { promises as fsp, statSync, type Stats } from 'node:fs'
 import { dirname, isAbsolute, join, parse, relative, resolve, basename } from 'node:path'
-import type { TemplateHints } from './template.ts'
 
 /** 扫描时跳过的通用目录（vault 特定目录如"资源"由 config.skipDirs 配置） */
 export const SKIP_DIRS = new Set(['.obsidian', '.trash', '.study', '.git', 'node_modules'])
@@ -343,23 +342,35 @@ export interface VaultLayout {
   indexTtlMs?: number
   /** 每根扫描文件数上限（默认 20000）：超限截断扫描并回显警告，不再让工具整体失败（N6） */
   maxWalkFiles?: number
-  /** 模板推断提示词表（缺省用内置默认值） */
-  templateHints?: TemplateHints
 }
 
-/** 解析某领域卡片的落盘目录：优先映射表，未映射落入 fallbackDir/<领域名> */
+/**
+ * 解析某领域键的落盘目录：优先 `domainFolders` 快捷方式，未映射落入
+ * `fallbackDir/<领域名>`。
+ *
+ * 2026-10 起这只是**兜底路径**：正常情况下目录来自用户确认的文件夹规划
+ * （`dirs.resolveNoteDir` 的第一档），领域映射退化为语法糖（需求 R30）。
+ */
 export function cardDirFor(layout: VaultLayout, domain: string): string {
   const mapped = layout.domainFolders?.[domain]
   const rel = mapped ?? join(layout.fallbackDir, sanitizeFilename(domain))
   const abs = resolve(layout.vaultRoot, rel)
   if (!withinRoot(layout.vaultRoot, abs)) {
-    throw new Error(`卡片目录越界：${rel} 不在 vault 根目录内`)
+    throw new Error(`笔记目录越界：${rel} 不在 vault 根目录内`)
   }
   return abs
 }
 
+/** 笔记落盘路径：`dir`（vault 内相对目录） + 标题清洗后的文件名 */
+export function notePathFor(vaultRoot: string, dir: string, title: string): string {
+  const rel = join(dir, `${sanitizeFilename(title)}.md`)
+  const abs = resolve(vaultRoot, rel)
+  if (!withinRoot(vaultRoot, abs)) throw new Error(`笔记路径越界：${rel} 不在 vault 根目录内`)
+  return abs
+}
+
 /** 生成唯一文件名：`标题.md`，冲突时追加 ID 后缀（末 6 位），再冲突用完整 ID */
-export async function uniqueCardPath(dir: string, title: string, id: string): Promise<string> {
+export async function uniqueNotePath(dir: string, title: string, id: string): Promise<string> {
   const base = sanitizeFilename(title)
   const first = join(dir, `${base}.md`)
   if (!(await exists(first))) return first
@@ -368,8 +379,11 @@ export async function uniqueCardPath(dir: string, title: string, id: string): Pr
   if (!(await exists(second))) return second
   const third = join(dir, `${base}_${id}.md`)
   if (!(await exists(third))) return third
-  throw new Error(`卡片文件名冲突：${base}.md 已有多个同名文件，请改标题`)
+  throw new Error(`笔记文件名冲突：${base}.md 已有多个同名文件，请改标题`)
 }
+
+/** @deprecated 旧名（卡片时代）；新调用点一律用 `uniqueNotePath` */
+export const uniqueCardPath = uniqueNotePath
 
 export function fileNameOf(p: string): string {
   return basename(p)

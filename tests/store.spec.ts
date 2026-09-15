@@ -94,7 +94,7 @@ describe('VaultStore 端到端', () => {
     })
     expect(created.rel).toBe('游戏开发/图形学/透视投影矩阵的三步分解.md')
     expect(created.text).toContain('ID: ')
-    const idMatch = /ID: (\d{12}_[0-9a-f]{6})/.exec(created.text)
+    const idMatch = /ID：(\d{12}_[0-9a-f]{6})/.exec(created.text)
     expect(idMatch).toBeTruthy()
     const id = idMatch![1]
 
@@ -132,7 +132,7 @@ describe('VaultStore 端到端', () => {
       definition: '光栅化把图元离散为屏幕像素',
       content: '采样与深度测试',
     })
-    const id2 = /ID: (\d{12}_[0-9a-f]{6})/.exec(created2.text)![1]
+    const id2 = /ID：(\d{12}_[0-9a-f]{6})/.exec(created2.text)![1]
     const linked = await store.link(id, id2, 'next')
     expect(linked).toContain('已建立关联')
     // 重复关联同一对（如标题变更后）：按 ID 判重，不重复添加
@@ -140,7 +140,7 @@ describe('VaultStore 端到端', () => {
     expect(linkedAgain).toContain('已建立关联')
     const file1 = await readFile(join(dir, '游戏开发/图形学/透视投影矩阵的三步分解.md'), 'utf8')
     expect(file1.match(/- 后续：/g)?.length).toBe(1)
-    expect(file1).toContain(`- 后续：\`光栅化\`（${id2}）`)
+    expect(file1).toContain('- 后续：[[光栅化]]')
     const file2 = await readFile(join(dir, '游戏开发/图形学/光栅化.md'), 'utf8')
     expect(file2).toContain('- 前置：')
 
@@ -318,7 +318,7 @@ describe('VaultStore 端到端', () => {
       definition: '三步分解成的投影矩阵',
       content: '正文',
     })
-    const id = /ID: (\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
+    const id = /ID：(\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
     const date = todayLocal()
     const moc = await store.moc({ title: '2026-09-02_图形学 MOC 目录（测试）', cardIds: [id] })
     expect(moc).toContain(`MOC 已写入：目录/${date}_图形学 MOC 目录（测试）.md`)
@@ -366,7 +366,7 @@ describe('VaultStore 端到端', () => {
       definition: '红黑树插入通过变色与旋转维持平衡',
       content: '插入流程',
     })
-    const id = /ID: (\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
+    const id = /ID：(\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
     const updated = await store.update(id, {
       mode: 'replace',
       card: {
@@ -381,7 +381,7 @@ describe('VaultStore 端到端', () => {
     })
     expect(updated).toContain('红黑树插入（修订版）')
     expect(updated).toContain('- 前置：二叉查找树')
-    expect(updated).toContain('- 易混淆：AVL 树')
+    expect(updated).toContain('- 兄弟：AVL 树') // 迁移期：旧管线写裸标签，阶段 4 起统一 wikilink
     expect(updated).toContain('历史版本') // 旧版保留
   })
 
@@ -395,7 +395,7 @@ describe('VaultStore 端到端', () => {
       definition: '旧定义旧定义旧定义旧定义旧定义旧定义旧定义旧定义旧定义',
       content: '### 核心思想\n一句话\n\n### 阶梯式解剖\n第 1 层\n\n### 实例走查\n数字\n\n### 易错点\n- 坑\n\n### 自测题\n- **Q1**',
     })
-    const id = /ID: (\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
+    const id = /ID：(\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
     const updated = await store.update(id, { mode: 'definition', definition: '新定义：通过变色旋转维持平衡' })
     expect(updated).toContain('> 新定义：通过变色旋转维持平衡')
     expect(updated).not.toContain('旧定义旧定义')
@@ -513,7 +513,7 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
       definition: '红黑树插入通过变色与旋转维持平衡',
       content: '插入流程',
     })
-    const id = /ID: (\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
+    const id = /ID：(\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
     const noteRef = `${basename(extra)}/CS/迭代器笔记.md`
 
     // 默认：旧笔记字节不变，卡片侧出现关联
@@ -523,7 +523,7 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
     expect(linked).toContain('未修改旧笔记')
     expect(await readFile(noteFile, 'utf8')).toBe(before)
     const cardFile = join(dir, '未分类/数据结构与算法/红黑树插入.md')
-    expect(await readFile(cardFile, 'utf8')).toContain(`- 后续：\`迭代器主要方法\`（${basename(extra)}/CS/迭代器笔记.md）`)
+    expect(await readFile(cardFile, 'utf8')).toContain('- 后续：[[迭代器主要方法]]')
 
     // 开启 linkIntoNotes：两侧都写
     const noteOnly = await mkdtemp(join(tmpdir(), 'study-buddy-note-'))
@@ -532,7 +532,7 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
       const store2 = new VaultStore({ ...layout(), linkIntoNotes: true, searchRoots: [noteOnly] })
       const linked2 = await store2.link(id, `${basename(noteOnly)}/AVL笔记.md`, 'prev')
       expect(linked2).toContain('新增 2 侧关联行')
-      expect(await readFile(join(noteOnly, 'AVL笔记.md'), 'utf8')).toContain('### 关联卡片')
+      expect(await readFile(join(noteOnly, 'AVL笔记.md'), 'utf8')).toContain('### 关联')
 
       // 旧笔记↔旧笔记：默认拒绝并给替代方案（两个旧笔记在同一批根内才能解析到）
       const store3 = new VaultStore({ ...layout(), searchRoots: [extra, noteOnly] })
@@ -554,75 +554,12 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
       definition: '红黑树插入通过变色与旋转维持平衡',
       content: '插入流程',
     })
-    const id = /ID: (\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
+    const id = /ID：(\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
     const moc = await store.moc({ title: '本次学习目录', cardIds: [id, `${basename(extra)}/CS/迭代器笔记.md`] })
     expect(moc).toContain('旧笔记不收录')
     expect(moc).toContain('[[红黑树插入]]')
     expect(moc).not.toContain('[[迭代器主要方法]]')
   })
-
-  test('card_lint：单卡报告 + 批量汇总 + 规则过滤', async () => {
-    const store = new VaultStore(layout())
-    const created = await store.create({
-      title: 'IBL 接入',
-      domain: '图形学与渲染',
-      source: 'URP 文档',
-      status: '已确认',
-      definition: 'IBL 接入 = 环境侧喂数据 + shader 两行采样',
-      content: [
-        '### 核心思想',
-        '环境侧喂数据。',
-        '',
-        '### 主干线',
-        '间接光算不起 → 预计算 → 采样 → 验证暗部。',
-        '',
-        '### 阶梯式解剖',
-        '**第 1 层 · 直觉**：查表。',
-        '**第 2 层 · 机制**：SampleSH。',
-        '**第 3 层 · 细节**：签名。',
-        '**第 4 层 · 边界**：烘死的。',
-        '',
-        '### 实例走查',
-        'r=0.31 → mip≈2.76。',
-        '',
-        '### 验证实验',
-        '1. 主光归零：暗部仍亮 → SH 通。',
-        '2. 环境归零：整体塌黑 → 数据源确认。',
-        '3. 金属球 + 探针：映出物体 → cubemap 通。',
-        '',
-        '### 排障判据',
-        '| 症状 | 判据 | 修复 |',
-        '| :-- | :-- | :-- |',
-        '| 反射平色 | 无探针 | 加探针 |',
-        '',
-        '### 易错点',
-        '- 改了主光没变化：间接光是烘死的。',
-        '',
-        '### 自测题',
-        '- **Q1**：谁生产 SH？ → 环境侧烘焙。',
-        '',
-        '### 关联卡片',
-        '- 前置：`间接光`（202609092139_2c27）',
-      ].join('\n'),
-    })
-    const id = /ID: (\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
-    // 工程型由领域目录族推断
-    expect(created.text).toContain('模板：工程型')
-    const single = await store.lint({ ref: id })
-    expect(single).toContain('模板：工程型')
-    expect(single).toContain('总分：')
-    expect(single).toContain('正文')
-    // 该卡有前置关联但缺前置检查 → 命中 prereq-check
-    const byRule = await store.lint({ ref: id, rule: 'prereq-check' })
-    expect(byRule).toContain('prereq-check')
-    expect(byRule).toContain('前置检查')
-    const batch = await store.lint({ scope: 'vault' })
-    expect(batch).toContain('批量 lint：1 篇')
-    expect(batch).toContain('规则命中')
-    const ruleBatch = await store.lint({ scope: 'vault', rule: 'template-sections' })
-    expect(ruleBatch).toContain('规则 template-sections')
-  })
-
   test('card_lint：会话残留规则与白名单（端到端）', async () => {
     const store = new VaultStore(layout())
     const created = await store.create({
@@ -633,7 +570,7 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
       definition: '会话残留样本卡',
       content: '### 核心思想\n本工程实测发现你的 shader 在 L182 行有问题。\n\n### 主干线\nx\n\n### 阶梯式解剖\n第 1 层\n第 2 层\n第 3 层\n第 4 层\n\n### 实例走查\nx\n\n### 易错点\nx\n\n### 自测题\n- **Q1**：a → b',
     })
-    const id = /ID: (\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
+    const id = /ID：(\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
     const report = await store.lint({ ref: id, rule: 'session-residue' })
     expect(report).toContain('未通过')
     expect(report).toContain('本工程')
@@ -646,7 +583,7 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
       definition: '白名单样本卡',
       content: '### 核心思想\nURP 的 SampleSH 只取 L0/L1/L2 三带（来源：GAMES101 L15）。\n\n### 主干线\nx\n\n### 阶梯式解剖\n第 1 层\n第 2 层\n第 3 层\n第 4 层\n\n### 实例走查\nx\n\n### 易错点\nx\n\n### 自测题\n- **Q1**：a → b',
     })
-    const cleanId = /ID: (\d{12}_[0-9a-f]{6})/.exec(clean.text)![1]
+    const cleanId = /ID：(\d{12}_[0-9a-f]{6})/.exec(clean.text)![1]
     expect(await store.lint({ ref: cleanId, rule: 'session-residue' })).toContain('✓ 通过')
   })
 
@@ -660,7 +597,7 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
       definition: '版本块样本卡',
       content: '### 核心思想\nx\n\n### 关联卡片\n- 前置：`A`（id1）',
     })
-    const id = /ID: (\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
+    const id = /ID：(\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
     const updated = await store.update(id, { mode: 'append-version', source: 'L16', changes: '补充：A' })
     expect(updated.indexOf('### 版本更新')).toBeLessThan(updated.indexOf('### 关联卡片'))
     const file = join(dir, '游戏开发/图形学/版本块样本.md')
@@ -691,7 +628,7 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
       definition: 'IBL 接入 = 环境侧喂数据 + shader 采样',
       content: '### 核心思想\nx',
     })
-    const idA = /ID: (\d{12}_[0-9a-f]{6})/.exec(a.text)![1]
+    const idA = /ID：(\d{12}_[0-9a-f]{6})/.exec(a.text)![1]
     const b = await store.create({
       title: '间接光通道',
       domain: '图形学与渲染',
@@ -701,7 +638,7 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
       content: '### 核心思想\nx',
       links: { next: [`\`URP IBL 接入\`（${idA}）`] },
     })
-    const idB = /ID: (\d{12}_[0-9a-f]{6})/.exec(b.text)![1]
+    const idB = /ID：(\d{12}_[0-9a-f]{6})/.exec(b.text)![1]
     const bFile = join(dir, '游戏开发/图形学/间接光通道.md')
     expect(await readFile(bFile, 'utf8')).toContain(`\`URP IBL 接入\`（${idA}）`)
 
@@ -735,32 +672,6 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
     const store = new VaultStore({ ...layout(), searchRoots: [extra] })
     await expect(store.rename(`${basename(extra)}/CS/迭代器笔记.md`, '新标题')).rejects.toThrow(/旧笔记/)
   })
-
-  test('card_lint 跨卡洞察：cross 冲突 / trend 趋势 / rating 可执行性', async () => {
-    const store = new VaultStore(layout())
-    const make = (title: string, content: string) => store.create({
-      title,
-      domain: '图形学与渲染',
-      source: 'X',
-      status: '草稿',
-      definition: `${title} 的一句话定义`,
-      content,
-    })
-    await make('圆周率用法一', '### 阶梯式解剖\n| 常量 | 取值 |\n| :-- | :-- |\n| 圆周率 π | 3.14 |')
-    await make('圆周率用法二', '### 阶梯式解剖\n| 常量 | 取值 |\n| :-- | :-- |\n| 圆周率 π | 3.1416 |')
-    const cross = await store.lint({ scope: 'vault', cross: true })
-    expect(cross).toContain('跨卡一致性')
-    expect(cross).toContain('圆周率 π')
-    expect(cross).toContain('3.1416')
-    const trend = await store.lint({ scope: 'vault', trend: true })
-    expect(trend).toContain('质量趋势')
-    expect(trend).toContain('2026-W')
-    const rated = await store.lint({ scope: 'vault', rating: true })
-    expect(rated).toContain('可执行性分布')
-    // 单卡默认带可执行性评级
-    const single = await store.lint({ ref: '圆周率用法一' })
-    expect(single).toContain('可执行性：')
-  })
 })
 
 /** 2026-09 审查修复的回归用例（对应 `docs/审查修复记录.md` 的探针编号） */
@@ -777,7 +688,7 @@ describe('审查修复回归（BIZ / SEC）', () => {
   test('BIZ-2：目标文件名冲突时不做任何写入（探针 P7）', async () => {
     const store = new VaultStore(layout())
     const a = await mk(store, 'AAA')
-    const idA = /ID: (\d{12}_[0-9a-f]{6})/.exec(a.text)![1]
+    const idA = /ID：(\d{12}_[0-9a-f]{6})/.exec(a.text)![1]
     const b = await mk(store, 'BBB', '### 核心思想\nx\n\n### 关联卡片\n- 后续：`AAA`（' + idA + '）')
     const aFile = join(dir, '游戏开发/图形学/AAA.md')
     const bFile = join(dir, '游戏开发/图形学/BBB.md')
@@ -802,7 +713,7 @@ describe('审查修复回归（BIZ / SEC）', () => {
       expect(hit).toContain('- 路径：工作目录/笔记/旧笔记.md')
       // 旧笔记不支持 update，但引用解析必须先成功（否则报"找不到卡片"）
       const created = await mk(store, '工作目录里的卡片')
-      const id = /ID: (\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
+      const id = /ID：(\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
       await writeFile(join(cwdDir, '笔记/新笔记.md'), '> 概念: 新笔记\n# 新笔记\n正文', 'utf8')
       await expect(store.update('工作目录/笔记/新笔记.md', { mode: 'append-version', changes: 'x' }, { sessionCwd: cwdDir }))
         .rejects.not.toThrow(/找不到卡片/)
@@ -813,56 +724,19 @@ describe('审查修复回归（BIZ / SEC）', () => {
       await rm(cwdDir, { recursive: true, force: true })
     }
   })
-
-  test('BIZ-4：scope=all 的旧笔记只体检通用规则（探针 P5）', async () => {
-    await mkdir(join(dir, '随手'), { recursive: true })
-    await writeFile(join(dir, '随手/随手笔记.md'), '# 随手笔记\n十一个字的正文。', 'utf8')
-    const store = new VaultStore(layout())
-    await mk(store, '正式卡片')
-    const batch = await store.lint({ scope: 'all' })
-    expect(batch).toContain('其中旧笔记 1 篇')
-    expect(batch).toContain('仅体检通用规则')
-    // 单看旧笔记：不套模板，总分不被结构规则拉低
-    const one = await store.lint({ ref: '随手/随手笔记.md' })
-    expect(one).toContain('旧笔记')
-    expect(one).not.toContain('模板必填小节')
-  })
-
   test('BIZ-5：规则被禁用时输出"未启用"而不是"未通过（无发现）"（探针 P6）', async () => {
-    const store = new VaultStore({ ...layout(), lint: { rulesOff: ['layer-number'] } })
+    const store = new VaultStore({ ...layout(), lint: { rulesOff: ['session-residue'] } })
     const created = await mk(store, '规则开关样本')
-    const id = /ID: (\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
-    const text = await store.lint({ ref: id, rule: 'layer-number' })
+    const id = /ID：(\d{12}_[0-9a-f]{6})/.exec(created.text)![1]
+    const text = await store.lint({ ref: id, rule: 'session-residue' })
     expect(text).toContain('未启用或不适用于此类文档')
     expect(text).not.toContain('未通过')
     expect(text).not.toContain('该规则无发现')
   })
-
-  test('BIZ-6：前置检查小节里的 `- 前置：X` 不阻止建立真实关联（探针 D）', async () => {
-    const store = new VaultStore(layout())
-    const a = await mk(store, '甲')
-    const idA = /ID: (\d{12}_[0-9a-f]{6})/.exec(a.text)![1]
-    const b = await mk(store, '乙', `### 核心思想\nx\n\n### 前置检查\n- 前置：甲（${idA}）`)
-    const linked = await store.link('乙', '甲', 'prev')
-    expect(linked).toContain('新增 2 侧关联行')
-    const bFile = await readFile(join(dir, '游戏开发/图形学/乙.md'), 'utf8')
-    expect(bFile).toContain('### 关联卡片')
-    expect(bFile).toContain(`- 前置：\`甲\`（${idA}）`)
-  })
-
-  test('BIZ-8：重复建同名卡给出显著提示（不阻断）', async () => {
-    const store = new VaultStore(layout())
-    await mk(store, '漫反射')
-    const again = await mk(store, '漫反射')
-    expect(again.text).toContain('已存在同名卡片')
-    expect(again.text).toContain('card_update 增量更新')
-    expect(again.rel).toContain('漫反射')
-  })
-
   test('BIZ-10：dryRun 与实写的断链检测一致（探针：裸标题入链）', async () => {
     const store = new VaultStore(layout())
     const a = await mk(store, 'URP IBL 接入')
-    const idA = /ID: (\d{12}_[0-9a-f]{6})/.exec(a.text)![1]
+    const idA = /ID：(\d{12}_[0-9a-f]{6})/.exec(a.text)![1]
     await mk(store, '间接光', '### 核心思想\nx\n\n### 关联卡片\n- 前置：URP IBL 接入')
     const dry = await store.rename(idA, 'URP IBL 接入与探针', { dryRun: true })
     expect(dry).toContain('断链检测：1 处')
@@ -876,7 +750,7 @@ describe('审查修复回归（BIZ / SEC）', () => {
   test('BIZ-11a：自关联直接返回无改动', async () => {
     const store = new VaultStore(layout())
     const a = await mk(store, '自关联样本')
-    const id = /ID: (\d{12}_[0-9a-f]{6})/.exec(a.text)![1]
+    const id = /ID：(\d{12}_[0-9a-f]{6})/.exec(a.text)![1]
     expect(await store.link(id, id, 'prev')).toContain('无需自关联')
   })
 
@@ -1050,7 +924,7 @@ describe('审查修复回归（BIZ / SEC）', () => {
       await store.search('甲卡')
       expect(spy).toHaveBeenCalledTimes(1)
       const dup = await store.create({ ...input, title: '甲卡' })
-      expect(dup.text).toContain('已存在同名卡片')
+      expect(dup.text).toContain('已存在同名笔记')
       expect(spy).toHaveBeenCalledTimes(1)
     } finally {
       spy.mockRestore()

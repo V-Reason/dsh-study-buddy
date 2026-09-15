@@ -29,6 +29,10 @@ export interface IndexedCard {
   status: string | null
   source: string | null
   definition: string | null
+  /** 来源章节（`《资料》第N章 标题 / N.N节`）；缺失 = 存量卡，覆盖度归入"未归类" */
+  sourceSection: string | null
+  /** 微目录排序键 */
+  order: number | null
   /** frontmatter 模板类型（理论型/工程型/对比型；旧笔记为 null） */
   template: string | null
   /** 由相对路径顶层目录推断的领域（旧笔记用） */
@@ -121,6 +125,8 @@ export function indexNote(file: WalkedFile, raw: string): IndexedCard {
     status: parsed.meta?.status ?? null,
     source: parsed.meta?.source ?? null,
     definition,
+    sourceSection: parsed.meta?.sourceSection ?? null,
+    order: parsed.meta?.order ?? null,
     template: parsed.meta?.template ?? null,
     inferredDomain,
     titleTokens: countTokens(tokenize(title)),

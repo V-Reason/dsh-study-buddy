@@ -14,13 +14,13 @@
 import { promises as fsp } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
-  addLink, applyUpdate, generateId, renderCard, renderMoc, resolveTemplate, stripMocDatePrefix, todayLocal, validateCard,
+  addLink, applyUpdate, generateId, renderCard, renderMoc, stripMocDatePrefix, todayLocal, validateCard,
   type CardInput, type LinkKind, type MocEntry, type UpdatePayload,
 } from './card.ts'
 import { parseFrontmatter } from './frontmatter.ts'
 import { extractHistory, formatHistory, stripHistory, type HistoryKind } from './history.ts'
-import { crossCardConflicts, executabilityOf, executabilitySummary, formatConflicts, formatTrend, qualityTrend } from './insight.ts'
-import { formatBatch, formatReport, lintCard, ruleIds, ruleTitle, summarizeLint, type LintReport } from './lint.ts'
+import { inverseKind } from './note.ts'
+import { formatBatch, formatReport, lintNote, ruleIds, ruleTitle, summarizeLint, type LintReport } from './lint.ts'
 import {
   AUTO_PREFS_KEY, checkMemoryValue, findProgressSentences, formatAutoPrefs, formatMemory,
   normalizeAutoPrefsValue, normalizeMemoryKey, readMemory, writeMemory, type MemoryState,
@@ -38,7 +38,7 @@ import { readProgress, writeProgress, type ProgressState } from './state.ts'
 import { buildToolDefs, type ToolDef } from './tools.ts'
 import {
   atomicWrite, canonicalRootKey, cardDirFor, dedupeFiles, dedupeRoots, findSimilarDomainKeys, isFsRoot, MAX_WALK_FILES,
-  mocPathFor, resolveSearchRoots, sanitizeFilename, skipSetFor, uniqueCardPath, walkRoots, withinRoot,
+  mocPathFor, resolveSearchRoots, sanitizeFilename, skipSetFor, uniqueNotePath, walkRoots, withinRoot,
   type SearchRoot, type VaultLayout,
 } from './vault.ts'
 
@@ -110,7 +110,6 @@ function normalizeConfig(config: StudyConfig | undefined): VaultLayout {
     lint: config.lint,
     indexTtlMs: Number.isFinite(Number(config.indexTtlMs)) && Number(config.indexTtlMs) >= 0 ? Number(config.indexTtlMs) : 2000,
     maxWalkFiles: Number.isFinite(maxWalkFiles) && maxWalkFiles >= 1 ? Math.floor(maxWalkFiles) : MAX_WALK_FILES,
-    templateHints: config.templateHints,
   }
 }
 
@@ -398,56 +397,55 @@ export class VaultStore {
   }
 
   /**
-   * 建卡。第三参保留与其他工具一致的 `call` 形状（tools.ts 统一传 `sessionCwd`），
-   * 但建卡本身**不再读索引**（N2），因此会话 cwd 对它没有影响。
+   * 建笔记。第三参保留与其他工具一致的 `call` 形状（tools.ts 统一传 `sessionCwd`），
+   * 但建笔记本身**不再读索引**（N2），因此会话 cwd 对它没有影响。
+   *
+   * 2026-10：模板推断与模板校验已删除（需求 R6）；写法由《笔记期望.md》决定。
+   * 阶段 4 会把本方法替换为"带门禁与规划凭据"的 `note_write` 路径。
    */
   async create(input: CardInput, _call?: { sessionCwd?: string }): Promise<{ text: string; rel: string }> {
     await this.assertVault()
-    const mapped = this.layout.domainFolders?.[input.domain]
-    // 模板：显式 > 按领域目录族/标题推断；推断结果写入 frontmatter（可选字段，旧卡不强迁）
-    const resolved = resolveTemplate(input, { mappedFolder: mapped, hints: this.layout.templateHints })
-    const card: CardInput = { ...input, template: resolved.type }
-    const result = validateCard(card, { mappedFolder: mapped, hints: this.layout.templateHints })
-    if (result.errors.length > 0) throw new Error(`卡片校验失败：${result.errors.join('；')}`)
+    const domain = String(input.domain ?? '')
+    const mapped = this.layout.domainFolders?.[domain]
+    const result = validateCard(input)
+    if (result.errors.length > 0) throw new Error(`笔记校验失败：${result.errors.join('；')}`)
     const warnings = [...result.warnings]
     const infoLines: string[] = []
-    // 同名标题检测（BIZ-8）：不阻断（故意建多张同名卡是允许的），但要显著提示。
+    // 同名标题检测（BIZ-8）：不阻断（故意建多篇同名笔记是允许的），但要显著提示。
     // 用 titleHints 做 O(1) 查询（N2）：绝不为一条提示触发全库重扫；代价是
     // 本次进程从未建立过索引时提示缺席（提示不是门禁，跑过一次读工具即恢复）。
     const titleKey = String(input.title ?? '').trim().toLowerCase()
     const clash = this.titleHints.get(titleKey)
     if (clash && clash.id !== null) {
-      warnings.unshift(`已存在同名卡片「${clash.title}」（${clash.fullRel}，ID：${clash.id}）：建议 card_update 增量更新而非新建`)
+      warnings.unshift(`已存在同名笔记「${clash.title}」（${clash.fullRel}，ID：${clash.id}）：建议 card_update 增量更新而非新建`)
     }
     // 标题→文件名清洗可见性：非法字符/引号会被清洗，回显实际文件名
-    const baseName = sanitizeFilename(input.title)
-    if (baseName !== input.title.trim()) {
+    const baseName = sanitizeFilename(String(input.title ?? ''))
+    if (baseName !== String(input.title ?? '').trim()) {
       warnings.push(`标题含非法字符/引号，已清洗为文件名「${baseName}」（实际文件名以"已写入"为准）`)
     }
     const id = generateId()
-    const text = renderCard({ ...card, id })
-    const dir = cardDirFor(this.layout, input.domain)
+    const text = renderCard({ ...input, id })
+    const dir = cardDirFor(this.layout, domain)
     const dirRel = dir.slice(this.layout.vaultRoot.length + 1).replace(/\\/g, '/')
     // 领域键映射可见性：精确命中回显映射；未映射给出 fallback + 可用键列表 + 近似键建议
     const keys = Object.keys(this.layout.domainFolders ?? {})
     if (mapped) {
-      infoLines.push(`领域映射：${input.domain} → ${dirRel}`)
-      infoLines.push(`模板：${resolved.type}${input.template ? '（显式）' : '（按领域/标题推断，可用 template 覆盖）'}`)
+      infoLines.push(`领域映射：${domain} → ${dirRel}`)
     } else if (keys.length > 0) {
-      const similar = findSimilarDomainKeys(input.domain, keys)
+      const similar = findSimilarDomainKeys(domain, keys)
       const simText = similar.length > 0
         ? `。近似键建议：${similar.map((k) => `${k} → ${this.layout.domainFolders?.[k]}`).join('；')}（要用该键请用其精确写法，或把该键加入 domainFolders）`
         : ''
       warnings.push(
-        `领域键 "${input.domain}" 未在 domainFolders 映射表中，已落 fallbackDir：${this.layout.fallbackDir}/${input.domain}`
+        `领域键 "${domain}" 未在 domainFolders 映射表中，已落 fallbackDir：${this.layout.fallbackDir}/${domain}`
         + `。可用键（前 12 个，共 ${keys.length} 个）：${keys.slice(0, 12).join('、')}${keys.length > 12 ? '…' : ''}${simText}`
-        + '。完整键名表见 card-format 技能；若刚改过 preset 配置，需重启 DSH 后生效',
+        + '。完整键名表见 note-format 技能；若刚改过 preset 配置，需重启 DSH 后生效',
       )
     } else {
-      warnings.push(`领域键 "${input.domain}" 未配置映射（domainFolders 为空），已落 fallbackDir：${this.layout.fallbackDir}/${input.domain}`)
-      infoLines.push(`模板：${resolved.type}（按标题推断）`)
+      warnings.push(`领域键 "${domain}" 未配置映射（domainFolders 为空），已落 fallbackDir：${this.layout.fallbackDir}/${domain}`)
     }
-    const file = await uniqueCardPath(dir, input.title, id)
+    const file = await uniqueNotePath(dir, String(input.title ?? ''), id)
     await atomicWrite(file, text)
     this.invalidate()
     const rel = file.slice(this.layout.vaultRoot.length + 1).replace(/\\/g, '/')
@@ -460,8 +458,7 @@ export class VaultStore {
   async update(id: string, payload: UpdatePayload, call?: { sessionCwd?: string }): Promise<string> {
     const { card, raw } = await this.resolveCard(id, call?.sessionCwd)
     this.assertWritable(card)
-    const mappedFolder = payload.card?.domain ? this.layout.domainFolders?.[payload.card.domain] : undefined
-    const result = applyUpdate(raw, card.id ?? id, { ...payload, mappedFolder, hints: this.layout.templateHints })
+    const result = applyUpdate(raw, card.id ?? id, payload)
     await atomicWrite(card.path, result.text)
     this.invalidate()
     // replace 模式可以改标题（N2）：同步标题缓存，否则同名提示会指向旧标题
@@ -482,7 +479,7 @@ export class VaultStore {
     }
     const labelOf = (c: typeof from) => (c.card.id ? `${c.card.title}（${c.card.id}）` : `${c.card.title}（${c.card.fullRel}）`)
     const allowNoteWrite = this.layout.linkIntoNotes === true
-    const reverseKind: LinkKind = kind === 'prev' ? 'next' : kind === 'next' ? 'prev' : 'conflict'
+    const reverseKind: LinkKind = inverseKind(kind)
     if (from.card.id === null && to.card.id === null && !allowNoteWrite) {
       throw new Error(
         '两侧都是旧笔记（无 ID）：默认不写入旧笔记。请开启 config.linkIntoNotes 由插件双向写入，'
@@ -494,18 +491,18 @@ export class VaultStore {
     // 旧实现先写 from 再在 to 里 assertWritable，结果是"报错但已写盘"的单向入链，
     // 正是 BIZ-2 要消灭的形态。
     const plans: Array<{ path: string; next: string; before: string; label: string }> = []
-    const planSide = (side: typeof from, sideKind: LinkKind, targetLabel: string, targetId: string | null): void => {
+    const planSide = (side: typeof from, sideKind: LinkKind, targetLabel: string): void => {
       if (side.card.id === null && !allowNoteWrite) {
         noteSkipped.push(labelOf(side))
         return
       }
-      const next = addLink(side.raw, sideKind, targetLabel, targetId ?? undefined)
+      const next = addLink(side.raw, sideKind, targetLabel)
       if (next === side.raw) return
       this.assertWritable(side.card)
       plans.push({ path: side.card.path, next, before: side.raw, label: labelOf(side) })
     }
-    planSide(from, kind, labelOf(to), to.card.id)
-    planSide(to, reverseKind, labelOf(from), from.card.id)
+    planSide(from, kind, labelOf(to))
+    planSide(to, reverseKind, labelOf(from))
     // ── 提交：任一侧失败按写前内容逆序回滚（与 rename 同口径）──
     const written: string[] = []
     const done: Array<{ path: string; before: string }> = []
@@ -529,7 +526,7 @@ export class VaultStore {
       throw new Error(`建立关联失败并已回滚：${(error as Error).message}${note}`)
     }
     this.invalidate()
-    const map: Record<LinkKind, string> = { prev: '前置知识', next: '后续延伸', conflict: '冲突/易混淆' }
+    const map: Record<LinkKind, string> = { prev: '前置知识', next: '后续延伸', sibling: '同主题兄弟' }
     const basis = `已建立关联：${labelOf(from)} ←${map[kind]}→ ${labelOf(to)}`
     if (noteSkipped.length > 0) {
       return `${basis}（单侧写入；未修改旧笔记：${noteSkipped.join('、')}。开启 config.linkIntoNotes 可双向写入，或用 Obsidian 内链）`
@@ -587,89 +584,80 @@ export class VaultStore {
     return `MOC 已写入：${rel}（标题：${title}，日期：${date}）${skippedNotes.length ? `\n（旧笔记不收录：${skippedNotes.join('、')}）` : ''}\n\n${text}${this.noteSkips()}`
   }
 
-  private lintCtx(): { knownDomains: string[]; residueLevel?: 'off' | 'warn' | 'error'; rulesOff?: string[] } {
+  private lintCtx(): { residueLevel?: 'off' | 'warn' | 'error'; rulesOff?: string[] } {
     return {
-      knownDomains: Object.keys(this.layout.domainFolders ?? {}),
       residueLevel: this.layout.lint?.residueLevel,
       rulesOff: this.layout.lint?.rulesOff,
     }
   }
 
-  /** 单卡报告：用刚从磁盘读到的原文（保证是最新版） */
+  /** 文档类型判定（三态）：有 ID 且有来源章节 = 块；有 ID = 存量卡；无 ID = 旧笔记 */
+  private kindOf(card: { id: string | null; sourceSection: string | null }): LintReport['kind'] {
+    if (!card.id) return 'note'
+    return card.sourceSection ? 'block' : 'legacy'
+  }
+
+  /** 单篇报告：用刚从磁盘读到的原文（保证是最新版） */
   private reportOfRaw(raw: string, card: IndexedCard): LintReport {
     const parsed = parseFrontmatter(raw)
-    return lintCard({
+    return lintNote({
       title: parsed.meta?.title ?? card.title,
-      definition: card.definition ?? '',
+      summary: parsed.meta?.summary ?? card.definition ?? '',
       body: parsed.body,
-      template: parsed.meta?.template,
-      tags: card.tags,
-    }, { ...this.lintCtx(), kind: card.kind })
+    }, { ...this.lintCtx(), kind: this.kindOf(card) })
   }
 
-  /** 批量报告：直接用索引里已有的正文与模板，不再逐文件读盘（PERF-2） */
+  /** 批量报告：直接用索引里已有的正文，不再逐文件读盘（PERF-2） */
   private reportOfIndexed(card: IndexedCard): LintReport {
-    return lintCard({
+    return lintNote({
       title: card.title,
-      definition: card.definition ?? '',
+      summary: card.definition ?? '',
       body: card.body,
-      template: card.template ?? undefined,
-      tags: card.tags,
-    }, { ...this.lintCtx(), kind: card.kind })
+    }, { ...this.lintCtx(), kind: this.kindOf(card) })
   }
 
-  /** 单卡/批量质量体检（card_lint）+ 跨卡一致性 / 质量趋势 / 可执行性评级（P2） */
+  /**
+   * 质量体检（card_lint）。
+   *
+   * 2026-10：跨卡一致性 / 质量趋势 / 可执行性评级三个分析开关随模板与 100 分制一起
+   * 退场（架构选型 A9 / §6.4）——它们的输入（模板、分值）已不存在。
+   */
   async lint(opts: {
     ref?: string
     scope?: 'vault' | 'all'
     limit?: number
     rule?: string
-    cross?: boolean
-    trend?: boolean
-    rating?: boolean
   }, call?: { sessionCwd?: string }): Promise<string> {
     return opts.ref ? this.lintOne(opts, call) : this.lintBatch(opts, call)
   }
 
-  private async lintOne(opts: { ref?: string; rule?: string; rating?: boolean }, call?: { sessionCwd?: string }): Promise<string> {
+  private async lintOne(opts: { ref?: string; rule?: string }, call?: { sessionCwd?: string }): Promise<string> {
     const { card, raw } = await this.resolveCard(opts.ref ?? '', call?.sessionCwd)
     const report = this.reportOfRaw(raw, card)
     if (opts.rule) {
       const hits = report.findings.filter((f) => f.rule === opts.rule)
-      const passed = report.passed[opts.rule]
-      // BIZ-5：规则被 lint.rulesOff 关闭、或对旧笔记不适用时，passed 为 undefined
-      if (passed === undefined) {
-        return `卡片：${report.title}  规则：${opts.rule}  未启用或不适用于此类文档（检查 config.lint.rulesOff）`
+      // 规则"跑过没有"要同时看 passed 与 findings：新报告里 `passed` 只收录**零发现**的
+      // 规则，有发现的规则不在其中——只查 passed 会把"未通过"误报成"未启用"（本分支的坑）。
+      const ran = report.passed[opts.rule] === true || hits.length > 0
+      if (!ran) {
+        return `笔记：${report.title}  规则：${opts.rule}  未启用或不适用于此类文档（检查 config.lint.rulesOff）`
       }
-      return `卡片：${report.title}  规则：${opts.rule}  ${passed ? '✓ 通过' : '✗/⚠ 未通过'}\n`
+      return `笔记：${report.title}  规则：${opts.rule}  ${hits.length === 0 ? '✓ 通过' : '✗/⚠ 未通过'}\n`
         + (hits.length > 0 ? hits.map((f) => `  ${f.message}${f.suggestion ? `\n    建议：${f.suggestion}` : ''}`).join('\n') : '  （该规则无发现）')
     }
-    const body = parseFrontmatter(raw).body
-    const rating = opts.rating === false ? '' : `\n  可执行性：${executabilityOf(body)}`
-    return `${formatReport(report)}${rating}${this.noteSkips()}`
+    return `${formatReport(report)}${this.noteSkips()}`
   }
 
   private async lintBatch(opts: {
     scope?: 'vault' | 'all'
     limit?: number
     rule?: string
-    cross?: boolean
-    trend?: boolean
-    rating?: boolean
   }, call?: { sessionCwd?: string }): Promise<string> {
     const index = await this.ensureIndex(call?.sessionCwd)
+    // 默认只体检"块 + 存量卡"（有 ID）；scope='all' 才带上旧笔记
     const cards = index.all().filter((c) => (opts.scope === 'all' ? true : c.id !== null))
-    if (cards.length === 0) return '未找到可体检的卡片。'
-    const reports: LintReport[] = []
-    const titles: string[] = []
-    const bodies: string[] = []
-    const ids: Array<string | null> = []
-    for (const card of cards) {
-      reports.push(this.reportOfIndexed(card))
-      titles.push(card.fullRel)
-      bodies.push(card.body)
-      ids.push(card.id)
-    }
+    if (cards.length === 0) return '未找到可体检的笔记。'
+    const reports: LintReport[] = cards.map((card) => this.reportOfIndexed(card))
     if (opts.rule) {
       const hit = reports.filter((r) => r.findings.some((f) => f.rule === opts.rule))
       const lines = [`规则 ${opts.rule}（${ruleTitle(opts.rule)}）：${hit.length}/${reports.length} 篇命中`]
@@ -678,19 +666,7 @@ export class VaultStore {
       }
       return lines.join('\n') + this.noteSkips()
     }
-    if (opts.cross) {
-      const groups = crossCardConflicts(bodies.map((body, i) => ({ label: titles[i], body })))
-      return formatConflicts(groups, opts.limit ?? 20) + this.noteSkips()
-    }
-    if (opts.trend) {
-      return formatTrend(qualityTrend(reports.map((report, i) => ({ id: ids[i], report })))) + this.noteSkips()
-    }
-    const parts = [formatBatch(summarizeLint(reports, titles), opts.limit ?? 20)]
-    if (opts.rating) {
-      const summary = executabilitySummary(bodies.map((body) => ({ body })))
-      parts.push(`可执行性分布：${summary.map((s) => `${s.rating} ${s.count} 篇`).join('，')}`)
-    }
-    return parts.join('\n') + this.noteSkips()
+    return `${formatBatch(summarizeLint(reports), opts.limit ?? 20)}${this.noteSkips()}`
   }
 
   /** 版本更新 / 勘误 / 历史折叠块管理（card_history） */

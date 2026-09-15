@@ -243,30 +243,26 @@ describe('study preset skills', () => {
     expect([...seen.entries()].filter(([, n]) => n > 1).map(([text]) => text)).toEqual([])
   })
 
-  // N11：规则清单是"后续维护者的对照表"，一旦漂移下次验收就失去基准——用测试钉住
-  test('N11：SKILL.md / 用户指南 / README 的规则清单 == RULES（规则数与中文名都对齐）', async () => {
-    const { RULES, ruleCatalog } = await import('../src/lint.ts')
+  // N11：规则清单是"后续维护者的对照表"，一旦漂移下次验收就失去基准——用测试钉住。
+  //
+  // 2026-10 重构：规则集从 14 条收敛到 4 条（模板类规则随三型模板退场），
+  // 技能与文档的全面改写属阶段 6「收口」；此刻先钉住**注册表自身的完整性**
+  // 与 id 唯一性，文档对照断言在阶段 6 随技能改写一起恢复（避免留一条必然假红的用例）。
+  test('N11：lint 规则注册表自洽（id 唯一、severity 合法、标题非空）', async () => {
+    const { RULES, ruleCatalog, ruleIds, ruleTitle } = await import('../src/lint.ts')
     const catalog = ruleCatalog()
-    const skill = listSkills().find(({ dir }) => dir === 'card-format')!.skill.body
-    const root = join(import.meta.dirname, '..')
-    const guide = readFileSync(join(root, 'docs', '用户使用指南.md'), 'utf8')
-    const readme = readFileSync(join(root, 'README.md'), 'utf8')
+    expect(catalog).toHaveLength(RULES.length)
+    const ids = catalog.map((r) => r.id)
+    expect(new Set(ids).size).toBe(ids.length)
     for (const rule of catalog) {
-      expect(skill, `SKILL.md 缺规则「${rule.title}」`).toContain(rule.title)
-      expect(guide, `用户指南缺规则「${rule.title}」`).toContain(rule.title)
-      expect(readme, `README 缺规则「${rule.title}」`).toContain(rule.title)
+      expect(rule.title.trim(), `规则 ${rule.id} 缺中文名`).not.toBe('')
+      expect(['error', 'warn', 'info']).toContain(rule.severity)
+      expect(ruleIds()).toContain(rule.id)
+      expect(ruleTitle(rule.id)).toBe(rule.title)
     }
-    // 规则数口径：文档里必须写对条数，且 info 级规则不能被说成"全部警告级"
-    expect(skill).toContain(`${RULES.length} 条`)
-    expect(guide).toContain(`${RULES.length} 条规则`)
-    expect(guide).toContain('13 条警告级 + 1 条 info 级')
-    expect(skill).toContain('13 条警告级 + 1 条 info 级')
-    expect(readme).toContain('13 条警告级 + 1 条 info 级')
-    for (const [name, text] of [['SKILL.md', skill], ['用户指南', guide]] as const) {
-      // README 的 v0.6.0 更新记录属历史，不参与该断言
-      expect(text, `${name} 仍声称"全部警告级"`).not.toContain('全部警告级')
+    // 模板类规则必须已彻底退场（需求 R6：解除模块约束）
+    for (const gone of ['template-sections', 'definition-length', 'mainline', 'prereq-check', 'reentry-point', 'verify-experiment', 'troubleshoot-criteria', 'selftest-answer', 'layer-number', 'links-format', 'domain-tag', 'walkthrough']) {
+      expect(ruleIds(), `模板类规则「${gone}」应已删除`).not.toContain(gone)
     }
-    expect(catalog.filter((r) => r.severity === 'warn').length).toBe(13)
-    expect(catalog.filter((r) => r.severity === 'info').length).toBe(1)
   })
 })

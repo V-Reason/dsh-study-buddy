@@ -42,10 +42,10 @@ export interface LinkRewrite {
 }
 
 /**
- * 重写「关联卡片」小节里指向目标卡片的行：
- * - 有 ID：`- 前置：\`旧标题\`（ID）` → `- 前置：\`新标题\`（ID）`（ID 是可靠锚点）；
- * - 无 ID（旧笔记按路径寻址）：按 `` `旧标题` `` 字面量替换。
- * 只动以 `-` 开头且落在关联卡片小节内的行，避免误改正文引用。
+ * 重写「关联」小节里指向目标笔记的行（2026-10：关联改为 wikilink 格式）：
+ * - wikilink：`- 前置：[[旧标题]]` → `- 前置：[[新标题]]`（按字面量替换）；
+ * - 旧格式（迁移期兼容）：`- 前置：`旧标题`（ID）` —— 有 ID 时按 `（ID）` 锚点命中。
+ * 只动以 `-` 开头且落在关联小节内的行，避免误改正文引用。
  */
 export function rewriteCardLinks(body: string, opts: { oldTitle: string; newTitle: string; targetId?: string }): LinkRewrite {
   const { lead, sections } = splitSections(body)
@@ -53,10 +53,10 @@ export function rewriteCardLinks(body: string, opts: { oldTitle: string; newTitl
   let changed = 0
   const idRe = opts.targetId ? new RegExp(`（${escapeRe(opts.targetId)}）`) : null
   const next = sections.map((section) => {
-    if (!/^关联卡片/.test(section.title)) return section
+    if (!/^关联/.test(section.title)) return section
     const lines = section.body.split(/\r?\n/).map((line) => {
       if (!/^[ \t]*-/.test(line)) return line
-      const hit = idRe ? idRe.test(line) : line.includes(`\`${opts.oldTitle}\``)
+      const hit = idRe ? idRe.test(line) : (line.includes(`\`${opts.oldTitle}\``) || line.includes(`[[${opts.oldTitle}]]`))
       if (!hit) return line
       const replaced = line.split(opts.oldTitle).join(opts.newTitle)
       if (replaced === line) return line
@@ -105,7 +105,7 @@ export function detectBrokenLinks(
   opts: { oldTitle: string; oldId?: string; newTitle?: string; checkFormat?: boolean } = { oldTitle: '' },
 ): BrokenLinkHit[] {
   const checkFormat = opts.checkFormat !== false
-  const section = findSection(splitSections(body).sections, '关联卡片')
+  const section = findSection(splitSections(body).sections, '关联') ?? findSection(splitSections(body).sections, '关联卡片')
   if (!section) return []
   const hits: BrokenLinkHit[] = []
   const text = String(body ?? '')
@@ -121,8 +121,8 @@ export function detectBrokenLinks(
       hits.push({ line: lineNo, text: line.trim(), reason: `仍指向旧标题「${opts.oldTitle}」` })
       return
     }
-    if (checkFormat && !/^[ \t]*-\s*(?:前置|后续|易混淆)\s*[：:]/.test(line)) {
-      hits.push({ line: lineNo, text: line.trim(), reason: '关联行格式不符（应为 "- 标签：`标题`（ID）"）' })
+    if (checkFormat && !/^[ \t]*-\s*(?:前置|后续|兄弟|易混淆)\s*[：:]/.test(line)) {
+      hits.push({ line: lineNo, text: line.trim(), reason: '关联行格式不符（应为 "- 标签：[[标题]]"）' })
     }
   })
   return hits

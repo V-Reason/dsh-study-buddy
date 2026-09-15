@@ -1,31 +1,34 @@
 /**
- * lint 引擎：把一张卡片的多条规则发现汇总成分数与报告。
+ * lint 引擎（2026-10 瘦身版）：规则注册表 + 报告渲染。
  *
- * 与 lintrules 的分工：lintrules 是纯判定（命中/未命中），本模块是**规则注册表**
- * + 打分 + 排序 + 渲染。2026-09 审查后（EXT-1/CPLX-3）规则收敛为一张 `RULES`
- * 表：加一条规则 = 加一个数组元素，工具描述与 `ruleIds()` 自动跟随；
- * 规则所需的小节切分 / 空白化正文在 `RuleCtx` 里**只算一次**（PERF-3）。
+ * 相对 2026-09 版本，本轮删掉了**全部模板类规则**（必填小节 / 主干线 / 重入点 /
+ * 验证实验 / 排障判据 / 层级序号 / 自测题答案 / 关联块格式 / 领域标签 / 定义长度），
+ * 并**废弃 100 分制**（架构选型 A9）：
+ * 分值那套记分法建立在"模板缺节扣 5 分"之上，模板退场后分值不再可比，留着只会误导。
+ * 现在报告的是**问题清单 + 严重级**，用户看得到"有什么问题"而不是"得了多少分"。
+ *
+ * 保留的三条通用规则与内容自由度无关，属数据卫生（架构选型 §6.4）：
+ * - `session-residue`：会话残留（本机路径 / 源码行号 / 第二人称 / 会话口吻）
+ * - `code-language`：未标语言的代码块
+ * - `external-resource`：正文引用外部资源（Obsidian 打开会主动外联）
+ *
+ * 外加一条**由期望文件驱动**的 `expect-rule`：用户在《笔记期望.md》里写
+ * `- [检查] 禁止 <内容>` 才启用。这样"检查什么"也是热配置，而不是写死在代码里。
  * @module lint
  */
 
-import { blankOutBlocks, findSection, hasSection, splitSections, type CardSection } from './notemodel.ts'
-import { DEFINITION_MAX } from './card.ts'
+import { blankOutBlocks, makeLineOf, type DocSection } from './notemodel.ts'
 import {
-  ENGINEERING_SECTIONS, PREREQ_SECTION, REENTRY_SECTION, templateSpec,
-  type TemplateSpec, type TemplateType,
-} from './template.ts'
-import {
-  bodyLength, checkCodeFences, checkDomainTags, checkExperiments, checkExternalResources, checkLayers,
-  checkLinksBlock, checkSelfTest, countSection, scanResidue, type ResidueHit,
+  bodyLength, checkCodeFences, checkExternalResources, scanResidue, type ResidueHit,
 } from './lintrules.ts'
 
 export type Severity = 'error' | 'warn' | 'info'
 
 export interface LintFinding {
-  /** 规则 id（稳定，供 --rule 过滤与统计） */
+  /** 规则 id（稳定，供 rule 过滤与统计） */
   rule: string
   severity: Severity
-  /** 规则中文名（报告标题） */
+  /** 规则中文名 */
   title: string
   message: string
   /** 行号（1 基；0 = 不适用） */
@@ -33,45 +36,60 @@ export interface LintFinding {
   /** 命中片段 */
   excerpt?: string
   suggestion?: string
-  weight: number
 }
 
 export interface LintReport {
   title: string
-  template: TemplateType
-  /** 文档类型（note = 旧笔记，只跑通用规则） */
-  kind: 'card' | 'note'
-  score: number
+  /** `block` = 有 ID 且有来源章节；`legacy` = 有 ID；`note` = 旧笔记（无 ID） */
+  kind: 'block' | 'legacy' | 'note'
+  /** 正文实际字数（不含代码块与折叠块） */
   chars: number
   findings: LintFinding[]
-  /** 每条**已执行**规则是否通过（规则 id → 通过）；被禁用/不适用时不含该键 */
+  /** 每条**已执行**规则是否通过（规则 id → 通过）；被禁用/未执行时不含该键 */
   passed: Record<string, boolean>
-  /** 本次**未执行**的规则中文名（`residueLevel: 'off'` 等；报告不得把它当成"通过"，N7） */
+  /** 本次**未执行**的规则中文名（报告不得把它当成"通过"，N7） */
   notRun: string[]
 }
 
-export interface LintContext {
-  /** frontmatter 领域键列表（去 #） */
-  tags?: string[]
-  /** 已配置的领域键全集（用于根域/子域判定） */
-  knownDomains?: string[]
-  /** 是否把会话残留记为 error（默认 warn 级扣分，但不封顶分数） */
-  residueLevel?: 'off' | 'warn' | 'error'
-  /** 关闭的规则 id */
-  rulesOff?: string[]
-  /** 文档类型：note 时跳过结构类规则（BIZ-4） */
-  kind?: 'card' | 'note'
+/** 用户写在《笔记期望.md》里的检查项 */
+export interface ExpectRule {
+  /** 禁止 / 必须 出现的字面内容 */
+  pattern: string
+  mode: 'forbid' | 'require'
+  severity: Severity
+  reason?: string
 }
 
-/** 长卡判定阈值：正文超过该字数必须写「重入点」 */
-export const REENTRY_CHARS = 3000
-/** 出现 error 级发现时的封顶分 */
-export const ERROR_SCORE_CAP = 59
-/** 批量报告的分数分布桶宽 */
-export const SCORE_BUCKET = 10
-/** 软性残留（第二人称/会话口吻）的扣分权重：误报代价高，低于硬信号 */
-const SOFT_RESIDUE_WEIGHT = 3
-const SOFT_RESIDUE_RULES = new Set<ResidueHit['rule']>(['person', 'session'])
+export interface LintContext {
+  /** 会话残留级别：off 不执行 / warn 警告 / error 错误（默认 warn） */
+  residueLevel?: 'off' | 'warn' | 'error'
+  /** 关闭的规则 id 列表 */
+  rulesOff?: string[]
+  kind?: 'block' | 'legacy' | 'note'
+  /** 由《笔记期望.md》解析出的检查项（`- [检查] 禁止 xx` / `- [检查] 必须 xx`） */
+  expectRules?: ExpectRule[]
+}
+
+export interface RuleCtx {
+  title: string
+  summary: string
+  body: string
+  sections: DocSection[]
+  /** `blankOutBlocks(body)`：只扫正文（代码块与折叠块之外） */
+  residueText: string
+  bodyChars: number
+  residueLevel: 'off' | 'warn' | 'error'
+  kind: 'block' | 'legacy' | 'note'
+  expectRules: ExpectRule[]
+}
+
+export interface Rule {
+  id: string
+  title: string
+  severity: Severity
+  /** 判定函数；返回空数组 = 通过 */
+  run(ctx: RuleCtx): LintFinding[]
+}
 
 const RESIDUE_LABEL: Record<ResidueHit['rule'], string> = {
   path: '本机路径',
@@ -82,445 +100,290 @@ const RESIDUE_LABEL: Record<ResidueHit['rule'], string> = {
   session: '会话口吻',
 }
 
-/** 规则执行上下文：所有可复用的中间产物在此预计算一次 */
-export interface RuleCtx {
-  title: string
-  definition: string
-  body: string
-  /** `splitSections(body).sections`（只算一次） */
-  sections: CardSection[]
-  /** `blankOutBlocks(body)`（会话残留与字数统计共用） */
-  residueText: string
-  /** 正文实际字数（不含代码块与折叠块） */
-  bodyChars: number
-  spec: TemplateSpec
-  tags: string[]
-  knownDomains: string[]
-  residueLevel: 'off' | 'warn' | 'error'
-  kind: 'card' | 'note'
+/** 字符下标 → 行号（1 基） */
+function lineOfIndex(body: string, index: number): number {
+  return makeLineOf(body)(index)
 }
 
-export interface Rule {
-  id: string
-  title: string
-  /** 单条发现的扣分权重 */
-  weight: number
-  severity: Severity
-  /** `card` = 仅卡片文档（旧笔记跳过结构类规则） */
-  scope?: 'card'
-  /** 返回 `null` 表示**本次未执行**（如 `residueLevel: 'off'`），报告不得计为"通过"（N7） */
-  run: (ctx: RuleCtx) => LintFinding[] | null
-}
-
-/** 构造一条发现（权重默认取规则权重，可逐条覆盖） */
-function finding(
-  rule: Rule, severity: Severity, message: string,
-  extra: Partial<Pick<LintFinding, 'line' | 'excerpt' | 'suggestion' | 'weight'>> = {},
-): LintFinding {
-  return {
-    rule: rule.id,
-    severity,
-    title: rule.title,
-    message,
-    line: extra.line ?? 0,
-    excerpt: extra.excerpt,
-    suggestion: extra.suggestion,
-    weight: extra.weight ?? rule.weight,
-  }
-}
-
-/** 定义一条规则（`run` 能拿到自身元数据用于构造发现） */
-function defineRule(def: Omit<Rule, 'run'> & { run: (ctx: RuleCtx, rule: Rule) => LintFinding[] | null }): Rule {
-  const rule: Rule = {
-    id: def.id,
-    title: def.title,
-    weight: def.weight,
-    severity: def.severity,
-    scope: def.scope,
-    run: (ctx) => def.run(ctx, rule),
-  }
-  return rule
-}
-
-const VERIFY_TITLE = ENGINEERING_SECTIONS[0].title
-const TROUBLESHOOT_TITLE = ENGINEERING_SECTIONS[1].title
-
-/**
- * 规则注册表：**唯一权威**（id / 中文名 / 权重 / 严重度 / 适用范围 / 判定）。
- * 新增规则只改这里；`ruleIds()`、`ruleTitle()`、`card_lint` 的工具描述都由它派生。
- */
+/** 规则注册表：加一条规则 = 加一个数组元素（工具描述与 ruleIds 自动跟随） */
 export const RULES: Rule[] = [
-  defineRule({
+  {
     id: 'session-residue',
     title: '会话残留',
-    weight: 10,
     severity: 'warn',
-    run: (c, self) => {
-      // 关闭时返回 null = 未执行：旧实现返回 []，报告把它当成"✓ 通过"（N7）
-      if (c.residueLevel === 'off') return null
-      const severity: Severity = c.residueLevel === 'error' ? 'error' : 'warn'
-      return scanResidue(c.body, { blanked: c.residueText }).map((h) => finding(
-        self,
-        severity,
-        `第 ${h.line} 行：${RESIDUE_LABEL[h.rule]}「${h.excerpt}」`,
-        {
-          line: h.line,
-          excerpt: h.excerpt,
-          suggestion: h.suggestion,
-          weight: SOFT_RESIDUE_RULES.has(h.rule) ? SOFT_RESIDUE_WEIGHT : undefined,
-        },
-      ))
+    run(ctx) {
+      if (ctx.residueLevel === 'off') return []
+      // scanResidue 返回的就是行号（1 基），不需要再做下标换算
+      return scanResidue(ctx.residueText).map((hit) => ({
+        rule: 'session-residue',
+        severity: ctx.residueLevel === 'error' ? 'error' : 'warn',
+        title: '会话残留',
+        message: `会话残留（${RESIDUE_LABEL[hit.rule]}）：${hit.excerpt}`,
+        line: hit.line,
+        excerpt: hit.excerpt,
+        suggestion: '笔记是长期资产，把"本机路径 / 行号 / 你 / 上次"改成与场景无关的表述',
+      }))
     },
-  }),
-  defineRule({
-    id: 'definition-length',
-    title: '定义长度',
-    weight: 8,
-    severity: 'warn',
-    run: (c, self) => {
-      const len = c.definition.length
-      if (len <= DEFINITION_MAX) return []
-      return [finding(self, 'warn', `定义 ${len} 字，超过 ${DEFINITION_MAX} 字硬上限（card_create 会直接拒绝）`, { suggestion: '精简到 30 字左右' })]
-    },
-  }),
-  defineRule({
-    id: 'template-sections',
-    title: '模板必填小节',
-    weight: 5,
-    severity: 'warn',
-    scope: 'card',
-    run: (c, self) => c.spec.required
-      .filter((s) => !hasSection(c.sections, s.title))
-      .map((s) => finding(self, 'warn', `缺少 "### ${s.title}" 小节（${c.spec.type}：${s.hint}）`, { suggestion: `补写 ${s.title}` })),
-  }),
-  defineRule({
-    id: 'mainline',
-    title: '主干线唯一',
-    weight: 5,
-    severity: 'warn',
-    scope: 'card',
-    // 由 spec.mainline 驱动：缺小节由 template-sections 负责，这里只管"重复"
-    run: (c, self) => c.spec.required
-      .filter((s) => s.mainline)
-      .map((s) => ({ title: s.title, count: countSection(c.sections, s.title) }))
-      .filter(({ count }) => count > 1)
-      .map(({ title, count }) => finding(self, 'warn', `出现 ${count} 个「${title}」小节，主线小节必须唯一`, { suggestion: '合并为一条' })),
-  }),
-  defineRule({
-    id: 'prereq-check',
-    title: '前置检查',
-    weight: 3,
-    severity: 'warn',
-    scope: 'card',
-    run: (c, self) => {
-      const links = findSection(c.sections, '关联卡片')
-      const hasPrev = links ? /^[ \t]*-[ \t]*前置[：:]/m.test(links.body) : false
-      if (!hasPrev || hasSection(c.sections, PREREQ_SECTION.title)) return []
-      return [finding(self, 'warn', `卡内有"前置"关联但缺 "### ${PREREQ_SECTION.title}"（列出需要知道的概念与卡片 ID）`, { suggestion: `补写${PREREQ_SECTION.title}` })]
-    },
-  }),
-  defineRule({
-    id: 'reentry-point',
-    title: '重入点',
-    weight: 3,
-    severity: 'warn',
-    scope: 'card',
-    run: (c, self) => {
-      if (hasSection(c.sections, REENTRY_SECTION.title) || c.bodyChars <= REENTRY_CHARS) return []
-      return [finding(self, 'warn', `正文 ${c.bodyChars} 字（>${REENTRY_CHARS}）但缺 "### ${REENTRY_SECTION.title}"（30 秒 / 5 分钟 / 30 分钟三种读法）`, { suggestion: `补写${REENTRY_SECTION.title}` })]
-    },
-  }),
-  defineRule({
-    id: 'verify-experiment',
-    title: '验证实验',
-    weight: 5,
-    severity: 'warn',
-    scope: 'card',
-    run: (c, self) => {
-      if (!c.spec.required.some((s) => s.title === VERIFY_TITLE)) return []
-      const { present, steps } = checkExperiments(c.sections)
-      if (!present) {
-        return [finding(self, 'warn', `${c.spec.type}卡片缺 "### ${VERIFY_TITLE}"（≥3 步，每步一句"看到什么说明什么"）`, { suggestion: `补写${VERIFY_TITLE}` })]
-      }
-      if (steps < 3) {
-        return [finding(self, 'warn', `${VERIFY_TITLE}只有 ${steps} 步（${c.spec.type}要求 ≥3 步）`, { suggestion: '补足步骤' })]
-      }
-      return []
-    },
-  }),
-  defineRule({
-    id: 'troubleshoot-criteria',
-    title: '排障判据',
-    weight: 5,
-    severity: 'warn',
-    scope: 'card',
-    run: (c, self) => {
-      if (!c.spec.required.some((s) => s.title === TROUBLESHOOT_TITLE)) return []
-      if (hasSection(c.sections, TROUBLESHOOT_TITLE)) return []
-      return [finding(self, 'warn', `${c.spec.type}卡片缺 "### ${TROUBLESHOOT_TITLE}"（表格：症状 | 判据 | 修复）`, { suggestion: `补写${TROUBLESHOOT_TITLE}` })]
-    },
-  }),
-  defineRule({
+  },
+  {
     id: 'code-language',
     title: '代码块语言',
-    weight: 3,
     severity: 'warn',
-    run: (c, self) => {
-      const check = checkCodeFences(c.body)
+    run(ctx) {
+      const check = checkCodeFences(ctx.body)
       if (check.unlabeled === 0) return []
-      return [finding(self, 'warn', `${check.unlabeled}/${check.total} 个代码块未标语言（第 ${check.unlabeledIndexes.join('、')} 块）`, { suggestion: '标注 hlsl/cpp/csharp/python/plaintext 等' })]
+      // unlabeledIndexes 是"第几个代码块"（1 基），不是行号——报告里按块序号说明
+      return [{
+        rule: 'code-language',
+        severity: 'warn' as const,
+        title: '代码块语言',
+        message: `代码块未标语言（第 ${check.unlabeledIndexes.join('、')} 块，共 ${check.total} 块）`,
+        line: 0,
+        suggestion: '给围栏加语言标注（如 ```csharp、```hlsl、```python）；纯文本用 ```text',
+      }]
     },
-  }),
-  defineRule({
-    id: 'selftest-answer',
-    title: '自测题答案',
-    weight: 3,
-    severity: 'warn',
-    scope: 'card',
-    run: (c, self) => {
-      const check = checkSelfTest(c.sections)
-      const out: LintFinding[] = []
-      if (check.missing.length > 0) {
-        out.push(finding(self, 'warn', `自测题第 ${check.missing.join('、')} 题没有答案（应为 "Qn：… → 答案要点"）`, { suggestion: '补答案要点，并加"答不出 → 回看 X"' }))
-      }
-      if (check.usesNumbered) {
-        out.push(finding(self, 'warn', '自测题用了 "1./2." 编号写法，规范为 "**Q1**：…"', { suggestion: '改为 Qn 写法' }))
-      }
-      return out
-    },
-  }),
-  defineRule({
-    id: 'layer-number',
-    title: '层级序号',
-    weight: 3,
-    severity: 'warn',
-    scope: 'card',
-    run: (c, self) => {
-      const check = checkLayers(c.sections, c.body)
-      if (check.hasNumbers && !check.inRange) {
-        return [finding(self, 'warn', `阶梯式解剖为 ${check.layers.length} 层（规范 4~6 层）`, { suggestion: '合并或补充层级' })]
-      }
-      if (check.hasNumbers && !check.sequential) {
-        return [finding(self, 'warn', `层级序号不连续：第 ${check.layers.join('、')} 层`, { suggestion: '按 1→N 连续编号' })]
-      }
-      if (!check.hasNumbers && hasSection(c.sections, '阶梯式解剖')) {
-        return [finding(self, 'warn', '阶梯式解剖缺少 "第 N 层" 序号', { suggestion: '补层级序号' })]
-      }
-      return []
-    },
-  }),
-  defineRule({
-    id: 'links-format',
-    title: '关联块格式',
-    weight: 3,
-    severity: 'warn',
-    run: (c, self) => {
-      const check = checkLinksBlock(c.sections)
-      if (check.malformed.length === 0) return []
-      return [finding(self, 'warn', `关联块有 ${check.malformed.length} 行不符合 "- 前置/后续/易混淆：\`标题\`（ID）" 格式：${check.malformed.slice(0, 2).join(' / ')}`, { suggestion: '统一为带 ID 的关联行' })]
-    },
-  }),
-  defineRule({
-    id: 'domain-tag',
-    title: '领域标签',
-    weight: 3,
-    severity: 'warn',
-    run: (c, self) => {
-      const check = checkDomainTags(c.tags, c.knownDomains)
-      if (!check.mixed) return []
-      return [finding(self, 'warn', `领域标签同时挂了根域与子域：${check.roots.join('、')} + ${check.children.join('、')}`, { suggestion: '只保留精确的子域键（或只保留根域）' })]
-    },
-  }),
-  defineRule({
+  },
+  {
     id: 'external-resource',
     title: '外部资源',
-    weight: 0,
     severity: 'info',
-    // SEC-7：正文里的 HTML 外链会被 Obsidian 渲染并主动外联（信标/跟踪面）
-    run: (c, self) => checkExternalResources(c.body).map((h) => finding(
-      self,
-      'info',
-      `第 ${h.line} 行引用了外部资源（<iframe>/<script>/<img src="http…">）：Obsidian 打开卡片时会主动联网`,
-      { line: h.line, excerpt: h.excerpt, suggestion: '确认来源可信；不需要就删掉该 HTML' },
-    )),
-  }),
+    run(ctx) {
+      return checkExternalResources(ctx.body).map((hit) => ({
+        rule: 'external-resource',
+        severity: 'info' as const,
+        title: '外部资源',
+        message: '正文引用了外部资源（Obsidian 打开时会主动外联）',
+        line: hit.line,
+        excerpt: hit.excerpt,
+        suggestion: '如需离线，改为本地附件或纯文字描述',
+      }))
+    },
+  },
+  {
+    id: 'expect-rule',
+    title: '期望检查项',
+    severity: 'info',
+    run(ctx) {
+      if (ctx.expectRules.length === 0) return []
+      const outgoing: LintFinding[] = []
+      for (const item of ctx.expectRules) {
+        const at = ctx.body.indexOf(item.pattern)
+        if (item.mode === 'forbid' && at >= 0) {
+          outgoing.push({
+            rule: 'expect-rule',
+            severity: item.severity,
+            title: '期望检查项',
+            message: `命中《笔记期望.md》的禁止项：${item.pattern}${item.reason ? `（${item.reason}）` : ''}`,
+            line: lineOfIndex(ctx.body, at),
+            excerpt: item.pattern,
+          })
+        } else if (item.mode === 'require' && at < 0) {
+          outgoing.push({
+            rule: 'expect-rule',
+            severity: item.severity,
+            title: '期望检查项',
+            message: `缺少《笔记期望.md》的必须项：${item.pattern}${item.reason ? `（${item.reason}）` : ''}`,
+            line: 0,
+            excerpt: item.pattern,
+          })
+        }
+      }
+      return outgoing
+    },
+  },
 ]
 
-export type RuleId = string
-
-/** 规则 id 全集（工具参数与文档共用） */
-export function ruleIds(): RuleId[] {
+export function ruleIds(): string[] {
   return RULES.map((r) => r.id)
 }
 
-/** 规则中文名（报告与文档共用） */
 export function ruleTitle(id: string): string {
   return RULES.find((r) => r.id === id)?.title ?? id
 }
 
-/** 规则目录（文档 / 测试 / 配置校验共用） */
-export function ruleCatalog(): Array<{ id: string; title: string; weight: number; severity: Severity; scope: 'card' | 'all' }> {
-  return RULES.map((r) => ({ id: r.id, title: r.title, weight: r.weight, severity: r.severity, scope: r.scope ?? 'all' }))
+export function ruleCatalog(): Array<{ id: string; title: string; severity: Severity }> {
+  return RULES.map((r) => ({ id: r.id, title: r.title, severity: r.severity }))
 }
 
-/** 对单张卡片（或旧笔记）跑全部规则并打分 */
-export function lintCard(
-  input: { title?: string; definition?: string; body: string; template?: string; tags?: string[] },
+/** 规则清单渲染（工具描述由它派生，避免与注册表漂移） */
+export function ruleTable(): string[] {
+  return RULES.map((r) => `${r.id}（${r.title}）`)
+}
+
+/**
+ * 解析《笔记期望.md》里的检查项：
+ *
+ * ```
+ * - [检查] 禁止 本机绝对路径 理由：笔记要能换机器读
+ * - [检查] 禁止 🚀 严重：error
+ * - [检查] 必须 ## 目录
+ * ```
+ *
+ * 只认这一种明确写法——自由 Markdown 的其它内容不会被误当规则
+ * （"能被解析的就不靠自觉"，但也不能靠猜）。
+ */
+export function parseExpectRules(text: string): ExpectRule[] {
+  const out: ExpectRule[] = []
+  const lineRe = /^[ \t]*-[ \t]*\[检查\][ \t]*(禁止|必须)[ \t]*(\S.*)$/gm
+  for (const m of String(text ?? '').matchAll(lineRe)) {
+    const mode = m[1] === '禁止' ? 'forbid' : 'require'
+    let rest = m[2].trim()
+    let severity: Severity = 'info'
+    const severityMatch = /(?:严重|级别|severity)[:：][ \t]*(error|warn|info|错误|警告|提示)/i.exec(rest)
+    if (severityMatch) {
+      const raw = severityMatch[1].toLowerCase()
+      severity = raw === 'error' || raw === '错误' ? 'error' : raw === 'warn' || raw === '警告' ? 'warn' : 'info'
+      rest = rest.replace(severityMatch[0], '').trim()
+    }
+    let reason: string | undefined
+    const reasonMatch = /(?:理由|原因)[:：][ \t]*(.+)$/.exec(rest)
+    if (reasonMatch) {
+      reason = reasonMatch[1].trim()
+      rest = rest.replace(reasonMatch[0], '').trim()
+    }
+    const pattern = rest.trim()
+    if (pattern) out.push({ pattern, mode, severity, ...(reason ? { reason } : {}) })
+  }
+  return out
+}
+
+export function lintNote(
+  input: { title?: string; summary?: string; body: string; kind?: LintReport['kind'] },
   ctx: LintContext = {},
 ): LintReport {
   const body = String(input.body ?? '')
-  const off = new Set(ctx.rulesOff ?? [])
-  const spec = templateSpec(input.template)
-  const sections = splitSections(body).sections
+  const kind = ctx.kind ?? 'block'
+  const rulesOff = new Set(ctx.rulesOff ?? [])
+  const residueLevel = ctx.residueLevel ?? 'warn'
   const residueText = blankOutBlocks(body)
   const ruleCtx: RuleCtx = {
-    title: String(input.title ?? '').trim() || '（无标题）',
-    definition: String(input.definition ?? ''),
+    title: String(input.title ?? ''),
+    summary: String(input.summary ?? ''),
     body,
-    sections,
+    sections: [],
     residueText,
     bodyChars: bodyLength(body, residueText),
-    spec,
-    tags: input.tags ?? [],
-    knownDomains: ctx.knownDomains ?? [],
-    residueLevel: ctx.residueLevel ?? 'warn',
-    kind: ctx.kind ?? 'card',
+    residueLevel,
+    kind,
+    expectRules: ctx.expectRules ?? [],
   }
   const findings: LintFinding[] = []
   const passed: Record<string, boolean> = {}
   const notRun: string[] = []
   for (const rule of RULES) {
-    if (off.has(rule.id)) continue
-    if (rule.scope === 'card' && ruleCtx.kind === 'note') continue
-    const out = rule.run(ruleCtx)
-    if (out === null) {
-      // 未执行 ≠ 通过（N7）：不进 passed，报告单列
+    if (rulesOff.has(rule.id)) {
       notRun.push(rule.title)
       continue
     }
-    findings.push(...out)
-    passed[rule.id] = out.length === 0
+    if (rule.id === 'session-residue' && residueLevel === 'off') {
+      notRun.push(rule.title)
+      continue
+    }
+    if (rule.id === 'expect-rule' && ruleCtx.expectRules.length === 0) {
+      notRun.push(rule.title)
+      continue
+    }
+    const hits = rule.run(ruleCtx)
+    if (hits.length === 0) passed[rule.id] = true
+    else findings.push(...hits)
   }
-  const deducted = findings.reduce((sum, f) => sum + f.weight, 0)
-  let score = Math.max(0, 100 - deducted)
-  if (findings.some((f) => f.severity === 'error')) score = Math.min(score, ERROR_SCORE_CAP)
-  return {
-    title: ruleCtx.title,
-    template: spec.type,
-    kind: ruleCtx.kind,
-    score,
-    chars: ruleCtx.bodyChars,
-    findings,
-    passed,
-    notRun,
-  }
+  findings.sort((a, b) => (a.line || Number.MAX_SAFE_INTEGER) - (b.line || Number.MAX_SAFE_INTEGER))
+  return { title: ruleCtx.title, kind, chars: ruleCtx.bodyChars, findings, passed, notRun }
 }
 
-const ICON: Record<Severity, string> = { error: '✗', warn: '⚠', info: '·' }
+const SEVERITY_LABEL: Record<Severity, string> = { error: '✗', warn: '⚠', info: 'ℹ' }
 
-/** 渲染单卡报告（工具返回用） */
 export function formatReport(report: LintReport): string {
-  const template = report.kind === 'note' ? '—（旧笔记：仅体检通用规则）' : report.template
-  const lines: string[] = [`卡片：${report.title}  模板：${template}  总分：${report.score}/100（正文 ${report.chars} 字）`]
-  const okRules = Object.entries(report.passed).filter(([, ok]) => ok).map(([rule]) => ruleTitle(rule))
-  if (okRules.length > 0) lines.push(`  ✓ 通过：${okRules.join('、')}`)
-  if (report.notRun.length > 0) lines.push(`  ⊘ 未执行（不计入通过）：${report.notRun.join('、')}`)
-  for (const f of report.findings) {
-    lines.push(`  ${ICON[f.severity]} ${f.title}：${f.message}`)
-    if (f.suggestion) lines.push(`      建议：${f.suggestion}`)
+  const head = `## ${report.title || '(未命名)'}（${report.kind === 'note' ? '旧笔记' : report.kind === 'legacy' ? '存量卡' : '块'}，正文 ${report.chars} 字）`
+  const lines = [head, '']
+  if (report.findings.length === 0) {
+    lines.push('未发现问题。')
+  } else {
+    lines.push('| 级别 | 规则 | 行 | 说明 |', '| :-- | :-- | --: | :-- |')
+    for (const f of report.findings) {
+      lines.push(`| ${SEVERITY_LABEL[f.severity]} | ${f.title} | ${f.line || '—'} | ${f.message} |`)
+    }
+    const suggestions = report.findings.map((f) => f.suggestion).filter((s): s is string => Boolean(s))
+    if (suggestions.length > 0) {
+      lines.push('', '建议：')
+      for (const s of [...new Set(suggestions)]) lines.push(`- ${s}`)
+    }
   }
-  if (report.findings.length === 0) lines.push('  ✓ 无问题')
+  if (report.notRun.length > 0) lines.push('', `⊘ 未执行（不计入通过）：${report.notRun.join('、')}`)
   return lines.join('\n')
-}
-
-export interface LintSummaryRow {
-  title: string
-  template: TemplateType
-  kind: 'card' | 'note'
-  score: number
-  chars: number
-  findingCount: number
-  topRules: string[]
 }
 
 export interface LintBatch {
   total: number
-  /** 其中旧笔记数量（仅体检通用规则） */
   noteCount: number
-  averageScore: number
-  /** 分数分布（按 10 分一档） */
-  distribution: Array<{ range: string; count: number }>
-  /** 每条规则的命中卡片数与命中次数 */
-  rules: Array<{ rule: string; title: string; cards: number; hits: number }>
-  rows: LintSummaryRow[]
+  legacyCount: number
+  /** 有问题（至少一条 finding）的文档数 */
+  problemCount: number
+  /** 平均问题数（保留 1 位） */
+  average: number
+  /** 按"问题数"的分布桶标签（如 `1~2 条`）与计数 */
+  distribution: Array<{ label: string; count: number }>
+  /** 规则命中统计（规则 id → 命中文档数） */
+  rules: Array<{ id: string; title: string; count: number }>
+  /** 问题最多的文档（降序） */
+  worst: Array<{ title: string; count: number }>
 }
 
-/** 汇总多张卡片/笔记的 lint 结果（批量模式） */
-export function summarizeLint(reports: LintReport[], titles: string[]): LintBatch {
-  const ruleMap = new Map<string, { cards: number; hits: number }>()
-  const buckets = new Map<number, number>()
-  for (const report of reports) {
-    const seen = new Set<string>()
-    for (const f of report.findings) {
-      const entry = ruleMap.get(f.rule) ?? { cards: 0, hits: 0 }
-      entry.hits += 1
-      if (!seen.has(f.rule)) {
-        entry.cards += 1
-        seen.add(f.rule)
-      }
-      ruleMap.set(f.rule, entry)
-    }
-    const bucket = Math.floor(report.score / SCORE_BUCKET) * SCORE_BUCKET
-    buckets.set(bucket, (buckets.get(bucket) ?? 0) + 1)
-  }
+/** 分布桶宽（按问题条数） */
+export const PROBLEM_BUCKET = 2
+
+export function summarizeLint(reports: LintReport[]): LintBatch {
   const total = reports.length
-  const averageScore = total === 0 ? 0 : Math.round(reports.reduce((s, r) => s + r.score, 0) / total)
+  const counts = reports.map((r) => r.findings.length)
+  const buckets = new Map<string, number>()
+  for (const n of counts) {
+    const lower = n === 0 ? 0 : Math.floor((n - 1) / PROBLEM_BUCKET) * PROBLEM_BUCKET + 1
+    const label = n === 0 ? '0 条' : `${lower}~${lower + PROBLEM_BUCKET - 1} 条`
+    buckets.set(label, (buckets.get(label) ?? 0) + 1)
+  }
+  const ruleHits = new Map<string, number>()
+  for (const r of reports) {
+    for (const id of new Set(r.findings.map((f) => f.rule))) ruleHits.set(id, (ruleHits.get(id) ?? 0) + 1)
+  }
+  const sum = counts.reduce((a, b) => a + b, 0)
   return {
     total,
     noteCount: reports.filter((r) => r.kind === 'note').length,
-    averageScore,
-    distribution: [...buckets.entries()].sort((a, b) => b[0] - a[0]).map(([lo, count]) => {
-      // 满分桶不能显示 `100~109`（N10）：上界封顶 100，单值桶只显示一个数
-      const hi = Math.min(lo + SCORE_BUCKET - 1, 100)
-      return { range: lo === hi ? `${lo}` : `${lo}~${hi}`, count }
-    }),
-    rules: [...ruleMap.entries()]
-      .map(([rule, v]) => ({ rule, title: ruleTitle(rule), cards: v.cards, hits: v.hits }))
-      .sort((a, b) => b.cards - a.cards || a.rule.localeCompare(b.rule)),
-    rows: reports.map((r, i) => ({
-      title: titles[i] ?? r.title,
-      template: r.template,
-      kind: r.kind,
-      score: r.score,
-      chars: r.chars,
-      findingCount: r.findings.length,
-      topRules: [...new Set(r.findings.map((f) => f.title))].slice(0, 3),
-    })),
+    legacyCount: reports.filter((r) => r.kind === 'legacy').length,
+    problemCount: counts.filter((n) => n > 0).length,
+    average: total === 0 ? 0 : Math.round((sum / total) * 10) / 10,
+    distribution: [...buckets.entries()]
+      .sort((a, b) => Number(a[0].split(' ')[0]) - Number(b[0].split(' ')[0]))
+      .map(([label, count]) => ({ label, count })),
+    rules: [...ruleHits.entries()]
+      .map(([id, count]) => ({ id, title: ruleTitle(id), count }))
+      .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id)),
+    worst: reports
+      .map((r) => ({ title: r.title, count: r.findings.length }))
+      .filter((r) => r.count > 0)
+      .sort((a, b) => b.count - a.count || a.title.localeCompare(b.title)),
   }
 }
 
-/** 渲染批量汇总（工具返回用） */
-export function formatBatch(batch: LintBatch, limit = 20): string {
-  const lines: string[] = [
-    `批量 lint：${batch.total} 篇，平均 ${batch.averageScore}/100`,
-    `分数分布：${batch.distribution.map((d) => `${d.range} 分 ${d.count} 篇`).join('，') || '—'}`,
-  ]
-  if (batch.noteCount > 0) {
-    lines.push(`其中旧笔记 ${batch.noteCount} 篇（仅体检通用规则：会话残留/定义长度/代码块语言/关联块格式/领域标签/外部资源）`)
+export function formatBatch(batch: LintBatch, limit = 10): string {
+  const lines: string[] = []
+  lines.push(`## 批量体检（共 ${batch.total} 篇）`)
+  lines.push('')
+  if (batch.noteCount > 0 || batch.legacyCount > 0) {
+    lines.push(`- 其中旧笔记 ${batch.noteCount} 篇、存量卡 ${batch.legacyCount} 篇（不参与"块"的规则口径）`)
+  }
+  lines.push(`- 有问题的文档：${batch.problemCount} 篇；平均问题数：${batch.average} 条`)
+  if (batch.distribution.length > 0) {
+    lines.push(`- 问题数分布：${batch.distribution.map((d) => `${d.label} ${d.count} 篇`).join('，')}`)
   }
   if (batch.rules.length > 0) {
-    lines.push('规则命中（按命中篇数排序）：')
-    for (const r of batch.rules) lines.push(`  - ${r.title}：${r.cards} 篇 / ${r.hits} 处`)
-  } else {
-    lines.push('规则命中：无')
+    lines.push('', '规则命中：')
+    for (const r of batch.rules) lines.push(`- ${r.title}（${r.id}）：${r.count} 篇`)
   }
-  const worst = [...batch.rows].sort((a, b) => a.score - b.score).slice(0, limit)
-  if (worst.length > 0) {
-    lines.push(`最低分 ${worst.length} 篇：`)
-    for (const row of worst) {
-      const kind = row.kind === 'note' ? '旧笔记' : row.template
-      lines.push(`  - ${row.score}/100 ${row.title}（${kind}，${row.chars} 字）${row.topRules.length ? `：${row.topRules.join('、')}` : ''}`)
-    }
+  if (batch.worst.length > 0) {
+    lines.push('', `问题最多的文档（前 ${Math.min(limit, batch.worst.length)}）：`)
+    for (const w of batch.worst.slice(0, limit)) lines.push(`- ${w.title}：${w.count} 条`)
   }
+  if (batch.rules.length === 0) lines.push('', '全部通过。')
   return lines.join('\n')
 }

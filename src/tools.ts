@@ -8,8 +8,7 @@
  */
 
 import { generateId, VALID_STATUS, type LinkKind, type UpdatePayload } from './card.ts'
-import { REENTRY_CHARS, RULES, ruleIds } from './lint.ts'
-import { PREREQ_SECTION, REENTRY_SECTION, TEMPLATE_TYPES, templateTable } from './template.ts'
+import { RULES, ruleIds } from './lint.ts'
 import type { HistoryKind } from './history.ts'
 import type { VaultStore } from './index.ts'
 
@@ -126,28 +125,26 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'card_create',
       description:
-        '把一张原子卡片写入 vault 对应分类目录（领域→目录映射；未映射落"未分类"并回显可用领域键与近似键建议）。知识即卡片：与旧笔记同库。'
-        + '自动生成唯一 ID、写 frontmatter（ID/标题/领域/来源/状态/模板）；正文=裸引用块定义+分型小节（理论型/工程型/对比型，自动推断，可用 template 覆盖）+关联卡片。'
-        + '返回整卡；返回文本含"领域映射"行（键 → 目录）与标题清洗提示（非法字符/引号会被清洗，文件名以返回的 rel 为准）。',
+        '把一张笔记写入 vault 对应分类目录（领域→目录映射；未映射落"未分类"并回显可用领域键与近似键建议）。知识即笔记：与旧笔记同库。'
+        + '自动生成唯一 ID、写 frontmatter（ID/标题/领域/来源/状态/来源章节/顺序/简介）；正文只由《笔记期望.md》决定写法，不再有模板与必填小节，字数不设限。'
+        + '返回整篇；返回文本含"领域映射"行（键 → 目录）与标题清洗提示（非法字符/引号会被清洗，文件名以返回的 rel 为准）。',
       parameters: {
         type: 'object',
         properties: {
           title: { type: 'string', description: '概念名称，如"光线与表面的两种交互：散射与吸收"（避免 / \\ : * ? " < > | 与引号；会被自动清洗）' },
-          domain: { type: 'string', description: '领域键，决定落盘目录（键名表见 card-format 技能；未映射会回显可用键与近似键）' },
+          domain: { type: 'string', description: '领域键，决定落盘目录（键名表见 note-format 技能；未映射会回显可用键与近似键）' },
           tags: { type: 'array', items: { type: 'string' }, description: '额外中文领域标签' },
           source: { type: 'string', description: '资料名称' },
           status: { type: 'string', enum: [...VALID_STATUS], description: '草稿/已确认/需更新' },
-          definition: { type: 'string', description: '一句话定义：≤30 字最佳，≤60 字硬上限（31~60 字仅提示精简）' },
-          template: { type: 'string', enum: [...TEMPLATE_TYPES], description: '卡片模板：理论型（为什么）/工程型（怎么做）/对比型（怎么选）；不传则按领域与标题自动推断' },
+          definition: { type: 'string', description: '一句话定位（无长度限制；可省略，缺省时从正文首个引用块提取）' },
           content: {
             type: 'string',
-            description: `正文 Markdown。三型模板（自动推断，可用 template 覆盖）：${templateTable().join('；')}。`
-              + `长卡（>${REENTRY_CHARS} 字）补「${REENTRY_SECTION.title}」，有前置卡时补「${PREREQ_SECTION.title}」。`
-              + '正文长度不设限，按信息完备性写。',
+            description: '正文 Markdown。写法（结构/详略/公式/图表/互引）完全由 vault 根的《笔记期望.md》决定；'
+              + '不设字数上下限，按信息完备性写。',
           },
           links: {
             type: 'object',
-            description: '关联卡片（可预格式化，如"`漫反射模型`（ID）"）',
+            description: '关联笔记（可预格式化）',
             properties: {
               prev: { type: 'array', items: { type: 'string' }, description: '前置' },
               next: { type: 'array', items: { type: 'string' }, description: '后续' },
@@ -164,7 +161,6 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         source: String(args.source ?? ''),
         status: String(args.status ?? ''),
         definition: String(args.definition ?? ''),
-        template: args.template ? String(args.template) : undefined,
         content: String(args.content ?? ''),
         tags: stringList(args.tags),
         links: linksOf(args.links),
@@ -173,26 +169,25 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'card_update',
       description:
-        '增量更新：append-version=加"版本更新（来源）"（补充不推翻旧结论，插在「关联卡片」之前）；errata=保留旧内容加"勘误"（changes 含纠正原因）；'
-        + 'definition=只替换一句话定义（字段级微调：不重传正文、不产生历史折叠，不算知识更新）；'
-        + 'replace=整卡替换（旧版入历史折叠块，可传 links 重建关联卡片）。先给用户新旧对比、确认后才调用；决定权在用户。返回整卡。',
+        '增量更新：append-version=加"版本更新（来源）"（补充不推翻旧结论，插在「关联」之前）；errata=保留旧内容加"勘误"（changes 含纠正原因）；'
+        + 'definition=只替换一句话定位（字段级微调：不重传正文、不算知识更新）；'
+        + 'replace=整篇替换（旧版入历史折叠块，可传 links 重建关联）。先给用户新旧对比、确认后才调用；决定权在用户。返回整篇。',
       parameters: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: '卡片 ID/标题/路径' },
+          id: { type: 'string', description: '笔记 ID/标题/路径' },
           mode: { type: 'string', description: 'append-version/errata/definition/replace' },
           changes: { type: 'string', description: 'append/errata 的追加内容' },
           source: { type: 'string', description: '版本更新来源（append-version 用）' },
           title: { type: 'string', description: 'replace：新标题' },
           domain: { type: 'string', description: 'replace：领域键' },
           tags: { type: 'array', items: { type: 'string' }, description: 'replace：额外领域标签' },
-          template: { type: 'string', enum: [...TEMPLATE_TYPES], description: 'replace：卡片模板（不传则沿用原卡或按标题推断）' },
           status: { type: 'string', enum: [...VALID_STATUS], description: 'replace：草稿/已确认/需更新' },
-          definition: { type: 'string', description: 'definition/replace：一句话定义（≤30 字最佳，≤60 字硬上限）' },
-          content: { type: 'string', description: 'replace：新正文 Markdown（小节要求同 card_create）' },
+          definition: { type: 'string', description: 'definition/replace：一句话定位（无长度限制）' },
+          content: { type: 'string', description: 'replace：新正文 Markdown（写法由《笔记期望.md》决定）' },
           links: {
             type: 'object',
-            description: 'replace：新关联卡片（可选；不传则新卡无关联小节，旧关联留在历史折叠块）',
+            description: 'replace：新关联（可选；不传则新笔记无关联小节）',
             properties: {
               prev: { type: 'array', items: { type: 'string' }, description: '前置' },
               next: { type: 'array', items: { type: 'string' }, description: '后续' },
@@ -220,7 +215,6 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
             source: String(args.source ?? ''),
             status: String(args.status ?? ''),
             definition: String(args.definition ?? ''),
-            template: args.template ? String(args.template) : undefined,
             content: String(args.content ?? ''),
             tags: stringList(args.tags),
             links: linksOf(args.links),
@@ -268,29 +262,25 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       },
       output,
       execute: (args, exec) => store.moc({
-        title: args.title ? String(args.title) : undefined,
-        cardIds: stringList(args.cardIds) ?? [],
+        title: args.title ? String(args.title) : undefined,        cardIds: stringList(args.cardIds) ?? [],
         domain: args.domain ? String(args.domain) : undefined,
       }, { sessionCwd: sessionCwdOf(exec) }),
     },
     {
       name: 'card_lint',
       description:
-        `卡片质量体检（2026-09 重设计新增）：按 ${RULES.length} 条规则打分并给出改写建议——${RULES.map((r) => r.title).join('、')}。`
-        + '全部为警告级（不阻塞落盘）；会话残留含白名单（L0/L1/L2 球谐带、讲义引用、代码块与历史折叠块内不扫）。'
-        + 'ref 给单卡；scope="vault" 批量体检卡片，scope="all" 含旧笔记（旧笔记仅体检通用规则，不套模板）。limit 控制明细条数（默认 20）。'
-        + 'cross=true 做跨卡一致性检查（同一符号/常量/口径在多卡取值冲突）；trend=true 按周统计质量趋势；rating=true 输出可执行性分布（能跑/能查/只能读）。'
-        + '归档后自检、或用户问"卡片质量/有没有写歪/口径是否一致"时用。',
+        `笔记质量体检：按 ${RULES.length} 条规则列出问题与改写建议——${RULES.map((r) => r.title).join('、')}。`
+        + '规则只覆盖"数据卫生"（会话残留含白名单：L0/L1/L2 球谐带、讲义引用、代码块与折叠块内不扫），'
+        + '不再有模板/字数类检查；报告给问题清单与严重级，不给分数。'
+        + 'ref 给单篇；scope="vault" 批量体检有 ID 的笔记，scope="all" 含旧笔记。limit 控制明细条数（默认 20）。'
+        + '归档后自检、或用户问"笔记质量/有没有写歪"时用。',
       parameters: {
         type: 'object',
         properties: {
-          ref: { type: 'string', description: '单卡：卡片 ID/标题/路径（与 scope 二选一）' },
-          scope: { type: 'string', enum: ['vault', 'all'], description: '批量：vault=只体检卡片，all=含旧笔记（旧笔记仅体检通用规则，不套模板）' },
-          limit: { type: 'number', description: '批量时返回的最低分明细条数，默认 20' },
+          ref: { type: 'string', description: '单篇：笔记 ID/标题/路径（与 scope 二选一）' },
+          scope: { type: 'string', enum: ['vault', 'all'], description: '批量：vault=只体检有 ID 的笔记，all=含旧笔记' },
+          limit: { type: 'number', description: '批量时返回的明细条数，默认 20' },
           rule: { type: 'string', enum: ruleIds(), description: '只看某条规则（如 session-residue）' },
-          cross: { type: 'boolean', description: '跨卡一致性检查：同键（表格首列/公式左侧）在多卡取值不一致时列出冲突' },
-          trend: { type: 'boolean', description: '质量趋势：按卡片 ID 日期分周输出均分与短板分布' },
-          rating: { type: 'boolean', description: '可执行性评级：能跑（代码+验证实验）/能查（排障判据或对比表）/只能读' },
         },
       },
       output,
@@ -300,9 +290,6 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         scope: args.scope === 'vault' || args.scope === 'all' ? args.scope : undefined,
         limit: Number(args.limit) > 0 ? Number(args.limit) : undefined,
         rule: args.rule ? String(args.rule) : undefined,
-        cross: args.cross === true,
-        trend: args.trend === true,
-        rating: args.rating === true,
       }, { sessionCwd: sessionCwdOf(exec) }),
     },
     {

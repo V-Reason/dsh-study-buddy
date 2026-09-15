@@ -17,7 +17,7 @@ const CARD = [
   '### 核心思想',
   '环境侧喂数据。',
   '',
-  '### 关联卡片',
+  '### 关联',
   '- 前置：`间接光在实时渲染中的两个通道`（202609092139_2c27）',
   '- 后续：`URP IBL 接入`（202609092139_92d2）',
   '- 易混淆：`直接光`（202609092139_aaaa）',
@@ -57,7 +57,7 @@ describe('rename 改名与入链重写', () => {
   })
 
   test('rewriteCardLinks：不误改正文里的标题出现（只动关联块的行）', () => {
-    const raw = '### 核心思想\nURP IBL 接入 的关键是查表。\n\n### 关联卡片\n- 后续：`URP IBL 接入`（202609092139_92d2）'
+    const raw = '### 核心思想\nURP IBL 接入 的关键是查表。\n\n### 关联\n- 后续：`URP IBL 接入`（202609092139_92d2）'
     const result = rewriteCardLinks(raw, { oldTitle: 'URP IBL 接入', newTitle: '新名字', targetId: '202609092139_92d2' })
     expect(result.text).toContain('### 核心思想\nURP IBL 接入 的关键是查表。')
     expect(result.text).toContain('- 后续：`新名字`（202609092139_92d2）')
@@ -75,15 +75,15 @@ describe('rename 改名与入链重写', () => {
 
   test('detectBrokenLinks：旧标题残留与格式漂移', () => {
     const raw = [
-      '### 关联卡片',
+      '### 关联',
       '- 后续：`URP IBL 接入`（202609092139_92d2）',
       '- 前置知识：裸标题',
       '- 前置：`正常`（id2）',
     ].join('\n')
     const hits = detectBrokenLinks(raw, { oldTitle: 'URP IBL 接入', oldId: '202609092139_92d2' })
     // 带 ID 的旧标题行不算断链（ID 仍可寻址）
-    expect(hits.map((h) => h.reason)).toEqual(['关联行格式不符（应为 "- 标签：`标题`（ID）"）'])
-    const orphan = detectBrokenLinks('### 关联卡片\n- 后续：`URP IBL 接入`', { oldTitle: 'URP IBL 接入' })
+    expect(hits.map((h) => h.reason)).toEqual(['关联行格式不符（应为 "- 标签：[[标题]]"）'])
+    const orphan = detectBrokenLinks('### 关联\n- 后续：`URP IBL 接入`', { oldTitle: 'URP IBL 接入' })
     expect(orphan[0].reason).toContain('仍指向旧标题')
   })
 
