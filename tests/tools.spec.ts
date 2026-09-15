@@ -13,9 +13,16 @@ const store = new VaultStore({
   mocDir: '目录',
 })
 
+/**
+ * 阶段 4b：18 个工具的名字集合与 schema 契约。
+ *
+ * 这一层是"文档化契约"的守卫：工具描述本身就是提示词资产，schema 漂移
+ * （少一个必填项、枚举写错、描述与注册表脱节）在运行期没有任何信号。
+ */
 const TOOL_NAMES = [
-  'card_search', 'card_get', 'card_id', 'card_create', 'card_update',
-  'card_link', 'card_moc', 'card_lint', 'card_history', 'card_rename',
+  'note_library', 'note_expect_get', 'note_list', 'note_get', 'note_search', 'note_overview',
+  'note_plan', 'note_write', 'note_update', 'note_toc', 'note_link', 'note_unlink',
+  'note_rename', 'note_history', 'note_restore', 'note_lint',
   'study_progress', 'study_memory',
 ]
 
@@ -25,173 +32,150 @@ function defOf(name: string) {
   return def
 }
 
-describe('buildToolDefs（工具 schema 契约）', () => {
-  test('注册 12 个工具，名字集合正确', () => {
+describe('buildToolDefs（18 个工具的 schema 契约）', () => {
+  test('注册 18 个工具，名字集合正确，card_* 整族退场', () => {
     const names = buildToolDefs(store).map((d) => d.name)
+    expect(names).toHaveLength(18)
     expect(names.sort()).toEqual([...TOOL_NAMES].sort())
-  })
-
-  test('每个工具都有 description 与 output schema', () => {
-    for (const def of buildToolDefs(store)) {
-      expect(def.description, def.name).toBeTruthy()
-      expect(def.output.schema.type, def.name).toBe('string')
+    for (const gone of ['card_search', 'card_create', 'card_update', 'card_link', 'card_moc', 'card_id', 'card_history', 'card_rename', 'card_lint', 'card_get']) {
+      expect(names, `${gone} 应已退场（需求 R18）`).not.toContain(gone)
     }
   })
 
-  test('card_create：status 带 enum、required 完整、模板参数已退场', () => {
-    const def = defOf('card_create')
-    const props = def.parameters.properties as Record<string, { enum?: string[] }>
+  test('每个工具都有 description 与 output schema（返回纯文本）', () => {
+    for (const def of buildToolDefs(store)) {
+      expect(def.description, def.name).toBeTruthy()
+      expect(def.output.schema.type, def.name).toBe('string')
+      expect(def.parameters.type, def.name).toBe('object')
+    }
+  })
+
+  test('只读工具声明 isConcurrencySafe，写入工具不声明（避免并发写同一库）', () => {
+    const readOnly = ['note_library', 'note_expect_get', 'note_list', 'note_get', 'note_search', 'note_overview', 'note_plan', 'note_history', 'note_lint']
+    const write = ['note_write', 'note_update', 'note_toc', 'note_link', 'note_unlink', 'note_rename', 'note_restore', 'study_progress', 'study_memory']
+    for (const name of readOnly) expect(defOf(name).isConcurrencySafe?.(), name).toBe(true)
+    for (const name of write) expect(defOf(name).isConcurrencySafe, name).toBeUndefined()
+  })
+
+  test('note_write 必填含 planId（硬门禁的凭据）；无模板/无字数类参数', () => {
+    const def = defOf('note_write')
+    expect(def.parameters.required).toEqual(expect.arrayContaining(['planId', 'title', 'path', 'source', 'content']))
+    const props = def.parameters.properties as Record<string, { enum?: string[]; description?: string }>
+    expect(props.planId?.description).toContain('规划')
     expect(props.status?.enum).toEqual(['草稿', '已确认', '需更新'])
-    // 需求 R6：模板概念退场，参数表里不应再有 template
+    // 需求 R6/R7：模板参数不存在，正文描述指向《笔记期望.md》且不再限制字数
     expect(props.template).toBeUndefined()
-    const required = def.parameters.required as string[]
-    expect(required).toEqual(expect.arrayContaining(['title', 'domain', 'source', 'status', 'definition', 'content']))
-  })
-
-  test('card_update：required=[id,mode]，definition 模式参数存在', () => {
-    const def = defOf('card_update')
-    expect(def.parameters.required).toEqual(['id', 'mode'])
-    const props = def.parameters.properties as Record<string, { type?: string; enum?: string[]; properties?: Record<string, unknown>; description?: string }>
-    expect(props.status?.enum).toEqual(['草稿', '已确认', '需更新'])
-    expect(props.template).toBeUndefined()
-    expect(props.links?.type).toBe('object')
-    expect(props.links?.properties?.prev).toBeTruthy()
-    expect(props.links?.properties?.next).toBeTruthy()
-    // definition 模式（字段级修定位，不产生历史折叠）
-    expect(props.definition?.description).toContain('definition/replace')
-    expect(def.description).toContain('definition=')
-  })
-
-  test('card_id 工具描述注明"card_create 不消费预取值"', () => {
-    expect(defOf('card_id').description).toContain('不消费')
-    expect(defOf('card_id').description).toContain('card_create')
-  })
-
-  test('card_moc 工具描述注明"title 只传主题名、日期自动生成"', () => {
-    const desc = defOf('card_moc').description
-    expect(desc).toContain('title 只传主题名')
-    expect(desc).toContain('日期前缀与文件名由工具自动生成')
-    const titleParam = (defOf('card_moc').parameters.properties as Record<string, { description?: string }>).title
-    expect(titleParam?.description).toContain('只写主题')
-  })
-
-  test('card_create 定义参数已解除 60 字硬上限；description 含领域映射', () => {
-    const def = defOf('card_create')
-    const props = def.parameters.properties as Record<string, { description?: string }>
-    // 需求 R7：解除字数约束——参数说明里不能再出现"硬上限/60 字"
-    expect(props.definition?.description).toContain('无长度限制')
-    expect(props.definition?.description).not.toContain('60')
-    expect(def.description).toContain('领域映射')
-    // 写法约束的来源改为《笔记期望.md》，而不是工具描述里的模板小节
     expect(props.content?.description).toContain('笔记期望')
-    expect(props.content?.description).toContain('不设字数上下限')
-    expect(props.content?.description).not.toContain('主干线')
+    expect(props.content?.description).toContain('不设限')
+    expect(props.summary?.description).toContain('无长度限制')
+    // 门禁三条件写进描述（模型据此自我纠正）
+    expect(def.description).toContain('note_expect_get')
+    expect(def.description).toContain('planId')
   })
 
-  test('card_lint：ref/scope/rule 参数与规则枚举（无分值、无 P2 开关）', () => {
-    const def = defOf('card_lint')
-    const props = def.parameters.properties as Record<string, { enum?: string[]; type?: string; description?: string }>
-    expect(props.scope?.enum).toEqual(['vault', 'all'])
-    expect(def.description).toContain('会话残留')
-    expect(def.parameters.required).toBeUndefined()
-    // 架构选型 A9：100 分制与跨卡洞察三开关随模板一起退场
+  test('note_plan：rootPath + items 必填，items 项契约完整', () => {
+    const def = defOf('note_plan')
+    expect(def.parameters.required).toEqual(['rootPath', 'items'])
+    const props = def.parameters.properties as Record<string, { items?: { items?: { required?: string[] } }; enum?: string[] }>
+    expect(props.action?.enum).toEqual(['create', 'abandon'])
+    expect(props.items?.items?.required).toEqual(['title', 'path'])
+  })
+
+  test('note_update：ref + action 必填，四动作枚举完整', () => {
+    const def = defOf('note_update')
+    expect(def.parameters.required).toEqual(['ref', 'action'])
+    const props = def.parameters.properties as Record<string, { enum?: string[] }>
+    expect(props.action?.enum).toEqual(['append', 'replace', 'move', 'definition'])
+    // 先存档后写正文这条不变量写进用户可见描述
+    expect(def.description).toContain('.study/archive')
+    expect(def.description).toContain('绝不丢')
+  })
+
+  test('note_link / note_unlink：kind 枚举为 prev/next/sibling（不再是 conflict）', () => {
+    const link = defOf('note_link')
+    expect(link.parameters.required).toEqual(['from', 'to', 'kind'])
+    const props = link.parameters.properties as Record<string, { enum?: string[] }>
+    expect(props.kind?.enum).toEqual(['prev', 'next', 'sibling'])
+    expect(defOf('note_unlink').parameters.required).toEqual(['from', 'to'])
+    expect(defOf('note_link').description).toContain('wikilink')
+  })
+
+  test('note_search：kind 三态枚举与 path 目录过滤', () => {
+    const props = defOf('note_search').parameters.properties as Record<string, { enum?: string[]; description?: string }>
+    expect(props.kind?.enum).toEqual(['block', 'legacy', 'note'])
+    expect(props.path?.description).toContain('目录')
+    expect(defOf('note_search').parameters.required).toEqual(['query'])
+  })
+
+  test('note_lint：rule 枚举与注册表同源；无分值、无 P2 开关', () => {
+    const def = defOf('note_lint')
+    const props = def.parameters.properties as Record<string, { enum?: string[] }>
+    expect(props.rule?.enum).toEqual(RULES.map((r) => r.id))
+    for (const rule of RULES) expect(def.description, rule.id).toContain(rule.title)
+    expect(def.description).toContain('不给分数')
     expect(props.cross).toBeUndefined()
     expect(props.trend).toBeUndefined()
     expect(props.rating).toBeUndefined()
-    expect(def.description).not.toContain('跨卡一致性')
-    expect(def.description).not.toContain('打分')
-    // EXT-1：描述由规则注册表生成，新增规则不会漏改文案
-    expect(props.rule?.enum).toEqual(RULES.map((r) => r.id))
-    for (const rule of RULES) expect(def.description, rule.id).toContain(rule.title)
-    expect(props.scope?.description).toContain('含旧笔记')
   })
 
-  test('card_history：action 枚举与 kinds', () => {
-    const def = defOf('card_history')
-    expect(def.parameters.required).toEqual(['ref', 'action'])
-    const props = def.parameters.properties as Record<string, { enum?: string[]; items?: { enum?: string[] } }>
-    expect(props.action?.enum).toEqual(['list', 'strip'])
-    expect(props.kinds?.items?.enum).toEqual(['version', 'errata', 'details'])
+  test('note_history / note_restore / note_toc：枚举与 dryRun 契约', () => {
+    const histProps = defOf('note_history').parameters.properties as Record<string, { enum?: string[] }>
+    expect(histProps.action?.enum).toEqual(['list', 'read'])
+    expect(defOf('note_history').parameters.required).toEqual(['ref'])
+    const restoreProps = defOf('note_restore').parameters.properties as Record<string, { type?: string }>
+    expect(restoreProps.dryRun?.type).toBe('boolean')
+    expect(defOf('note_toc').parameters.required).toEqual(['dir'])
+    expect(defOf('note_rename').parameters.required).toEqual(['ref', 'title'])
   })
 
-  test('card_rename：ref + newTitle 必填、dryRun 可选', () => {
-    const def = defOf('card_rename')
-    expect(def.parameters.required).toEqual(['ref', 'newTitle'])
-    const props = def.parameters.properties as Record<string, { type?: string; description?: string }>
-    expect(props.dryRun?.type).toBe('boolean')
-    expect(def.description).toContain('旧笔记')
-  })
-
-  test('card_id execute：count 上限 20、下限 1', async () => {
-    const def = defOf('card_id')
-    expect((await def.execute({ count: 25 })).split('\n')).toHaveLength(20)
-    expect((await def.execute({ count: 0 })).split('\n')).toHaveLength(1)
-    expect((await def.execute({})).split('\n')).toHaveLength(1)
-  })
-
-  test('card_link execute：非法 kind 抛错（同步）', () => {
-    const def = defOf('card_link')
-    expect(() => def.execute({ fromId: 'a', toId: 'b', kind: 'sideways' })).toThrow(/kind/)
-  })
-
-  test('card_history execute：非法 action 抛错（经 store 校验）', async () => {
-    await expect(defOf('card_history').execute({ ref: 'x', action: 'boom' })).rejects.toThrow()
+  test('note_library / note_expect_get：门禁前两环的形状', () => {
+    expect(defOf('note_library').parameters.required).toEqual(['action'])
+    const props = defOf('note_library').parameters.properties as Record<string, { enum?: string[] }>
+    expect(props.action?.enum).toEqual(['check'])
+    expect(defOf('note_expect_get').parameters.properties).toEqual({})
+    expect(defOf('note_expect_get').description).toContain('已读')
   })
 
   test('study_progress / study_memory：未知 action 抛错而非静默', async () => {
-    await expect(defOf('study_progress').execute({ action: 'bogus' })).rejects.toThrow(/未知 action/)
-    await expect(defOf('study_memory').execute({ action: 'bogus' })).rejects.toThrow(/未知 action/)
+    await expect(Promise.resolve(defOf('study_progress').execute({ action: 'bogus' }))).rejects.toThrow(/未知 action/)
+    await expect(Promise.resolve(defOf('study_memory').execute({ action: 'bogus' }))).rejects.toThrow(/未知 action/)
+    // touchedIds 是笔记语义下的参数名（旧名 touchedCardIds）
+    const props = defOf('study_progress').parameters.properties as Record<string, unknown>
+    expect(props.touchedIds).toBeTruthy()
   })
 
-  test('card_history：非法 kinds 抛错（BIZ-11e，不再静默变成"无块可清除"）', () => {
-    expect(() => defOf('card_history').execute({ ref: 'x', action: 'strip', kinds: ['versions'] }))
-      .toThrow(/kinds 只接受/)
-  })
-
-  // BIZ-3 工具侧：card_update 必须把会话 cwd 透传给 store，否则 card_search 回显的路径用不了
-  test('card_update：透传会话 cwd（引用解析不再"找不到卡片"）', async () => {
+  test('note_update / note_history 透传会话 cwd（引用解析不再"找不到笔记"）', async () => {
     const vault = await mkdtemp(join(tmpdir(), 'study-buddy-tool-vault-'))
     const cwd = await mkdtemp(join(tmpdir(), 'study-buddy-tool-cwd-'))
     try {
       await writeFile(join(cwd, 'note.md'), '> 概念: x\n# note\n正文', 'utf8')
-      const store = new VaultStore({
+      const localStore = new VaultStore({
         vaultRoot: vault, stateDir: '.study', fallbackDir: '未分类', mocDir: '目录', includeSessionCwd: true,
       })
-      const update = buildToolDefs(store).find((d) => d.name === 'card_update')!
+      const defs = buildToolDefs(localStore)
+      const update = defs.find((d) => d.name === 'note_update')!
       let message = ''
       try {
-        await update.execute({ id: '工作目录/note.md', mode: 'append-version', changes: 'x' }, { agent: { session: { header: { cwd } } } })
+        await update.execute(
+          { ref: '工作目录/note.md', action: 'append', changes: 'x' },
+          { agent: { session: { header: { cwd } } } },
+        )
       } catch (error) {
         message = (error as Error).message
       }
-      // 只读根拒绝写入，但绝不能是"找不到卡片"
-      expect(message).not.toContain('找不到卡片')
+      // 只读根拒绝写入，但绝不能是"找不到笔记"
+      expect(message).not.toContain('找不到')
       expect(message).toContain('只读检索根')
-    } finally {
-      await rm(vault, { recursive: true, force: true })
-      await rm(cwd, { recursive: true, force: true })
-    }
-  })
 
-  // N15：card_history 是唯一漏传 sessionCwd 的卡片工具（BIZ-3 的遗漏项）
-  test('N15：card_history 透传会话 cwd（工作目录里的笔记能解析到）', async () => {
-    const vault = await mkdtemp(join(tmpdir(), 'study-buddy-tool-vault-'))
-    const cwd = await mkdtemp(join(tmpdir(), 'study-buddy-tool-cwd-'))
-    try {
-      await writeFile(join(cwd, 'note.md'), '> 概念: x\n# note\n正文\n\n### 版本更新（来源：a）\n补充。', 'utf8')
-      const store = new VaultStore({
-        vaultRoot: vault, stateDir: '.study', fallbackDir: '未分类', mocDir: '目录', includeSessionCwd: true,
-      })
-      const history = buildToolDefs(store).find((d) => d.name === 'card_history')!
-      const out = await history.execute(
+      // 不传 cwd 时解析不到（对照：说明上面命中的是 cwd 透传）
+      const history = defs.find((d) => d.name === 'note_history')!
+      await expect(Promise.resolve(history.execute({ ref: '工作目录/note.md', action: 'list' })))
+        .rejects.toThrow(/找不到/)
+      const listed = await history.execute(
         { ref: '工作目录/note.md', action: 'list' },
         { agent: { session: { header: { cwd } } } },
       ) as string
-      expect(out).toContain('历史块 1 个')
-      expect(out).toContain('版本更新')
-      // 不传 cwd 时同样引用解析失败（对照：说明上面命中的是 cwd 透传）
-      await expect(Promise.resolve(history.execute({ ref: '工作目录/note.md', action: 'list' })))
-        .rejects.toThrow(/找不到卡片/)
+      expect(listed).toContain('没有历史存档')
     } finally {
       await rm(vault, { recursive: true, force: true })
       await rm(cwd, { recursive: true, force: true })

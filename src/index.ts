@@ -12,15 +12,25 @@
  */
 
 import { promises as fsp } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import {
   addLink, applyUpdate, generateId, renderCard, renderMoc, stripMocDatePrefix, todayLocal, validateCard,
   type CardInput, type LinkKind, type MocEntry, type UpdatePayload,
 } from './card.ts'
+/** 新工具面（阶段 4b）：note.ts 是块契约的唯一来源，card.ts 只是迁移期兼容层 */
+import { LINK_LABELS, applyUpdate as applyNoteUpdate, inverseKind, renderNote, validateBlock, type BlockInput, type BlockLinks } from './note.ts'
+import { removeLink } from './links.ts'
+import {
+  EXPECT_FILE, TOC_FILE, DirIndex, dirOfRel, dirPathFor, expectPathFor, listDir, nestHint, normRel,
+} from './dirs.ts'
+import { checkWrite, formatPlanProposal, type GateInput } from './gate.ts'
+import { abandonPlan, buildPlanRecord, consumePlanItem, planFileFor, readPlan, writePlan } from './planstore.ts'
+import { archiveBody, archiveThenWrite, listArchives, readArchive } from './archive.ts'
+import { markExpectRead, readSession, sessionFileFor, signatureOf, writeSession, type SessionState } from './store.ts'
+import { normalizeSourceSection } from './sourceSection.ts'
 import { parseFrontmatter } from './frontmatter.ts'
 import { extractHistory, formatHistory, stripHistory, type HistoryKind } from './history.ts'
-import { inverseKind } from './note.ts'
-import { formatBatch, formatReport, lintNote, ruleIds, ruleTitle, summarizeLint, type LintReport } from './lint.ts'
+import { formatBatch, formatReport, lintNote, parseExpectRules, ruleIds, ruleTitle, summarizeLint, type ExpectRule, type LintReport } from './lint.ts'
 import {
   AUTO_PREFS_KEY, checkMemoryValue, findProgressSentences, formatAutoPrefs, formatMemory,
   normalizeAutoPrefsValue, normalizeMemoryKey, readMemory, writeMemory, type MemoryState,
@@ -37,7 +47,7 @@ import { indexNote, SearchIndex, snippetOf, type IndexedCard, type NoteKind, typ
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
 import { buildToolDefs, type ToolDef } from './tools.ts'
 import {
-  atomicWrite, canonicalRootKey, cardDirFor, dedupeFiles, dedupeRoots, findSimilarDomainKeys, isFsRoot, MAX_WALK_FILES,
+  atomicWrite, canonicalRootKey, cardDirFor, ensureDir, dedupeFiles, dedupeRoots, findSimilarDomainKeys, isFsRoot, MAX_WALK_FILES,
   mocPathFor, readNoteSource, resolveSearchRoots, sanitizeFilename, skipSetFor, uniqueNotePath, walkRoots, withinRoot,
   type SearchRoot, type VaultLayout,
 } from './vault.ts'
@@ -110,6 +120,9 @@ function normalizeConfig(config: StudyConfig | undefined): VaultLayout {
     lint: config.lint,
     indexTtlMs: Number.isFinite(Number(config.indexTtlMs)) && Number(config.indexTtlMs) >= 0 ? Number(config.indexTtlMs) : 2000,
     maxWalkFiles: Number.isFinite(maxWalkFiles) && maxWalkFiles >= 1 ? Math.floor(maxWalkFiles) : MAX_WALK_FILES,
+    planTtlHours: Number.isFinite(Number(config.planTtlHours)) && Number(config.planTtlHours) > 0
+      ? Number(config.planTtlHours)
+      : 24,
   }
 }
 
@@ -158,6 +171,39 @@ function normalizeQueue(items: string[], label: string): string[] {
     }
   }
   return items.map(String)
+}
+
+/** `note_list` 的一行：标题 + 类型 + 来源章节 + 简介 */
+function fmtListFile(f: { title: string; fileName: string; kind: string; sourceSection: string | null; summary: string | null }): string {
+  const kind = KIND_LABEL[f.kind] ?? f.kind
+  const section = f.sourceSection ? `（${f.sourceSection}）` : ''
+  const summary = f.summary ? ` —— ${f.summary}` : ''
+  return `${f.title} · ${kind}${section}${summary}`
+}
+
+/** `note_overview` 用的目录遍历结果（只读 frontmatter 头，不读正文） */
+interface WalkedNote {
+  rel: string
+  title: string
+  kind: string
+  sourceSection: string | null
+}
+
+/** 递归遍历主题目录下的笔记（默认 4 层，够覆盖"资料/章/节/块"） */
+async function walkNotes(vaultRoot: string, dir: string, depth = 4): Promise<WalkedNote[]> {
+  const out: WalkedNote[] = []
+  let listing
+  try {
+    listing = await listDir(vaultRoot, dir)
+  } catch {
+    return out
+  }
+  for (const f of listing.files) {
+    out.push({ rel: f.rel, title: f.title, kind: f.kind, sourceSection: f.sourceSection })
+  }
+  if (depth <= 1) return out
+  for (const sub of listing.subdirs) out.push(...await walkNotes(vaultRoot, sub, depth - 1))
+  return out
 }
 
 /** 改名动作（先规划后提交，BIZ-2） */
@@ -605,6 +651,21 @@ export class VaultStore {
     }
   }
 
+  /**
+   * 从《笔记期望.md》解析出的检查项（`- [检查] 禁止/必须 …`）。
+   *
+   * 这一步让"检查什么"也走热配置：期望文件里没写规则时，`expect-rule` 会明确
+   * 列为"未执行"而不是假装通过（N7）。
+   */
+  private async expectRules(): Promise<ExpectRule[]> {
+    try {
+      const raw = await fsp.readFile(expectPathFor(this.layout.vaultRoot), 'utf8')
+      return parseExpectRules(raw)
+    } catch {
+      return []
+    }
+  }
+
   /** 文档类型判定（三态）：有 ID 且有来源章节 = 块；有 ID = 存量卡；无 ID = 旧笔记 */
   private kindOf(card: { id: string | null; sourceSection: string | null }): LintReport['kind'] {
     if (!card.id) return 'note'
@@ -612,13 +673,13 @@ export class VaultStore {
   }
 
   /** 单篇报告：用刚从磁盘读到的原文（保证是最新版） */
-  private reportOfRaw(raw: string, card: IndexedCard): LintReport {
+  private async reportOfRaw(raw: string, card: IndexedCard): Promise<LintReport> {
     const parsed = parseFrontmatter(raw)
     return lintNote({
       title: parsed.meta?.title ?? card.title,
       summary: parsed.meta?.summary ?? card.definition ?? '',
       body: parsed.body,
-    }, { ...this.lintCtx(), kind: this.kindOf(card) })
+    }, { ...this.lintCtx(), kind: this.kindOf(card), expectRules: await this.expectRules() })
   }
 
   /**
@@ -638,7 +699,7 @@ export class VaultStore {
       title: card.title,
       summary: card.definition ?? '',
       body,
-    }, { ...this.lintCtx(), kind: this.kindOf(card) })
+    }, { ...this.lintCtx(), kind: this.kindOf(card), expectRules: await this.expectRules() })
   }
 
   /**
@@ -658,7 +719,7 @@ export class VaultStore {
 
   private async lintOne(opts: { ref?: string; rule?: string }, call?: { sessionCwd?: string }): Promise<string> {
     const { card, raw } = await this.resolveCard(opts.ref ?? '', call?.sessionCwd)
-    const report = this.reportOfRaw(raw, card)
+    const report = await this.reportOfRaw(raw, card)
     if (opts.rule) {
       const hits = report.findings.filter((f) => f.rule === opts.rule)
       // 规则"跑过没有"要同时看 passed 与 findings：新报告里 `passed` 只收录**零发现**的
@@ -922,6 +983,500 @@ export class VaultStore {
     } catch {
       return false
     }
+  }
+
+  // ── 文档式笔记工具（阶段 4b）────────────────────────────────────────────
+  // 设计要点（架构选型 §5 / §6）：门禁在**工具侧**强制，状态落 `.study/`
+  // （磁盘唯一真相的延伸）；每条失败都带修复步骤，避免把用户永久锁在门外。
+
+  /** `session.json` 的绝对路径（门禁状态文件） */
+  private sessionFile(): string {
+    return sessionFileFor(this.layout.vaultRoot, this.layout.stateDir)
+  }
+
+  /** 读会话门禁状态（`session.json`；损坏回空态，不阻断） */
+  private async sessionState(): Promise<SessionState> {
+    return readSession(this.sessionFile())
+  }
+
+  /** 当前《笔记期望.md》的文件签名（`null` = 文件不存在） */
+  private async expectSignature(): Promise<string | null> {
+    return signatureOf(expectPathFor(this.layout.vaultRoot))
+  }
+
+  /** 组装门禁输入（三连校验共用） */
+  private async gateInput(): Promise<GateInput> {
+    return {
+      vaultRoot: this.layout.vaultRoot,
+      stateDir: this.layout.stateDir,
+      session: await this.sessionState(),
+      expectSignature: await this.expectSignature(),
+      planTtlHours: this.layout.planTtlHours,
+    }
+  }
+
+  /** `note_library`：库状态与期望文件自检（硬门禁的第一环） */
+  async noteLibrary(action: string): Promise<string> {
+    if (action !== 'check') throw new Error(`note_library 未知 action "${action}"（当前只支持 check）`)
+    await this.assertVault()
+    const signature = await this.expectSignature()
+    const session = await this.sessionState()
+    const index = await this.ensureIndex()
+    const blocks = index.all().filter((c) => c.kind === 'block').length
+    const legacy = index.all().filter((c) => c.kind === 'legacy').length
+    const notes = index.all().filter((c) => c.kind === 'note').length
+    const lines = [
+      `## 笔记库状态`,
+      '',
+      `- vault 根：${this.layout.vaultRoot}（可读可写）`,
+      `- 状态目录：${this.layout.stateDir}/（进度、记忆、规划、存档；删掉不丢笔记）`,
+      `- 笔记：块 ${blocks} 篇、存量卡 ${legacy} 篇、旧笔记 ${notes} 篇`,
+      `- 领域快捷方式：${Object.keys(this.layout.domainFolders ?? {}).length} 个（落盘目录以规划确认为准）`,
+      '',
+      signature === null
+        ? `⚠ 笔记期望文件不存在：${EXPECT_FILE}（应在 vault 根）——请先把 presets/study/assets/笔记期望.md 复制到 vault 根并改成你的写法，否则无法写入`
+        : session.expect?.signature === signature
+          ? `- 笔记期望：已读（${EXPECT_FILE}）`
+          : `⚠ 笔记期望尚未读取（或已更新）：请调用 note_expect_get 读取后再写入`,
+      session.activePlanId ? `- 待消费规划：${session.activePlanId}` : '- 待消费规划：无',
+      this.noteSkips(),
+    ]
+    return lines.filter((l) => l !== '').join('\n')
+  }
+
+  /** `note_expect_get`：读期望全文并**标记已读**（门禁开门动作） */
+  async noteExpectGet(): Promise<string> {
+    await this.assertVault()
+    const expectPath = expectPathFor(this.layout.vaultRoot)
+    let raw: string
+    try {
+      raw = await fsp.readFile(expectPath, 'utf8')
+    } catch {
+      throw new Error(
+        `${EXPECT_FILE} 不存在（期望路径：${expectPath}）——请先把 presets/study/assets/笔记期望.md 复制到 vault 根并改成你的写法。`
+        + '笔记写法只从这份文件来，代码里没有内建模板。',
+      )
+    }
+    const signature = await signatureOf(expectPath)
+    if (signature) await markExpectRead(this.sessionFile(), { signature, rel: EXPECT_FILE })
+    return `已读取笔记期望：${EXPECT_FILE}（${raw.split(/\r?\n/).length} 行）\n\n${raw}`
+  }
+
+  /**
+   * `note_list`：逐层导航（子目录 + 该层笔记；**不读正文**，只读 frontmatter 头）。
+   *
+   * 两个刻意的口径：
+   * - 目录计数与"有无微目录"都按**子树累加**（父级只放章节标题时，其下几层才是块）；
+   * - vault 根的《笔记期望.md》不是笔记，不列出来（否则每次导航都多一行噪声）。
+   */
+  async noteList(opts: { path?: string; depth?: number } = {}): Promise<string> {
+    await this.assertVault()
+    const dir = normRel(opts.path ?? '')
+    const depth = Math.max(1, Math.min(Number(opts.depth) || 2, 4))
+    const index = await this.ensureIndex()
+    const lines: string[] = [`## ${dir || '（vault 根）'}`]
+    const dirIndex = this.dirIndexFor(index)
+    const listing = await listDir(this.layout.vaultRoot, dir)
+    for (const sub of listing.subdirs) {
+      const stat = dirIndex.countAt(sub)
+      const parts = [
+        stat.blocks > 0 ? `块 ${stat.blocks}` : '',
+        stat.legacy > 0 ? `存量卡 ${stat.legacy}` : '',
+        stat.notes > 0 ? `旧笔记 ${stat.notes}` : '',
+      ].filter(Boolean).join('、')
+      // 子树里任何一层有微目录都算"有入口"（父级目录本身通常只放章节标题）
+      const warn = dirIndex.hasTocIn(sub) ? '' : '  ⚠ 缺微目录'
+      lines.push(`- 📁 ${sub}/（${parts || '空'}）${warn}`)
+      if (depth > 1) {
+        const nested = await listDir(this.layout.vaultRoot, sub)
+        for (const n of nested.subdirs) lines.push(`  - 📁 ${n}/`)
+        for (const f of nested.files) lines.push(`  - ${fmtListFile(f)}`)
+      }
+    }
+    for (const f of listing.files) {
+      if (f.fileName === EXPECT_FILE) continue
+      lines.push(`- ${fmtListFile(f)}`)
+    }
+    if (listing.subdirs.length === 0 && listing.files.filter((f) => f.fileName !== EXPECT_FILE).length === 0) lines.push('（空目录）')
+    lines.push('', nestHint(dir) || '提示：进入某主题目录后，微目录.md 是该主题的导航入口。')
+    return lines.filter((l) => l !== '').join('\n') + this.noteSkips()
+  }
+
+  /** 由索引构建目录索引（A6：重建时整体构建，写入后增量维护） */
+  private dirIndexFor(index: SearchIndex): DirIndex {
+    const dirIndex = new DirIndex()
+    for (const card of index.all()) {
+      if (card.root !== 'vault') continue
+      dirIndex.add(card.rel, card.kind)
+    }
+    return dirIndex
+  }
+
+  /** `note_overview`：主题块清单 + 按来源章节的覆盖情况 */
+  async noteOverview(opts: { path?: string; material?: string } = {}): Promise<string> {
+    await this.assertVault()
+    const base = normRel(opts.path ?? '')
+    const files = await walkNotes(this.layout.vaultRoot, base)
+    const grouped = new Map<string, Array<{ title: string; rel: string; chapter: string; section: string }>>()
+    const unclassified: Array<{ title: string; rel: string }> = []
+    const chapters = new Map<string, Set<string>>()
+    for (const f of files) {
+      if (f.kind === 'note') continue
+      const ref = f.sourceSection ? normalizeSourceSection(f.sourceSection) : null
+      if (!ref || !ref.material || !ref.chapter) {
+        unclassified.push({ title: f.title, rel: f.rel })
+        continue
+      }
+      if (opts.material && ref.material !== opts.material) continue
+      const key = `${ref.material}|${ref.chapter}|${ref.chapterTitle}`
+      const list = grouped.get(key) ?? []
+      list.push({ title: f.title, rel: f.rel, chapter: ref.chapter, section: ref.section })
+      grouped.set(key, list)
+      const set = chapters.get(ref.material) ?? new Set<string>()
+      set.add(ref.chapter)
+      chapters.set(ref.material, set)
+    }
+    const lines: string[] = [`## 覆盖情况（${base || '整个库'}）`, '']
+    if (grouped.size === 0 && unclassified.length === 0) {
+      lines.push('该范围内还没有带 ID 的笔记。')
+      return lines.join('\n') + this.noteSkips()
+    }
+    for (const [key, list] of [...grouped.entries()].sort()) {
+      const [material, chapter, chapterTitle] = key.split('|')
+      const sections = list.map((x) => x.section).filter(Boolean)
+      lines.push(`《${material}》第${chapter}章 ${chapterTitle}——${list.length} 篇${sections.length ? `（节：${[...new Set(sections)].join('、')}）` : ''}`)
+      for (const item of list) lines.push(`  - ${item.title}（${item.rel}）`)
+      // 节号跳号提示（只提示，不虚构缺失章节）
+      const nums = [...new Set(sections)].map((s) => Number(s.split('.')[1] ?? s)).filter((n) => Number.isFinite(n)).sort((a, b) => a - b)
+      for (let i = 1; i < nums.length; i++) {
+        if (nums[i] - nums[i - 1] > 1) lines.push(`  ⚠ 节号跳号：${nums[i - 1]} → ${nums[i]}（按你的书写口径统计，不代表资料真的缺节）`)
+      }
+    }
+    for (const [material, set] of chapters) {
+      const nums = [...set].map(Number).sort((a, b) => a - b)
+      lines.push('', `- 《${material}》：已记录第 ${nums.join('、')} 章`)
+    }
+    if (unclassified.length > 0) {
+      lines.push('', `### 未归类 ${unclassified.length} 篇（缺 来源章节 或写法无法解析）`)
+      for (const item of unclassified) lines.push(`- ${item.title}（${item.rel}）`)
+      lines.push('（未归类不参与覆盖度统计；补齐 `来源章节` 后即计入）')
+    }
+    return lines.join('\n') + this.noteSkips()
+  }
+
+  /** `note_plan`：文件夹规划提案与确认（提案只在对话里，不落盘，需求 R11） */
+  async notePlan(args: {
+    action?: string
+    rootPath?: string
+    items?: Array<{ title?: string; path?: string; sourceSection?: string; order?: number }>
+    material?: string
+    notes?: string
+  }): Promise<string> {
+    await this.assertVault()
+    const action = args.action ?? 'create'
+    if (action === 'abandon') {
+      const planId = String(args.rootPath ?? '').trim()
+      if (!planId) throw new Error('note_plan(action=abandon) 需要把 rootPath 传成要放弃的 planId')
+      await abandonPlan(planFileFor(this.layout.vaultRoot, planId, this.layout.stateDir))
+      const session = await this.sessionState()
+      if (session.activePlanId === planId) await writeSession(this.sessionFile(), { ...session, activePlanId: undefined })
+      return `已放弃规划：${planId}`
+    }
+    if (action !== 'create') throw new Error(`note_plan 未知 action "${action}"（可用 create / abandon）`)
+    const rootPath = normRel(args.rootPath ?? '')
+    const items = (args.items ?? []).map((it) => ({
+      title: String(it.title ?? '').trim(),
+      path: normRel(it.path ?? ''),
+      ...(it.sourceSection ? { sourceSection: String(it.sourceSection) } : {}),
+      ...(typeof it.order === 'number' ? { order: it.order } : {}),
+    }))
+    if (items.length === 0) {
+      throw new Error('note_plan 需要 items（至少一个待落块：{ title, path }）；path 是 vault 内相对路径（含文件名）')
+    }
+    const record = buildPlanRecord({ rootPath, items, material: args.material, notes: args.notes })
+    const file = planFileFor(this.layout.vaultRoot, record.planId, this.layout.stateDir)
+    // 复用判断：规划里已存在的目录（只读探测，不创建——"没确认的东西不落盘"）
+    const reused: string[] = []
+    for (const dir of [...new Set(items.map((it) => dirOfRel(it.path)))]) {
+      try {
+        await fsp.access(dirPathFor(this.layout.vaultRoot, dir))
+        reused.push(dir)
+      } catch {
+        // 目录不存在：算新建
+      }
+    }
+    await writePlan(file, record)
+    const session = await this.sessionState()
+    await writeSession(this.sessionFile(), { ...session, activePlanId: record.planId })
+    const proposal = formatPlanProposal(record, { reusedDirs: reused })
+    return `${proposal}\n\n（planId：${record.planId}；确认后直接调用 note_write 逐个落盘）`
+  }
+
+  /** `note_write`：落一个块（硬门禁三连校验 + 规划消费记账） */
+  async noteWrite(input: {
+    planId: string
+    title: string
+    source: string
+    content: string
+    path: string
+    domain?: string
+    status?: string
+    sourceSection?: string
+    order?: number
+    summary?: string
+    tags?: string[]
+    links?: BlockLinks
+    dryRun?: boolean
+  }): Promise<string> {
+    await this.assertVault()
+    const targetRel = normRel(input.path)
+    if (!targetRel.endsWith('.md')) throw new Error(`path 必须是 vault 内的 .md 相对路径，收到：${input.path}`)
+    const gate = await checkWrite({ ...(await this.gateInput()), targetRel })
+    if (!gate.ok) throw new Error(`写入被门禁拒绝：${gate.reason}`)
+    const file = planFileFor(this.layout.vaultRoot, input.planId, this.layout.stateDir)
+    const plan = await readPlan(file)
+    if (!plan || plan.planId !== input.planId) throw new Error(`规划不存在：${input.planId}——请先 note_plan 提案并确认`)
+    const planned = plan.items.find((it) => it.title === input.title)
+    if (!planned) throw new Error(`"${input.title}" 不在本次规划内——请重新规划（note_plan）`)
+    const blockInput: BlockInput = {
+      title: input.title,
+      source: input.source,
+      content: input.content,
+      domain: input.domain,
+      status: input.status,
+      sourceSection: input.sourceSection ?? planned.sourceSection,
+      order: input.order ?? planned.order,
+      summary: input.summary,
+      tags: input.tags,
+      links: input.links,
+    }
+    const result = validateBlock(blockInput)
+    if (result.errors.length > 0) throw new Error(`笔记校验失败：${result.errors.join('；')}`)
+    const abs = resolve(this.layout.vaultRoot, targetRel)
+    if (!withinRoot(this.layout.vaultRoot, abs)) throw new Error(`落盘路径越界：${targetRel}`)
+    const exists = await fsp.access(abs).then(() => true).catch(() => false)
+    if (exists) throw new Error(`目标已存在：${targetRel}——如需改写请用 note_update，避免覆盖`)
+    if (input.dryRun) {
+      return `[dryRun] 将写入：${targetRel}（规划 ${input.planId}；未落盘）\n\n${renderNote({ ...blockInput, id: '（dryRun）' })}`
+    }
+    const consumed = await consumePlanItem(file, input.title, targetRel, { ttlHours: this.layout.planTtlHours })
+    if (!consumed.ok) throw new Error(`写入被拒绝：${consumed.reason}`)
+    const id = generateId()
+    const text = renderNote({ ...blockInput, id })
+    await atomicWrite(abs, text)
+    this.invalidate()
+    const dir = dirOfRel(targetRel)
+    const dirIndex = this.dirIndexFor(await this.ensureIndex())
+    const needToc = dir !== '' && !dirIndex.statOf(dir).hasToc
+    const warn = result.warnings.length > 0 ? `\n提示：${result.warnings.join('；')}` : ''
+    const tocLine = needToc ? `\n⚠ 该目录还没有微目录：请调用 note_toc({ dir: "${dir}" }) 生成，否则导航入口缺失` : ''
+    return `已写入：${targetRel}\nID：${id}\n规划：${input.planId}（剩余 ${plan.items.length - plan.consumed.length - 1} 项）${warn}${tocLine}\n\n${text}`
+  }
+
+  /** `note_update`：append（补充）/ replace（替换，先存档）/ move（迁目录） */
+  async noteUpdate(args: {
+    ref: string
+    action: string
+    changes?: string
+    section?: string
+    newContent?: string
+    summary?: string
+    targetPath?: string
+    sourceSection?: string
+    dryRun?: boolean
+  }, call?: { sessionCwd?: string }): Promise<string> {
+    const action = String(args.action ?? '')
+    if (!['append', 'replace', 'move', 'definition'].includes(action)) {
+      throw new Error(`note_update 未知 action "${action}"（可用 append / replace / move / definition）`)
+    }
+    const { card, raw } = await this.resolveCard(args.ref, call?.sessionCwd)
+    this.assertWritable(card)
+    if (action === 'append') {
+      const result = applyNoteUpdate(raw, card.id ?? args.ref, { action: 'append', changes: args.changes, section: args.section })
+      await atomicWrite(card.path, result.text)
+      this.invalidate()
+      return `已更新：${card.rel}（补充${args.section ? `到「${args.section}」` : '到末尾'}）\n\n${result.text}`
+    }
+    if (action === 'definition') {
+      const result = applyNoteUpdate(raw, card.id ?? args.ref, { action: 'definition', summary: args.summary })
+      await atomicWrite(card.path, result.text)
+      this.invalidate()
+      return `已更新：${card.rel}（仅替换一句话定位）\n\n${result.text}`
+    }
+    if (action === 'move') {
+      const targetRel = normRel(args.targetPath ?? '')
+      if (!targetRel.endsWith('.md')) throw new Error(`move 需要 targetPath（vault 内 .md 相对路径）`)
+      const abs = resolve(this.layout.vaultRoot, targetRel)
+      if (!withinRoot(this.layout.vaultRoot, abs)) throw new Error(`目标路径越界：${targetRel}`)
+      const busy = await fsp.access(abs).then(() => true).catch(() => false)
+      if (busy) throw new Error(`目标已存在：${targetRel}`)
+      if (args.dryRun) return `[dryRun] 将移动：${card.rel} → ${targetRel}（未落盘）`
+      await ensureDir(dirname(abs))
+      await atomicWrite(abs, raw)
+      await fsp.rm(card.path, { force: true })
+      this.invalidate()
+      return `已移动：${card.rel} → ${targetRel}\n提示：若该主题目录还没有微目录，请调用 note_toc 生成`
+    }
+    // replace：先存档、后写正文（需求 N1 的关键不变量）
+    if (!args.newContent?.trim()) throw new Error('replace 需要 newContent（新正文）')
+    if (args.dryRun) {
+      return `[dryRun] 将替换：${card.rel}（旧正文会先存档到 ${this.layout.stateDir}/archive/${card.id ?? 'legacy'}/）`
+    }
+    const blockInput: BlockInput = {
+      title: card.title,
+      source: card.source ?? '',
+      content: args.newContent,
+      domain: card.domain ?? undefined,
+      status: card.status ?? undefined,
+      sourceSection: args.sourceSection ?? card.sourceSection ?? undefined,
+      order: card.order ?? undefined,
+      summary: args.summary ?? card.definition ?? undefined,
+    }
+    const result = validateBlock(blockInput)
+    if (result.errors.length > 0) throw new Error(`替换内容校验失败：${result.errors.join('；')}`)
+    const entry = await archiveThenWrite({
+      vaultRoot: this.layout.vaultRoot,
+      stateDir: this.layout.stateDir,
+      fromId: card.id ?? 'legacy',
+      oldRel: card.rel,
+      title: card.title,
+      reason: 'replace 替换正文',
+      oldContent: raw,
+      write: async () => { await atomicWrite(card.path, renderNote({ ...blockInput, id: card.id ?? generateId() })) },
+    })
+    this.invalidate()
+    return `已更新：${card.rel}\n旧正文已存档：${this.layout.stateDir}/archive/${card.id ?? 'legacy'}/${entry.id}.md（note_history 可查看、note_restore 可恢复）\n\n${renderNote({ ...blockInput, id: card.id ?? '' })}`
+  }
+
+  /** `note_history`：列出/读取某篇笔记的历史存档 */
+  async noteHistory(ref: string, opts: { action?: string; archiveId?: string } = {}, call?: { sessionCwd?: string }): Promise<string> {
+    const { card } = await this.resolveCard(ref, call?.sessionCwd)
+    const action = opts.action ?? 'list'
+    const entries = await listArchives(this.layout.vaultRoot, card.id ?? 'legacy', this.layout.stateDir)
+    if (action === 'read') {
+      if (!opts.archiveId) throw new Error('note_history(action=read) 需要 archiveId（先用 action=list 查看）')
+      const found = await readArchive(this.layout.vaultRoot, card.id ?? 'legacy', opts.archiveId, this.layout.stateDir)
+      if (!found) throw new Error(`存档不存在：${opts.archiveId}`)
+      return `${found.raw}`
+    }
+    if (action !== 'list') throw new Error(`note_history 未知 action "${action}"（可用 list / read）`)
+    if (entries.length === 0) return `笔记：${card.title} 没有历史存档（替换正文时才会产生）。`
+    const lines = [`## ${card.title} 的历史存档（${entries.length} 份，新→旧）`]
+    for (const e of entries) {
+      lines.push(`- ${e.id}｜${e.meta.archivedAt || '—'}｜${e.meta.reason || '未注明原因'}｜原路径 ${e.meta.oldRel || '—'}`)
+    }
+    lines.push('', '用 note_history({ ref, action: "read", archiveId }) 看全文；用 note_restore 恢复。')
+    return lines.join('\n')
+  }
+
+  /** `note_restore`：恢复某份存档（当前正文先转入存档，绝不丢内容） */
+  async noteRestore(ref: string, opts: { archiveId?: string; dryRun?: boolean } = {}, call?: { sessionCwd?: string }): Promise<string> {
+    const { card, raw } = await this.resolveCard(ref, call?.sessionCwd)
+    this.assertWritable(card)
+    const id = card.id ?? 'legacy'
+    const entries = await listArchives(this.layout.vaultRoot, id, this.layout.stateDir)
+    if (entries.length === 0) throw new Error(`笔记：${card.title} 没有历史存档可恢复`)
+    const archiveId = opts.archiveId ?? entries[0].id
+    const found = await readArchive(this.layout.vaultRoot, id, archiveId, this.layout.stateDir)
+    if (!found) throw new Error(`存档不存在：${archiveId}（先用 note_history(action=list) 查看）`)
+    const restored = archiveBody(found.raw)
+    if (!restored.trim()) throw new Error(`存档内容为空：${archiveId}`)
+    if (opts.dryRun) {
+      return `[dryRun] 将把 ${card.rel} 恢复为存档 ${archiveId}（${found.entry.meta.archivedAt}）：\n\n${restored}`
+    }
+    const entry = await archiveThenWrite({
+      vaultRoot: this.layout.vaultRoot,
+      stateDir: this.layout.stateDir,
+      fromId: id,
+      oldRel: card.rel,
+      title: card.title,
+      reason: `恢复存档 ${archiveId} 前的当前版本`,
+      oldContent: raw,
+      write: async () => { await atomicWrite(card.path, restored.endsWith('\n') ? restored : `${restored}\n`) },
+    })
+    this.invalidate()
+    return `已恢复：${card.rel} ← 存档 ${archiveId}\n恢复前的版本已存档：${entry.id}（可再恢复回来）\n\n${restored}`
+  }
+
+  /** `note_toc`：生成/刷新某目录的微目录（只重写生成段，用户手写段保留） */
+  async noteToc(dir: string, opts: { dryRun?: boolean; title?: string } = {}): Promise<string> {
+    await this.assertVault()
+    const norm = normRel(dir)
+    if (norm === '') throw new Error('note_toc 需要 dir（要生成微目录的主题目录，vault 内相对路径）')
+    const listing = await listDir(this.layout.vaultRoot, norm)
+    const blocks = listing.files.filter((f) => f.kind !== 'note')
+    if (blocks.length === 0) throw new Error(`目录里没有带 ID 的笔记，无法生成微目录：${norm}`)
+    const tocPath = join(dirPathFor(this.layout.vaultRoot, norm), TOC_FILE)
+    let custom = ''
+    try {
+      const existing = await fsp.readFile(tocPath, 'utf8')
+      const m = /<!--\s*note_toc:begin\s*-->([\s\S]*?)<!--\s*note_toc:end\s*-->/.exec(existing)
+      const before = existing.split(/<!--\s*note_toc:begin\s*-->/)[0]
+      custom = before.replace(/^#.*$/m, '').trim()
+      if (!m) custom = before.trim()
+    } catch {
+      // 首次生成
+    }
+    const lines: string[] = [`# ${opts.title ?? basename(norm)}`, '']
+    if (custom) lines.push(custom, '')
+    lines.push('<!-- note_toc:begin -->')
+    blocks.forEach((f, i) => {
+      const summary = f.summary ? ` —— ${f.summary}` : ''
+      const section = f.sourceSection ? `（${f.sourceSection.split('/').pop()?.trim() ?? ''}）` : ''
+      lines.push(`${i + 1}. [[${f.fileName.replace(/\.md$/i, '')}]]${section}${summary}`)
+    })
+    lines.push('<!-- note_toc:end -->', '')
+    const text = lines.join('\n')
+    if (opts.dryRun) return `[dryRun] 将写入 ${norm}/${TOC_FILE}（收录 ${blocks.length} 块）：\n\n${text}`
+    await atomicWrite(tocPath, text)
+    this.invalidate()
+    return `已生成：${norm}/${TOC_FILE}（收录 ${blocks.length} 块）\n\n${text}`
+  }
+
+  /** `note_link` / `note_unlink`：wikilink 关联的双向增删（先校验后写盘） */
+  async noteLink(fromRef: string, toRef: string, kind: LinkKind, remove = false, call?: { sessionCwd?: string }): Promise<string> {
+    if (!['prev', 'next', 'sibling'].includes(kind)) {
+      throw new Error(`kind 只接受 prev/next/sibling，收到 "${String(kind)}"`)
+    }
+    const from = await this.resolveCard(fromRef, call?.sessionCwd)
+    const to = await this.resolveCard(toRef, call?.sessionCwd)
+    if (canonicalRootKey(from.card.path) === canonicalRootKey(to.card.path)) {
+      return `无需自关联：「${from.card.title}」与目标是同一篇笔记（${from.card.fullRel}）。`
+    }
+    const labelOf = (title: string, fileName: string) => fileName.replace(/\.md$/i, '') || title
+    const target = labelOf(to.card.title, to.card.fileName)
+    const reverse = inverseKind(kind)
+    const apply = (raw: string, k: LinkKind, label: string): string => (
+      remove ? removeLink(raw, label) : addLink(raw, k, label)
+    )
+    // ── 先规划、后提交（N1：只读根在**任何写入之前**就拒绝，不留半写盘）──
+    const plans: Array<{ path: string; next: string; before: string; label: string }> = []
+    for (const [side, k, label] of [
+      [from, kind, target] as const,
+      [to, reverse, labelOf(from.card.title, from.card.fileName)] as const,
+    ]) {
+      if (side.card.id === null && this.layout.linkIntoNotes !== true) continue
+      const next = apply(side.raw, k, label)
+      if (next === side.raw) continue
+      this.assertWritable(side.card)
+      plans.push({ path: side.card.path, next, before: side.raw, label: side.card.fullRel })
+    }
+    if (plans.length === 0) {
+      return `无改动：${remove ? '关联不存在或' : '关联已存在'}（${from.card.title} ↔ ${to.card.title}）`
+    }
+    const done: Array<{ path: string; before: string }> = []
+    try {
+      for (const plan of plans) {
+        await atomicWrite(plan.path, plan.next)
+        done.push({ path: plan.path, before: plan.before })
+      }
+    } catch (error) {
+      for (const d of [...done].reverse()) await atomicWrite(d.path, d.before).catch(() => {})
+      this.invalidate()
+      throw new Error(`${remove ? '移除' : '建立'}关联失败并已回滚：${(error as Error).message}`)
+    }
+    this.invalidate()
+    return `${remove ? '已移除关联' : '已建立关联'}：${from.card.title} ←${LINK_LABELS[kind]}→ ${to.card.title}（改动 ${plans.length} 侧：${plans.map((p) => p.label).join('、')}）`
   }
 
   async progress(action: string, fields: {

@@ -14,9 +14,15 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
-const CARD_TOOLS = [
-  'card_search', 'card_get', 'card_id', 'card_create', 'card_update', 'card_link', 'card_moc',
-  'card_lint', 'card_history', 'card_rename', 'study_progress', 'study_memory',
+/**
+ * 工具名集合（阶段 4b 定稿）：18 个——`note_*` 16 个 + `study_*` 2 个。
+ * 一个工具一个动词，工具数取需求方定稿区间（16~18）的上限。
+ */
+const NOTE_TOOLS = [
+  'note_library', 'note_expect_get', 'note_list', 'note_get', 'note_search', 'note_overview',
+  'note_plan', 'note_write', 'note_update', 'note_toc', 'note_link', 'note_unlink',
+  'note_rename', 'note_history', 'note_restore', 'note_lint',
+  'study_progress', 'study_memory',
 ]
 
 interface FakeCtx {
@@ -53,14 +59,14 @@ function fakeCtx(register?: (def: { name: string }) => () => void): FakeCtx {
 }
 
 describe('apply（fail-loud 与 vaultRoot==cwd 回归）', () => {
-  test('vaultRoot 等于工作目录时注册全部 12 个工具（launcher 以 vault 为 cwd 的部署回归）', () => {
+  test('vaultRoot 等于工作目录时注册全部 18 个工具（launcher 以 vault 为 cwd 的部署回归）', () => {
     const prev = process.cwd()
     try {
       process.chdir(dir)
       const fake = fakeCtx()
       expect(() => apply(fake.ctx, { vaultRoot: dir })).not.toThrow()
-      expect(fake.registered).toHaveLength(CARD_TOOLS.length)
-      expect(fake.registered).toEqual(expect.arrayContaining(CARD_TOOLS))
+      expect(fake.registered).toHaveLength(NOTE_TOOLS.length)
+      expect(fake.registered).toEqual(expect.arrayContaining(NOTE_TOOLS))
     } finally {
       process.chdir(prev)
     }
@@ -89,22 +95,22 @@ describe('apply（fail-loud 与 vaultRoot==cwd 回归）', () => {
     let calls = 0
     const fake = fakeCtx(() => {
       calls += 1
-      if (calls === 2) throw new Error('duplicate card_search')
+      if (calls === 2) throw new Error('duplicate note_search')
       return () => {}
     })
-    expect(() => apply(fake.ctx, { vaultRoot: dir })).toThrow(/duplicate card_search/)
+    expect(() => apply(fake.ctx, { vaultRoot: dir })).toThrow(/duplicate note_search/)
   })
 
   // N9：rulesOff 写错规则 id（或按旧版本配置写已删除的 id）必须 fail-loud，不能"以为关了其实没关"
   test('N9：lint.rulesOff 含未知规则 id 时抛错，并列出可用 id', () => {
     const fake = fakeCtx()
-    expect(() => apply(fake.ctx, { vaultRoot: dir, lint: { rulesOff: ['walkthrough', 'typo-rule'] } }))
-      .toThrow(/未识别的规则 id：walkthrough、typo-rule/)
+    expect(() => apply(fake.ctx, { vaultRoot: dir, lint: { rulesOff: ['nope-rule', 'typo-rule'] } }))
+      .toThrow(/未识别的规则 id：nope-rule、typo-rule/)
     expect(fake.registered).toHaveLength(0)
     // 合法 id 正常挂载
     const ok = fakeCtx()
     expect(() => apply(ok.ctx, { vaultRoot: dir, lint: { rulesOff: ['session-residue'] } })).not.toThrow()
-    expect(ok.registered).toHaveLength(CARD_TOOLS.length)
+    expect(ok.registered).toHaveLength(NOTE_TOOLS.length)
   })
 
   // N6：maxWalkFiles 必须是正整数，否则回落默认值（配置写错不该让插件整体失败）
@@ -118,7 +124,7 @@ describe('apply（fail-loud 与 vaultRoot==cwd 回归）', () => {
   test('effect 卸载时注册的工具被移除（disposer 由 ctx.effect 持有）', () => {
     const fake = fakeCtx()
     apply(fake.ctx, { vaultRoot: dir })
-    expect(fake.registered).toHaveLength(CARD_TOOLS.length)
+    expect(fake.registered).toHaveLength(NOTE_TOOLS.length)
     for (const dispose of fake.runEffects()) dispose()
     expect(fake.registered).toHaveLength(0)
   })
@@ -188,7 +194,7 @@ describe('apply（开场门禁接线）', () => {
   test('注册系统提示段与 pre-step 监听器，effect 卸载即摘除；注入/跳过分支正确', async () => {
     const fake = fullCtx()
     apply(fake.ctx, { vaultRoot: dir })
-    expect(fake.registered).toHaveLength(CARD_TOOLS.length)
+    expect(fake.registered).toHaveLength(NOTE_TOOLS.length)
 
     // 系统提示段：名字与负序
     expect(fake.sections).toHaveLength(1)
@@ -250,6 +256,6 @@ describe('apply（开场门禁接线）', () => {
   test('无 systemPrompt/on 的环境静默跳过门禁，工具照常注册（不 fail-loud）', () => {
     const fake = fakeCtx()
     expect(() => apply(fake.ctx, { vaultRoot: dir })).not.toThrow()
-    expect(fake.registered).toHaveLength(CARD_TOOLS.length)
+    expect(fake.registered).toHaveLength(NOTE_TOOLS.length)
   })
 })

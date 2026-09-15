@@ -1,29 +1,21 @@
 /**
- * 工具定义注册表（模型可见的 `card_*` / `study_*` 工具）。
+ * 工具定义注册表（模型可见的 18 个 `note_*` / `study_*` 工具）。
  *
- * 从 index.ts 抽出的原因：工具 schema 本身是"提示词资产"（描述即文档），
- * 2026-09 重设计后从 9 个增至 12 个，与 VaultStore 业务逻辑分文件后各自
- * 演进更清晰。工具只做参数解析与委派，业务在 VaultStore。
+ * 工具 schema 本身是"提示词资产"（描述即文档）：本文件与 VaultStore 业务逻辑分文件，
+ * 各自演进更清晰；工具只做参数解析与委派，业务在 VaultStore。
+ *
+ * 2026-10 重构：`card_*` 整族退场（需求 R18），改为文档式笔记工具面；工具数取
+ * 16~18 个中的上限——**一个工具一个动词**，列目录/看单篇/搜全库/看覆盖度各自独立，
+ * 模型不必靠参数分支猜语义（需求方定稿："宁可多不要挤"）。
+ *
+ * 硬门禁（需求 F2/R25）落在 `note_write`：未读期望 / 未确认规划 / 越界路径一律拒绝，
+ * 且磁盘零改动——这条由 `src/gate.ts` 强制，不靠 persona 自觉。
  * @module tools
  */
 
-import { generateId, VALID_STATUS, type LinkKind, type UpdatePayload } from './card.ts'
+import { VALID_STATUS, type BlockLinks } from './note.ts'
 import { RULES, ruleIds } from './lint.ts'
-import type { HistoryKind } from './history.ts'
 import type { VaultStore } from './index.ts'
-
-/** `card_history` 支持的块类型（BIZ-11e：非法值必须报错，不能静默变成"无块可清除"） */
-export const HISTORY_KINDS: HistoryKind[] = ['version', 'errata', 'details']
-
-function historyKinds(value: unknown): HistoryKind[] | undefined {
-  const list = stringList(value)
-  if (list === undefined) return undefined
-  const invalid = list.filter((k) => !HISTORY_KINDS.includes(k as HistoryKind))
-  if (invalid.length > 0) {
-    throw new Error(`kinds 只接受 ${HISTORY_KINDS.join('/')}，收到：${invalid.join('、')}`)
-  }
-  return list as HistoryKind[]
-}
 
 export interface ToolDef {
   name: string
@@ -55,225 +47,403 @@ function stringList(value: unknown): string[] | undefined {
   return Array.isArray(value) ? value.map(String) : undefined
 }
 
-/** 解析 links 参数（card_create / card_update replace 共用） */
-function linksOf(value: unknown): { prev?: string[]; next?: string[]; conflict?: string[] } | undefined {
+/** 解析 links 参数（note_write 用；wikilink 格式的关联标签） */
+function linksOf(value: unknown): BlockLinks | undefined {
   if (!value || typeof value !== 'object') return undefined
   const raw = value as Record<string, unknown>
-  return { prev: stringList(raw.prev), next: stringList(raw.next), conflict: stringList(raw.conflict) }
+  return { prev: stringList(raw.prev), next: stringList(raw.next), sibling: stringList(raw.sibling) }
 }
+
+const READ_ONLY = () => true
 
 export function buildToolDefs(store: VaultStore): ToolDef[] {
   return [
+    // ── 库状态与期望（硬门禁的前两环）──────────────────────────────────────
     {
-      name: 'card_search',
+      name: 'note_library',
       description:
-        '全库检索 vault 卡片与旧笔记（含配置 searchRoots 与工作目录旧笔记——旧笔记=无 ID 的 .md）。'
-        + '摄入新资料、引用旧卡、增量更新判断前必查重叠。'
-        + '返回候选的标题/ID/类型（卡片或旧笔记）/路径/领域/状态/来源/定义/片段；召回由插件做，语义判断由你完成。',
+        '笔记库自检：vault 是否可写、《笔记期望.md》是否存在并已读、块/存量卡/旧笔记各多少、有无待消费规划。'
+        + '会话开始处理笔记前先调用一次；写入被拒时也用它定位原因。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['check'], description: 'check=输出库状态与门禁状态' },
+        },
+        required: ['action'],
+      },
+      output,
+      isConcurrencySafe: READ_ONLY,
+      execute: (args) => store.noteLibrary(String(args.action ?? 'check')),
+    },
+    {
+      name: 'note_expect_get',
+      description:
+        '读取 vault 根的《笔记期望.md》全文，并**标记为已读**——这是写入笔记的前置条件之一。'
+        + '期望文件是笔记写法的唯一来源（结构/详略/文风/公式图表/领域侧重），代码里没有内建模板。'
+        + '用户改了期望后签名会变，必须重新读取才能继续写入（热配置立即生效）。',
+      parameters: { type: 'object', properties: {} },
+      output,
+      isConcurrencySafe: READ_ONLY,
+      execute: () => store.noteExpectGet(),
+    },
+
+    // ── 导航与检索 ─────────────────────────────────────────────────────────
+    {
+      name: 'note_list',
+      description:
+        '逐层导航笔记库：列出某目录下的子目录与笔记（标题·类型·来源章节·简介），并标出没有微目录的目录。'
+        + 'path 省略即列 vault 根；depth=2 时连下一层笔记一起列。目录层级是「资料 / 章 / 节 / 块」（项目类笔记可少一层）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'vault 内相对目录（省略=根；如 "计算机通识/计算方法"）' },
+          depth: { type: 'number', description: '展开层数，默认 2（1~4）' },
+        },
+      },
+      output,
+      isConcurrencySafe: READ_ONLY,
+      execute: (args) => store.noteList({
+        path: args.path ? String(args.path) : undefined,
+        depth: Number(args.depth) > 0 ? Number(args.depth) : undefined,
+      }),
+    },
+    {
+      name: 'note_get',
+      description: '读取一篇笔记的完整原文（不截断）。ref 支持 ID、标题、根限定路径（vault/… 、工作目录/…）、相对路径或文件名。',
+      parameters: {
+        type: 'object',
+        properties: { ref: { type: 'string', description: '笔记 ID / 标题 / 路径 / 文件名' } },
+        required: ['ref'],
+      },
+      output,
+      isConcurrencySafe: READ_ONLY,
+      execute: (args, exec) => store.get(String(args.ref ?? ''), { sessionCwd: sessionCwdOf(exec) }),
+    },
+    {
+      name: 'note_search',
+      description:
+        '关键词全库检索（vault + 配置的 searchRoots + 会话工作目录旧笔记）；召回由插件做，语义判断由你完成。'
+        + '命中返回标题/ID/类型（块·存量卡·旧笔记）/路径/领域/状态/来源/来源章节/简介/片段。'
+        + '摄入新资料前查重叠、引用旧笔记前定位、判断是否增量更新时用。检索词用核心术语，不要整句。',
       parameters: {
         type: 'object',
         properties: {
           query: { type: 'string', description: '检索词（概念/术语/标题片段）' },
-          domain: { type: 'string', description: '领域过滤（如 图形学）' },
+          domain: { type: 'string', description: '领域过滤' },
           status: { type: 'string', description: '状态过滤：草稿/已确认/需更新' },
-          kind: { type: 'string', enum: ['card', 'note'], description: '类型过滤：card=卡片，note=旧笔记' },
-          limit: { type: 'number', description: '返回条数，默认 5' },
+          kind: { type: 'string', enum: ['block', 'legacy', 'note'], description: 'block=块（有 ID 且有来源章节）/ legacy=存量卡 / note=旧笔记' },
+          path: { type: 'string', description: '只在该目录及其子目录内检索（vault 内相对路径）' },
+          limit: { type: 'number', description: '返回条数，默认 5（上限 50）' },
         },
         required: ['query'],
       },
       output,
-      isConcurrencySafe: () => true,
+      isConcurrencySafe: READ_ONLY,
       execute: (args, exec) => store.search(String(args.query ?? ''), {
         domain: args.domain ? String(args.domain) : undefined,
         status: args.status ? String(args.status) : undefined,
         kind: args.kind === 'block' || args.kind === 'legacy' || args.kind === 'note' ? args.kind : undefined,
+        dirPath: args.path ? String(args.path) : undefined,
         limit: Number(args.limit) > 0 ? Number(args.limit) : undefined,
       }, { sessionCwd: sessionCwdOf(exec) }),
     },
     {
-      name: 'card_get',
-      description: '按 ID、标题、根限定路径（如 "工作目录/子目录/笔记.md"）、相对路径或文件名读取一篇文档的**完整原文**（卡片或旧笔记，无截断）。',
+      name: 'note_overview',
+      description:
+        '主题/整库总览：列出块清单，并按 `来源章节` 聚合出「资料 → 章 → 节」的覆盖情况与缺口（含"未归类"）。'
+        + '回答"这个主题记全了没有"用它。缺口只依据笔记里真实出现的章节号统计，不会替你虚构资料目录。',
       parameters: {
         type: 'object',
         properties: {
-          ref: { type: 'string', description: '卡片 ID、标题或路径/文件名（跨根路径歧义时用"根/相对路径"）' },
+          path: { type: 'string', description: '限定目录（省略=整个库）' },
+          material: { type: 'string', description: '只看某份资料（如 "计算方法"）' },
+        },
+      },
+      output,
+      isConcurrencySafe: READ_ONLY,
+      execute: (args) => store.noteOverview({
+        path: args.path ? String(args.path) : undefined,
+        material: args.material ? String(args.material) : undefined,
+      }),
+    },
+
+    // ── 规划（硬门禁的第三环）──────────────────────────────────────────────
+    {
+      name: 'note_plan',
+      description:
+        '文件夹规划：把"这次要写哪些块、各落到哪个目录"整理成提案，供用户拍板。**提案只在对话里，不落盘**。'
+        + 'items 是待落块清单（title + path，path 为 vault 内相对路径含文件名）；rootPath 是规划根，之后 note_write 的路径必须落在它之下。'
+        + '用户确认（或让你改）后，用返回的 planId 调 note_write 逐个落盘；结构或顺序要改就直接重新提案一次。'
+        + 'action=abandon 放弃规划（把 rootPath 传成要放弃的 planId）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['create', 'abandon'], description: 'create=提案（默认）；abandon=放弃指定规划' },
+          rootPath: { type: 'string', description: 'create：规划根目录；abandon：要放弃的 planId' },
+          material: { type: 'string', description: '本次规划服务的资料名' },
+          notes: { type: 'string', description: '给用户的补充说明（如"复用已有目录、只新增一个节"）' },
+          items: {
+            type: 'array',
+            description: '待落块清单（至少一项；同一规划内标题必须唯一）',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: '块标题' },
+                path: { type: 'string', description: '落盘路径（vault 内相对路径，含 .md）' },
+                sourceSection: { type: 'string', description: '来源章节（如 《计算方法》第2章 线性方程组数值解法 / 2.1节）' },
+                order: { type: 'number', description: '同目录阅读顺序（微目录排序用）' },
+              },
+              required: ['title', 'path'],
+            },
+          },
+        },
+        required: ['rootPath', 'items'],
+      },
+      output,
+      isConcurrencySafe: READ_ONLY,
+      execute: (args) => store.notePlan({
+        action: args.action ? String(args.action) : undefined,
+        rootPath: args.rootPath ? String(args.rootPath) : undefined,
+        material: args.material ? String(args.material) : undefined,
+        notes: args.notes ? String(args.notes) : undefined,
+        items: Array.isArray(args.items)
+          ? (args.items as Array<Record<string, unknown>>).map((it) => ({
+            title: it.title ? String(it.title) : '',
+            path: it.path ? String(it.path) : '',
+            sourceSection: it.sourceSection ? String(it.sourceSection) : undefined,
+            order: Number.isFinite(Number(it.order)) ? Number(it.order) : undefined,
+          }))
+          : [],
+      }),
+    },
+
+    // ── 写入 ───────────────────────────────────────────────────────────────
+    {
+      name: 'note_write',
+      description:
+        '写入一个笔记块。硬门禁（会被拒绝并列修复步骤）：① 必须先 note_expect_get 读过《笔记期望.md》且之后没改过；'
+        + '② 必须带已确认的 planId；③ path 必须在规划根之下、标题在规划清单里且未被写过。'
+        + '正文写法（结构/详略/公式/图表/互引）完全按《笔记期望.md》，**没有模板与必填小节，字数不设限**。'
+        + 'dryRun=true 只回显将写入的内容，不落盘。目标已存在时报错——改写用 note_update，避免覆盖。',
+      parameters: {
+        type: 'object',
+        properties: {
+          planId: { type: 'string', description: 'note_plan 返回的规划 id（必须已确认）' },
+          title: { type: 'string', description: '块标题（必须与规划里的某一项一致）' },
+          path: { type: 'string', description: '落盘路径（vault 内相对路径，含 .md）' },
+          source: { type: 'string', description: '资料名（课程/书/项目）' },
+          content: { type: 'string', description: '正文 Markdown：写法完全按《笔记期望.md》（结构/详略/公式/图表/互引），长度不设限' },
+          sourceSection: { type: 'string', description: '来源章节（缺省用规划里的值）：《资料》第N章 章标题 / N.N节' },
+          order: { type: 'number', description: '同目录阅读顺序（缺省用规划里的值）' },
+          domain: { type: 'string', description: '领域键（可选；用于检索过滤与落盘快捷方式）' },
+          status: { type: 'string', enum: [...VALID_STATUS], description: '草稿/已确认/需更新，默认 草稿' },
+          summary: { type: 'string', description: '一句话定位（可选，无长度限制；缺省时从正文首个引用块提取）' },
+          tags: { type: 'array', items: { type: 'string' }, description: '额外领域标签' },
+          links: {
+            type: 'object',
+            description: '关联（可选，wikilink 格式，如 "[[列主元消元]]"）',
+            properties: {
+              prev: { type: 'array', items: { type: 'string' }, description: '前置' },
+              next: { type: 'array', items: { type: 'string' }, description: '后续' },
+              sibling: { type: 'array', items: { type: 'string' }, description: '兄弟（同主题相邻块）' },
+            },
+          },
+          dryRun: { type: 'boolean', description: '只回显将写入的内容，不落盘' },
+        },
+        required: ['planId', 'title', 'path', 'source', 'content'],
+      },
+      output,
+      execute: (args) => store.noteWrite({
+        planId: String(args.planId ?? ''),
+        title: String(args.title ?? ''),
+        path: String(args.path ?? ''),
+        source: String(args.source ?? ''),
+        content: String(args.content ?? ''),
+        sourceSection: args.sourceSection ? String(args.sourceSection) : undefined,
+        order: Number.isFinite(Number(args.order)) ? Number(args.order) : undefined,
+        domain: args.domain ? String(args.domain) : undefined,
+        status: args.status ? String(args.status) : undefined,
+        summary: args.summary ? String(args.summary) : undefined,
+        tags: stringList(args.tags),
+        links: linksOf(args.links),
+        dryRun: args.dryRun === true,
+      }),
+    },
+    {
+      name: 'note_update',
+      description:
+        '更新已有笔记：action=append 把补充内容追加到正文（可指定 section，缺省追加到末尾，旧内容天然保留）；'
+        + 'action=replace 整体替换正文——**旧正文会先存入 .study/archive/，绝不丢**（先存档后写正文）；'
+        + 'action=move 把笔记移到新目录（targetPath）；action=definition 只替换一句话定位（字段级微调，不算知识更新）。'
+        + 'dryRun=true 预演 replace/move。',
+      parameters: {
+        type: 'object',
+        properties: {
+          ref: { type: 'string', description: '笔记 ID / 标题 / 路径 / 文件名' },
+          action: { type: 'string', enum: ['append', 'replace', 'move', 'definition'], description: 'append/replace/move/definition' },
+          changes: { type: 'string', description: 'append：要补充的 Markdown' },
+          section: { type: 'string', description: 'append：追加到哪个 `### 小节`（缺省=文末）' },
+          newContent: { type: 'string', description: 'replace：新正文 Markdown' },
+          summary: { type: 'string', description: 'definition/replace：新的一句话定位' },
+          sourceSection: { type: 'string', description: 'replace：修正来源章节' },
+          targetPath: { type: 'string', description: 'move：新的 vault 内相对路径（含 .md）' },
+          dryRun: { type: 'boolean', description: '只预演，不落盘' },
+        },
+        required: ['ref', 'action'],
+      },
+      output,
+      execute: (args, exec) => store.noteUpdate({
+        ref: String(args.ref ?? ''),
+        action: String(args.action ?? ''),
+        changes: args.changes ? String(args.changes) : undefined,
+        section: args.section ? String(args.section) : undefined,
+        newContent: args.newContent ? String(args.newContent) : undefined,
+        summary: args.summary ? String(args.summary) : undefined,
+        sourceSection: args.sourceSection ? String(args.sourceSection) : undefined,
+        targetPath: args.targetPath ? String(args.targetPath) : undefined,
+        dryRun: args.dryRun === true,
+      }, { sessionCwd: sessionCwdOf(exec) }),
+    },
+    {
+      name: 'note_toc',
+      description:
+        '生成/刷新某主题目录的「微目录.md」：按阅读顺序（顺序键→标题）列出该目录的块，带来源章节与一句话简介。'
+        + '**每个主题目录都应有微目录**（note_write 会在缺失时提醒）。'
+        + '只重写 `<!-- note_toc:begin -->` 与 `<!-- note_toc:end -->` 之间的生成段，你手写的导读段落原样保留；'
+        + '增删改名笔记后重跑一次即可保持一致。dryRun=true 只看将写入什么。',
+      parameters: {
+        type: 'object',
+        properties: {
+          dir: { type: 'string', description: '主题目录（vault 内相对路径）' },
+          title: { type: 'string', description: '微目录标题（缺省用目录名）' },
+          dryRun: { type: 'boolean', description: '只回显将写入的内容，不落盘' },
+        },
+        required: ['dir'],
+      },
+      output,
+      execute: (args) => store.noteToc(String(args.dir ?? ''), {
+        title: args.title ? String(args.title) : undefined,
+        dryRun: args.dryRun === true,
+      }),
+    },
+
+    // ── 关联 ───────────────────────────────────────────────────────────────
+    {
+      name: 'note_link',
+      description:
+        '建立双向关联（落盘为 Obsidian wikilink，写在两侧的「### 关联」小节）：'
+        + 'kind=prev（from 是 to 的前置）/ next（后续）/ sibling（同主题兄弟，两侧同向）。'
+        + '已存在的关联不重复添加；旧笔记（无 ID）默认不写，需 config.linkIntoNotes。先校验两侧再写，不留单向入链。',
+      parameters: {
+        type: 'object',
+        properties: {
+          from: { type: 'string', description: '源笔记（ID/标题/路径）' },
+          to: { type: 'string', description: '目标笔记（ID/标题/路径）' },
+          kind: { type: 'string', enum: ['prev', 'next', 'sibling'], description: 'prev=前置 / next=后续 / sibling=兄弟' },
+        },
+        required: ['from', 'to', 'kind'],
+      },
+      output,
+      execute: (args, exec) => store.noteLink(
+        String(args.from ?? ''),
+        String(args.to ?? ''),
+        (args.kind === 'prev' || args.kind === 'next' || args.kind === 'sibling' ? args.kind : 'sibling'),
+        false,
+        { sessionCwd: sessionCwdOf(exec) },
+      ),
+    },
+    {
+      name: 'note_unlink',
+      description: '移除两侧的关联（与 note_link 相反）。目标不在关联里时返回"无改动"。',
+      parameters: {
+        type: 'object',
+        properties: {
+          from: { type: 'string', description: '源笔记' },
+          to: { type: 'string', description: '要断开的目标笔记' },
+        },
+        required: ['from', 'to'],
+      },
+      output,
+      execute: (args, exec) => store.noteLink(
+        String(args.from ?? ''),
+        String(args.to ?? ''),
+        'sibling',
+        true,
+        { sessionCwd: sessionCwdOf(exec) },
+      ),
+    },
+
+    // ── 改名与历史 ─────────────────────────────────────────────────────────
+    {
+      name: 'note_rename',
+      description:
+        '改标题并同步四件事：frontmatter 标题 → 文件名（仅当文件名=旧标题清洗结果）→ 全库 wikilink 入链 → 断链检测。'
+        + '目标标题/文件名冲突时**不做任何写入**；dryRun=true 先预演。只写 vault 内文件，旧笔记（无 ID）拒绝。',
+      parameters: {
+        type: 'object',
+        properties: {
+          ref: { type: 'string', description: '笔记 ID / 标题 / 路径' },
+          title: { type: 'string', description: '新标题' },
+          dryRun: { type: 'boolean', description: '只预演' },
+        },
+        required: ['ref', 'title'],
+      },
+      output,
+      execute: (args, exec) => store.rename(String(args.ref ?? ''), String(args.title ?? ''), {
+        dryRun: args.dryRun === true,
+        sessionCwd: sessionCwdOf(exec),
+      }),
+    },
+    {
+      name: 'note_history',
+      description:
+        '查看某篇笔记的历史存档（`.study/archive/<ID>/`）：action=list 列出存档（时间/原因/原路径）；'
+        + 'action=read 配合 archiveId 看某份存档全文。存档在笔记被 replace 或被恢复时自动产生，正文里不留历史块。',
+      parameters: {
+        type: 'object',
+        properties: {
+          ref: { type: 'string', description: '笔记 ID / 标题 / 路径' },
+          action: { type: 'string', enum: ['list', 'read'], description: 'list（默认）/ read' },
+          archiveId: { type: 'string', description: 'read：存档 id（先用 list 查看）' },
         },
         required: ['ref'],
       },
       output,
-      isConcurrencySafe: () => true,
-      execute: (args, exec) => store.get(String(args.ref ?? ''), { sessionCwd: sessionCwdOf(exec) }),
-    },
-    {
-      name: 'card_id',
-      description:
-        '生成卡片 ID（YYYYMMDDHHmm_随机6位hex）。注意：card_create 会自动生成 ID，不消费本工具的预取值——'
-        + '需要引用时以 card_create 返回的 ID 为准；本工具仅用于查看 ID 格式。',
-      parameters: {
-        type: 'object',
-        properties: {
-          count: { type: 'number', description: '数量，默认 1，上限 20' },
-        },
-      },
-      output,
-      isConcurrencySafe: () => true,
-      execute: (args) => {
-        const n = Math.min(Math.max(1, Math.trunc(Number(args?.count) || 1)), 20)
-        return Array.from({ length: n }, () => generateId()).join('\n')
-      },
-    },
-    {
-      name: 'card_create',
-      description:
-        '把一张笔记写入 vault 对应分类目录（领域→目录映射；未映射落"未分类"并回显可用领域键与近似键建议）。知识即笔记：与旧笔记同库。'
-        + '自动生成唯一 ID、写 frontmatter（ID/标题/领域/来源/状态/来源章节/顺序/简介）；正文只由《笔记期望.md》决定写法，不再有模板与必填小节，字数不设限。'
-        + '返回整篇；返回文本含"领域映射"行（键 → 目录）与标题清洗提示（非法字符/引号会被清洗，文件名以返回的 rel 为准）。',
-      parameters: {
-        type: 'object',
-        properties: {
-          title: { type: 'string', description: '概念名称，如"光线与表面的两种交互：散射与吸收"（避免 / \\ : * ? " < > | 与引号；会被自动清洗）' },
-          domain: { type: 'string', description: '领域键，决定落盘目录（键名表见 note-format 技能；未映射会回显可用键与近似键）' },
-          tags: { type: 'array', items: { type: 'string' }, description: '额外中文领域标签' },
-          source: { type: 'string', description: '资料名称' },
-          status: { type: 'string', enum: [...VALID_STATUS], description: '草稿/已确认/需更新' },
-          definition: { type: 'string', description: '一句话定位（无长度限制；可省略，缺省时从正文首个引用块提取）' },
-          content: {
-            type: 'string',
-            description: '正文 Markdown。写法（结构/详略/公式/图表/互引）完全由 vault 根的《笔记期望.md》决定；'
-              + '不设字数上下限，按信息完备性写。',
-          },
-          links: {
-            type: 'object',
-            description: '关联笔记（可预格式化）',
-            properties: {
-              prev: { type: 'array', items: { type: 'string' }, description: '前置' },
-              next: { type: 'array', items: { type: 'string' }, description: '后续' },
-              conflict: { type: 'array', items: { type: 'string' }, description: '易混淆' },
-            },
-          },
-        },
-        required: ['title', 'domain', 'source', 'status', 'definition', 'content'],
-      },
-      output,
-      execute: (args, exec) => store.create({
-        title: String(args.title ?? ''),
-        domain: String(args.domain ?? ''),
-        source: String(args.source ?? ''),
-        status: String(args.status ?? ''),
-        definition: String(args.definition ?? ''),
-        content: String(args.content ?? ''),
-        tags: stringList(args.tags),
-        links: linksOf(args.links),
-      }, { sessionCwd: sessionCwdOf(exec) }).then((r) => r.text),
-    },
-    {
-      name: 'card_update',
-      description:
-        '增量更新：append-version=加"版本更新（来源）"（补充不推翻旧结论，插在「关联」之前）；errata=保留旧内容加"勘误"（changes 含纠正原因）；'
-        + 'definition=只替换一句话定位（字段级微调：不重传正文、不算知识更新）；'
-        + 'replace=整篇替换（旧版入历史折叠块，可传 links 重建关联）。先给用户新旧对比、确认后才调用；决定权在用户。返回整篇。',
-      parameters: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: '笔记 ID/标题/路径' },
-          mode: { type: 'string', description: 'append-version/errata/definition/replace' },
-          changes: { type: 'string', description: 'append/errata 的追加内容' },
-          source: { type: 'string', description: '版本更新来源（append-version 用）' },
-          title: { type: 'string', description: 'replace：新标题' },
-          domain: { type: 'string', description: 'replace：领域键' },
-          tags: { type: 'array', items: { type: 'string' }, description: 'replace：额外领域标签' },
-          status: { type: 'string', enum: [...VALID_STATUS], description: 'replace：草稿/已确认/需更新' },
-          definition: { type: 'string', description: 'definition/replace：一句话定位（无长度限制）' },
-          content: { type: 'string', description: 'replace：新正文 Markdown（写法由《笔记期望.md》决定）' },
-          links: {
-            type: 'object',
-            description: 'replace：新关联（可选；不传则新笔记无关联小节）',
-            properties: {
-              prev: { type: 'array', items: { type: 'string' }, description: '前置' },
-              next: { type: 'array', items: { type: 'string' }, description: '后续' },
-              conflict: { type: 'array', items: { type: 'string' }, description: '易混淆' },
-            },
-          },
-        },
-        required: ['id', 'mode'],
-      },
-      output,
-      execute: (args, exec) => {
-        const mode = String(args.mode ?? '')
-        const payload: UpdatePayload = { mode: mode as UpdatePayload['mode'] }
-        if (mode === 'append-version' || mode === 'errata') {
-          payload.changes = args.changes ? String(args.changes) : undefined
-          if (mode === 'append-version' && args.source) payload.source = String(args.source)
-        }
-        if (mode === 'definition') {
-          payload.definition = args.definition ? String(args.definition) : undefined
-        }
-        if (mode === 'replace') {
-          payload.card = {
-            title: String(args.title ?? ''),
-            domain: String(args.domain ?? ''),
-            source: String(args.source ?? ''),
-            status: String(args.status ?? ''),
-            definition: String(args.definition ?? ''),
-            content: String(args.content ?? ''),
-            tags: stringList(args.tags),
-            links: linksOf(args.links),
-          }
-        }
-        return store.update(String(args.id ?? ''), payload, { sessionCwd: sessionCwdOf(exec) })
-      },
-    },
-    {
-      name: 'card_link',
-      description:
-        '维护两篇文档的关联（前置/后续/易混淆），双向写入卡片侧；关联行归一为 `- 标签：`标题`（ID）`，同一目标按"标题或 ID 任一命中"去重（不产生重复行）。'
-        + '无 ID 的旧笔记默认不写入（旧笔记不碰不动）：卡片↔旧笔记只写卡片侧；旧笔记↔旧笔记需 config.linkIntoNotes 开启。',
-      parameters: {
-        type: 'object',
-        properties: {
-          fromId: { type: 'string', description: '卡片 ID/标题/路径（旧笔记用"工作目录/相对路径"）' },
-          toId: { type: 'string', description: '卡片 ID/标题/路径' },
-          kind: { type: 'string', description: 'prev=toId 是 fromId 的前置 / next=后续 / conflict=易混淆' },
-        },
-        required: ['fromId', 'toId', 'kind'],
-      },
-      output,
-      execute: (args, exec) => {
-        const kind = String(args.kind ?? '') as LinkKind
-        if (!['prev', 'next', 'conflict'].includes(kind)) throw new Error('kind 必须是 prev / next / conflict')
-        return store.link(String(args.fromId ?? ''), String(args.toId ?? ''), kind, { sessionCwd: sessionCwdOf(exec) })
-      },
-    },
-    {
-      name: 'card_moc',
-      description:
-        '生成 MOC（领域分组 + Obsidian wikilink）写入"目录"目录并返回文本。归档收尾时用：传本次涉及的卡片 ID。'
-        + '只收录有 ID 的卡片，旧笔记自动跳过。'
-        + 'title 只传主题名（如 "图形学 MOC 目录"）——日期前缀与文件名由工具自动生成（文件名 = 日期_标题.md），'
-        + '返回文本回显 文件名/标题/日期；标题带日期前缀会被自动剥离，勿再手写日期。',
-      parameters: {
-        type: 'object',
-        properties: {
-          title: { type: 'string', description: 'MOC 主题名，只写主题（如 图形学 MOC 目录；默认 知识目录，日期由工具自动生成）' },
-          cardIds: { type: 'array', items: { type: 'string' }, description: '本次涉及的卡片 ID/标题' },
-          domain: { type: 'string', description: '可选：只收录该领域' },
-        },
-        required: ['cardIds'],
-      },
-      output,
-      execute: (args, exec) => store.moc({
-        title: args.title ? String(args.title) : undefined,        cardIds: stringList(args.cardIds) ?? [],
-        domain: args.domain ? String(args.domain) : undefined,
+      isConcurrencySafe: READ_ONLY,
+      execute: (args, exec) => store.noteHistory(String(args.ref ?? ''), {
+        action: args.action ? String(args.action) : undefined,
+        archiveId: args.archiveId ? String(args.archiveId) : undefined,
       }, { sessionCwd: sessionCwdOf(exec) }),
     },
     {
-      name: 'card_lint',
+      name: 'note_restore',
       description:
-        `笔记质量体检：按 ${RULES.length} 条规则列出问题与改写建议——${RULES.map((r) => r.title).join('、')}。`
+        '把某篇笔记恢复成一份历史存档（缺省恢复最新那份）。恢复前**当前正文会先存入存档**，所以可反复来回；'
+        + 'dryRun=true 先看将恢复成什么。用户说"回退/恢复旧版本/改坏了"时用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          ref: { type: 'string', description: '笔记 ID / 标题 / 路径' },
+          archiveId: { type: 'string', description: '要恢复的存档 id（缺省=最新一份）' },
+          dryRun: { type: 'boolean', description: '只预演' },
+        },
+        required: ['ref'],
+      },
+      output,
+      execute: (args, exec) => store.noteRestore(String(args.ref ?? ''), {
+        archiveId: args.archiveId ? String(args.archiveId) : undefined,
+        dryRun: args.dryRun === true,
+      }, { sessionCwd: sessionCwdOf(exec) }),
+    },
+
+    // ── 质量体检 ───────────────────────────────────────────────────────────
+    {
+      name: 'note_lint',
+      description:
+        `笔记质量体检：按 ${RULES.length} 条规则列出问题与建议——${RULES.map((r) => r.title).join('、')}。`
         + '规则只覆盖"数据卫生"（会话残留含白名单：L0/L1/L2 球谐带、讲义引用、代码块与折叠块内不扫），'
         + '不再有模板/字数类检查；报告给问题清单与严重级，不给分数。'
-        + 'ref 给单篇；scope="vault" 批量体检有 ID 的笔记，scope="all" 含旧笔记。limit 控制明细条数（默认 20）。'
-        + '归档后自检、或用户问"笔记质量/有没有写歪"时用。',
+        + 'ref 给单篇；scope="vault" 批量体检有 ID 的笔记，scope="all" 含旧笔记。',
       parameters: {
         type: 'object',
         properties: {
@@ -284,7 +454,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         },
       },
       output,
-      isConcurrencySafe: () => true,
+      isConcurrencySafe: READ_ONLY,
       execute: (args, exec) => store.lint({
         ref: args.ref ? String(args.ref) : undefined,
         scope: args.scope === 'vault' || args.scope === 'all' ? args.scope : undefined,
@@ -292,57 +462,12 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         rule: args.rule ? String(args.rule) : undefined,
       }, { sessionCwd: sessionCwdOf(exec) }),
     },
-    {
-      name: 'card_history',
-      description:
-        '管理卡片的版本更新 / 勘误 / 历史折叠块：action="list" 列出各块（类型/行号/摘要）；'
-        + 'action="strip" 清除历史块（正文与关联保留，先校验 <details> 配对，不配对只警告不删；'
-        + '删除是整块语义的，报告里的行号为删除前位置）。'
-        + '用户说"清掉历史版本/这张卡太长了/只留最新版"时用；dryRun=true 只看会删什么。',
-      parameters: {
-        type: 'object',
-        properties: {
-          ref: { type: 'string', description: '卡片 ID/标题/路径' },
-          action: { type: 'string', enum: ['list', 'strip'], description: 'list=列出；strip=清除' },
-          kinds: {
-            type: 'array',
-            items: { type: 'string', enum: HISTORY_KINDS },
-            description: 'strip 时只清指定类型（默认全部：version=版本更新，errata=勘误，details=历史折叠块）',
-          },
-          dryRun: { type: 'boolean', description: 'strip 时只报告将删除的块，不写盘' },
-        },
-        required: ['ref', 'action'],
-      },
-      output,
-      execute: (args, exec) => store.history(String(args.ref ?? ''), String(args.action ?? '') as 'list' | 'strip', {
-        kinds: historyKinds(args.kinds),
-        dryRun: args.dryRun === true,
-      }, { sessionCwd: sessionCwdOf(exec) }),
-    },
-    {
-      name: 'card_rename',
-      description:
-        '改卡片标题并同步一切引用（2026-09 重设计新增）：frontmatter 标题 + 文件名（仅当文件名与旧标题一致时）+ 全库入链（`标题`（ID）与 [[wikilink]]）+ 断链检测。'
-        + 'dryRun=true 只预演。用户说"这张卡标题改成 X/名字写错了"时用；旧笔记（无 ID）不支持改名。',
-      parameters: {
-        type: 'object',
-        properties: {
-          ref: { type: 'string', description: '卡片 ID/标题/路径' },
-          newTitle: { type: 'string', description: '新标题（非法字符会被清洗为文件名）' },
-          dryRun: { type: 'boolean', description: '只预演：返回将改动的文件清单与断链，不写盘' },
-        },
-        required: ['ref', 'newTitle'],
-      },
-      output,
-      execute: (args, exec) => store.rename(String(args.ref ?? ''), String(args.newTitle ?? ''), {
-        dryRun: args.dryRun === true,
-        sessionCwd: sessionCwdOf(exec),
-      }),
-    },
+
+    // ── 学习进度与记忆（语义不变）──────────────────────────────────────────
     {
       name: 'study_progress',
       description:
-        '读写学习进度（持久，跨会话有效）：资料/小节/未答追问/触及卡片。'
+        '读写学习进度（持久，跨会话有效）：资料/小节/未答追问/触及笔记。'
         + '"接着讲"前 get；小节推进 set；归档（整理笔记）前检查 pendingQuestions。',
       parameters: {
         type: 'object',
@@ -351,7 +476,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
           material: { type: 'string', description: 'set：资料名' },
           section: { type: 'string', description: 'set：小节' },
           pendingQuestions: { type: 'array', items: { type: 'string' }, description: 'set：追问队列（整体替换）' },
-          touchedCardIds: { type: 'array', items: { type: 'string' }, description: 'set：触及卡片 ID（整体替换）' },
+          touchedIds: { type: 'array', items: { type: 'string' }, description: 'set：触及笔记 ID（整体替换）' },
         },
         required: ['action'],
       },
@@ -360,7 +485,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         material: args.material ? String(args.material) : undefined,
         section: args.section ? String(args.section) : undefined,
         pendingQuestions: stringList(args.pendingQuestions),
-        touchedCardIds: stringList(args.touchedCardIds),
+        touchedCardIds: stringList(args.touchedIds),
       }),
     },
     {

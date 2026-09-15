@@ -183,6 +183,11 @@ export class DirIndex {
     return s.blocks + s.legacy + s.notes > 0
   }
 
+  /** 目录自身或子树里是否存在微目录（父级判断"该子树有入口"用） */
+  hasTocIn(dir: string): boolean {
+    return this.countAt(dir).hasToc
+  }
+
   add(rel: string, kind: DirBuildInput['kind']): void {
     const key = dirOfRel(rel)
     const stat = this.stats.get(key) ?? { ...EMPTY_STAT }
