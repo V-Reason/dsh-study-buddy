@@ -6,7 +6,7 @@
 >
 > 🗺️ 文档地图见 [docs/README.md](docs/README.md)（哪份文档负责什么、改代码要同步哪些文档）· 🧭 其他文档：[设计文档](docs/设计文档.md)（为什么这样设计）· [技术文档](docs/技术文档.md)（API / 规则 / 配置 / 测试）· [经验文档](docs/经验文档.md)（踩坑与可复用技巧）· [审查修复记录](docs/审查修复记录.md)（两轮审查结论与修复状态）· [归档索引](docs/archive/README.md)（历史提案与复盘）
 >
-> 版本基线：v0.9.1 ｜ 协议：MIT ｜ 逐版变更见 [更新记录](#更新记录)
+> 版本基线：v1.0.0 ｜ 协议：MIT ｜ 逐版变更见 [更新记录](#更新记录)
 
 ## 特性
 
@@ -159,6 +159,8 @@ Copy-Item -Recurse presets/study "$env:DSH_HOME\.agent-presets\study"
 ```
 
 > 升级插件后若 DSH 未加载新代码：删掉 `<profileDir>\node_modules\dsh-study-buddy` 再 `pnpm install`（file: 依赖不自动刷新），然后重启 DSH。
+>
+> 升级 **DSH 本体**同样会动预设：行内的配置键可能被改名（例如 DSH 0.1.5 起 persona 行的 `text` 已改名必填的 `prefix`，见提交 `40792330c0`），旧副本会在挂载时报 `invalid config: $.prefix missing required value`。此时按 [用户使用指南](docs/用户使用指南.md#111-现象与原因速查) 的排障表改键即可；**挂载失败不留缓存**，重新选一次该预设就生效，无需重启。
 
 > 若你的启动器以 vault 目录为工作目录启动 DSH（如配套 launcher 的默认行为），`vaultRoot` 与工作目录相同是受支持的部署形态——插件只拒绝文件系统根作为落盘目标。
 
