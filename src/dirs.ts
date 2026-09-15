@@ -12,6 +12,7 @@
 
 import { promises as fsp } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
+import { compareText } from './order.ts'
 import { sanitizeFilename, withinRoot, type WalkedFile } from './vault.ts'
 
 /** 微目录固定文件名：每个主题目录都有一份（需求 R12） */
@@ -148,7 +149,7 @@ export class DirIndex {
 
   /** 全部含文件的目录路径（升序，未归一：调用方按需 normRel） */
   dirs(): string[] {
-    return [...this.stats.keys()].sort((a, b) => a.localeCompare(b))
+    return [...this.stats.keys()].sort(compareText)
   }
 
   /** 单目录自身的计数（不递归） */
@@ -183,7 +184,7 @@ export class DirIndex {
       const seg = rest.split('/')[0]
       out.add(base === '' ? seg : `${base}/${seg}`)
     }
-    return [...out].sort((a, b) => a.localeCompare(b))
+    return [...out].sort(compareText)
   }
 
   /** 该目录下是否有文件直接落在这里 */
@@ -300,7 +301,7 @@ export async function listDir(
       id: parsed.id,
     })
   }
-  subdirs.sort((a, b) => a.localeCompare(b))
+  subdirs.sort(compareText)
   files.sort((a, b) => compareOrder(a, b))
   return { dir: norm, subdirs, files }
 }
@@ -310,7 +311,7 @@ export function compareOrder(a: DirListFile, b: DirListFile): number {
   const ao = a.order === null ? Number.POSITIVE_INFINITY : a.order
   const bo = b.order === null ? Number.POSITIVE_INFINITY : b.order
   if (ao !== bo) return ao - bo
-  return a.title.localeCompare(b.title)
+  return compareText(a.title, b.title)
 }
 
 /** 头部解析结果（`listDir` 用；字段名与 frontmatter 模块解耦，避免循环依赖） */

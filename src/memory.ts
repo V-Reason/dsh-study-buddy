@@ -7,6 +7,7 @@
 
 import { promises as fsp } from 'node:fs'
 import { dirname } from 'node:path'
+import { compareText } from './order.ts'
 import { atomicWrite, ensureDir } from './vault.ts'
 
 /** 单条记忆值的长度上限（字符） */
@@ -135,7 +136,7 @@ export function formatAutoPrefs(value: string | undefined): string {
 export function formatMemory(state: MemoryState): string {
   const entries = Object.entries(state.notes)
     .filter(([key]) => !isControlKey(key))
-    .sort(([a], [b]) => (a === SUMMARY_KEY ? -1 : b === SUMMARY_KEY ? 1 : a.localeCompare(b)))
+    .sort(([a], [b]) => (a === SUMMARY_KEY ? -1 : b === SUMMARY_KEY ? 1 : compareText(a, b)))
   const lines: string[] = []
   if (state.notes[AUTO_PREFS_KEY] !== undefined) lines.push(formatAutoPrefs(state.notes[AUTO_PREFS_KEY]))
   const flagged = entries.filter(([, value]) => IMPERATIVE_RE.test(value)).map(([key]) => key)

@@ -9,6 +9,7 @@
  * @module overview
  */
 
+import { compareText } from './order.ts'
 import { normalizeSourceSection } from './sourceSection.ts'
 
 /** 输入：一篇待聚合的笔记（由调用方从目录遍历或索引给出） */
@@ -60,7 +61,7 @@ function compareSection(a: string, b: string): number {
     const d = (ka[i] ?? 0) - (kb[i] ?? 0)
     if (d !== 0) return d
   }
-  return a.localeCompare(b)
+  return compareText(a, b)
 }
 
 /** 节号跳号：只在**同一父节**下相邻出现间隔 > 1 时提示（`2.1 → 2.3`） */
@@ -131,16 +132,16 @@ export function summarizeOverview(notes: OverviewNote[], opts: { material?: stri
       const sections = [...new Set(group.entries.map((e) => e.section).filter(Boolean))].sort(compareSection)
       return {
         ...group,
-        entries: group.entries.sort((a, b) => compareSection(a.section, b.section) || a.title.localeCompare(b.title)),
+        entries: group.entries.sort((a, b) => compareSection(a.section, b.section) || compareText(a.title, b.title)),
         sections,
         gaps: gapsOf(sections),
       }
     })
-    .sort((a, b) => a.material.localeCompare(b.material) || compareSection(a.chapter, b.chapter))
+    .sort((a, b) => compareText(a.material, b.material) || compareSection(a.chapter, b.chapter))
 
   const materials = [...materialChapters.entries()]
     .map(([material, set]) => ({ material, chapters: [...set].sort(compareSection) }))
-    .sort((a, b) => a.material.localeCompare(b.material))
+    .sort((a, b) => compareText(a.material, b.material))
 
   return { chapters, unclassified, materials, counted }
 }

@@ -7,6 +7,7 @@
 import { randomBytes } from 'node:crypto'
 import { promises as fsp, statSync, type Stats } from 'node:fs'
 import { dirname, isAbsolute, join, parse, relative, resolve, basename } from 'node:path'
+import { compareText } from './order.ts'
 
 /** 扫描时跳过的通用目录（vault 特定目录如"资源"由 config.skipDirs 配置） */
 export const SKIP_DIRS = new Set(['.obsidian', '.trash', '.study', '.git', 'node_modules'])
@@ -58,7 +59,7 @@ export function findSimilarDomainKeys(domain: string, keys: string[]): string[] 
     const score = common / Math.max(d.length, key.length)
     if (score >= 0.6) scored.push({ key, score })
   }
-  scored.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key))
+  scored.sort((a, b) => b.score - a.score || compareText(a.key, b.key))
   return scored.slice(0, 2).map((s) => s.key)
 }
 

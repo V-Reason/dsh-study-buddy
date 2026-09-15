@@ -16,6 +16,7 @@
 import { promises as fsp } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { normRel } from './dirs.ts'
+import { compareText } from './order.ts'
 import { atomicWrite, ensureDir, withinRoot } from './vault.ts'
 
 export interface ArchiveMeta {
@@ -146,7 +147,7 @@ export async function listArchives(
     }
     out.push(parseArchive(raw, name.replace(/\.md$/i, ''), file))
   }
-  out.sort((a, b) => b.id.localeCompare(a.id))
+  out.sort((a, b) => compareText(b.id, a.id))
   return out
 }
 

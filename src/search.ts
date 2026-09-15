@@ -12,6 +12,7 @@
  */
 
 import { parseFrontmatter, extractDefinition, firstHeading } from './frontmatter.ts'
+import { compareText } from './order.ts'
 import type { WalkedFile } from './vault.ts'
 import { fileNameOf } from './vault.ts'
 
@@ -296,7 +297,7 @@ export class SearchIndex {
       const ca = this.cards[a.idx]
       const cb = this.cards[b.idx]
       if (ca.kind !== cb.kind) return KIND_RANK[ca.kind] - KIND_RANK[cb.kind]
-      return ca.fullRel.localeCompare(cb.fullRel)
+      return compareText(ca.fullRel, cb.fullRel)
     })
     // 先排序截断，再只对入选结果算 snippet（snippet 需要正文，由调用方传入 bodyOf）
     return ranked.slice(0, limit).map(({ idx, score }) => this.toHit(this.cards[idx], score))

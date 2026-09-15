@@ -18,6 +18,7 @@
  */
 
 import { blankOutBlocks, makeLineOf, type DocSection } from './notemodel.ts'
+import { compareText } from './order.ts'
 import {
   bodyLength, checkCodeFences, checkExternalResources, scanResidue, type ResidueHit,
 } from './lintrules.ts'
@@ -357,11 +358,11 @@ export function summarizeLint(reports: LintReport[]): LintBatch {
       .map(([label, count]) => ({ label, count })),
     rules: [...ruleHits.entries()]
       .map(([id, count]) => ({ id, title: ruleTitle(id), count }))
-      .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id)),
+      .sort((a, b) => b.count - a.count || compareText(a.id, b.id)),
     worst: reports
       .map((r) => ({ title: r.title, count: r.findings.length }))
       .filter((r) => r.count > 0)
-      .sort((a, b) => b.count - a.count || a.title.localeCompare(b.title)),
+      .sort((a, b) => b.count - a.count || compareText(a.title, b.title)),
   }
 }
 

@@ -17,3 +17,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
+      # 排序/文本口径不得依赖宿主 locale：v1.0.0 就是本机（zh-CN）绿、这里（en-US）红
+      - name: 测试（非中文 locale，验证结果与宿主环境无关）
+        run: pnpm run test
+        env:
+          LC_ALL: en_US.UTF-8
+          LANG: en_US.UTF-8
