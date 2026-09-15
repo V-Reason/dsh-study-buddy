@@ -23,13 +23,11 @@ export declare const inject: string[];
  * 插件配置：`VaultLayout` 的"可省略默认值"视图（EXT-6：配置类型只有一份定义，
  * 不再三处同构搬运；新增配置项只改 vault.ts）。
  */
-export interface StudyConfig extends Omit<VaultLayout, 'stateDir' | 'fallbackDir' | 'mocDir'> {
+export interface StudyConfig extends Omit<VaultLayout, 'stateDir' | 'fallbackDir'> {
     /** 进度状态目录（相对 vaultRoot），默认 .study */
     stateDir?: string;
     /** 未映射领域的落盘目录（相对 vaultRoot），默认 未分类 */
     fallbackDir?: string;
-    /** MOC 知识目录落盘位置（相对 vaultRoot），默认 目录 */
-    mocDir?: string;
 }
 interface PluginContext {
     tools?: {
@@ -121,7 +119,7 @@ export declare class VaultStore {
      */
     private reportOfIndexed;
     /**
-     * 质量体检（card_lint）。
+     * 质量体检（note_lint）。
      *
      * 2026-10：跨卡一致性 / 质量趋势 / 可执行性评级三个分析开关随模板与 100 分制一起
      * 退场（架构选型 A9 / §6.4）——它们的输入（模板、分值）已不存在。
@@ -152,6 +150,10 @@ export declare class VaultStore {
     private sessionFile;
     /** 读会话门禁状态（`session.json`；损坏回空态，不阻断） */
     private sessionState;
+    /** 期望文件名（配置 `expectFile`，默认 `笔记期望.md`） */
+    private expectFileName;
+    /** 《笔记期望.md》的绝对路径（文件名由配置 `expectFile` 决定） */
+    private expectPath;
     /** 当前《笔记期望.md》的文件签名（`null` = 文件不存在） */
     private expectSignature;
     /** 组装门禁输入（三连校验共用） */

@@ -94,7 +94,6 @@ export interface VaultLayout {
     vaultRoot: string;
     stateDir: string;
     fallbackDir: string;
-    mocDir: string;
     domainFolders?: Record<string, string>;
     /** 额外跳过扫描的顶层目录名（与内置通用目录合并） */
     skipDirs?: string[];
@@ -112,6 +111,8 @@ export interface VaultLayout {
     maxWalkFiles?: number;
     /** 规划凭据有效期（小时，默认 24）：超期必须重新提案，避免门禁死锁 */
     planTtlHours?: number;
+    /** 《笔记期望.md》的文件名（vault 根下），默认 `笔记期望.md` */
+    expectFile?: string;
 }
 /** 索引读取上限（字节）：超过只取前 256KB 做 token 化——避免索引阶段把巨型文件读进内存 */
 export declare const MAX_INDEX_BYTES = 262144;
@@ -140,5 +141,3 @@ export declare function uniqueNotePath(dir: string, title: string, id: string): 
 /** @deprecated 旧名（卡片时代）；新调用点一律用 `uniqueNotePath` */
 export declare const uniqueCardPath: typeof uniqueNotePath;
 export declare function fileNameOf(p: string): string;
-/** MOC 落盘路径：mocDir/日期_标题.md */
-export declare function mocPathFor(layout: VaultLayout, title: string, date: string): string;
