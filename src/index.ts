@@ -38,9 +38,9 @@ import {
   applyOpenerDecision, buildOpenerReminder, hasPriorUserMessage, shouldInjectOpener,
 } from './opener.ts'
 import {
-  cardTitleOf, detectBrokenLinks, formatRenameReport, planRename, replaceCardTitle, rewriteCardLinks, rewriteWikilinks,
+  detectBrokenLinks, formatRenameReport, noteTitleOf, planRename, replaceNoteTitle, rewriteLinkLines, rewriteWikilinks,
   type BrokenLinkHit, type RenamePlan,
-} from './rename.ts'
+} from './links.ts'
 import { indexNote, SearchIndex, snippetOf, type IndexedCard, type NoteKind, type SearchHit } from './search.ts'
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
 import { buildToolDefs, type ToolDef } from './tools.ts'
@@ -604,14 +604,14 @@ export class VaultStore {
     const title = String(newTitle ?? '').trim()
     if (!title) throw new Error('newTitle 不能为空')
     if (/[\r\n]/.test(title)) throw new Error('newTitle 不能包含换行（会让 frontmatter 被截断）')
-    const oldTitle = cardTitleOf(raw) || card.title
+    const oldTitle = noteTitleOf(raw) || card.title
     if (title === oldTitle) throw new SameTitleError(`新标题与旧标题相同（${title}），无改动。`)
     const index = await this.ensureIndex(sessionCwd)
     const clash = index.byTitle(title)
     if (clash && clash.id !== card.id) throw new Error(`已存在同名卡片 "${title}"（${clash.fullRel}），请换标题`)
     const plan = planRename({ fileName: card.fileName, oldTitle, newTitle: title })
-    const rewritten = replaceCardTitle(raw, title)
-    const selfRewrite = rewriteCardLinks(parseFrontmatter(rewritten).body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
+    const rewritten = replaceNoteTitle(raw, title)
+    const selfRewrite = rewriteLinkLines(parseFrontmatter(rewritten).body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
     const selfText = `${rewritten.slice(0, rewritten.length - parseFrontmatter(rewritten).body.length)}${selfRewrite.text}`
     // 断链检测对象是**本卡改写后的正文**（BIZ-10：旧实现检测的是别人文件）
     const broken: BrokenLinkHit[] = detectBrokenLinks(selfRewrite.text, { oldTitle, oldId: card.id ?? undefined, newTitle: title })
@@ -634,7 +634,7 @@ export class VaultStore {
         continue
       }
       void needles
-      const linkRewrite = rewriteCardLinks(otherBody, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
+      const linkRewrite = rewriteLinkLines(otherBody, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
       let nextBody = linkRewrite.text
       let changedCount = linkRewrite.changed
       const samples = [...linkRewrite.samples]
@@ -664,7 +664,7 @@ export class VaultStore {
         continue
       }
       const parsed = parseFrontmatter(content)
-      const fresh = rewriteCardLinks(parsed.body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
+      const fresh = rewriteLinkLines(parsed.body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
       let freshBody = fresh.text
       let freshChanged = fresh.changed
       const freshSamples = [...fresh.samples]

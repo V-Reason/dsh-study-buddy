@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
-  cardTitleOf, detectBrokenLinks, formatRenameReport, planRename, replaceCardTitle, rewriteCardLinks, rewriteWikilinks,
-} from '../src/rename.ts'
+  detectBrokenLinks, formatRenameReport, noteTitleOf, planRename, replaceNoteTitle, rewriteLinkLines, rewriteWikilinks,
+} from '../src/links.ts'
 
 const CARD = [
   '---',
@@ -25,7 +25,7 @@ const CARD = [
 
 describe('rename 改名与入链重写', () => {
   test('replaceCardTitle：只改标题，其余字段与正文原样保留', () => {
-    const next = replaceCardTitle(CARD, 'URP IBL 接入与探针')
+    const next = replaceNoteTitle(CARD, 'URP IBL 接入与探针')
     expect(next).toContain('标题: URP IBL 接入与探针')
     expect(next).toContain('ID: 202609092139_92d2')
     expect(next).toContain('领域: #图形学-光照模型')
@@ -35,13 +35,13 @@ describe('rename 改名与入链重写', () => {
   })
 
   test('cardTitleOf：frontmatter 优先，回退正文一级标题', () => {
-    expect(cardTitleOf(CARD)).toBe('URP IBL 接入')
-    expect(cardTitleOf('# 裸标题\n正文')).toBe('裸标题')
-    expect(cardTitleOf('没有标题')).toBe('')
+    expect(noteTitleOf(CARD)).toBe('URP IBL 接入')
+    expect(noteTitleOf('# 裸标题\n正文')).toBe('裸标题')
+    expect(noteTitleOf('没有标题')).toBe('')
   })
 
   test('rewriteCardLinks：按 ID 命中改标题（ID 是可靠锚点）', () => {
-    const result = rewriteCardLinks(CARD, { oldTitle: 'URP IBL 接入', newTitle: 'URP IBL 接入与探针', targetId: '202609092139_92d2' })
+    const result = rewriteLinkLines(CARD, { oldTitle: 'URP IBL 接入', newTitle: 'URP IBL 接入与探针', targetId: '202609092139_92d2' })
     expect(result.changed).toBe(1)
     expect(result.text).toContain('- 后续：`URP IBL 接入与探针`（202609092139_92d2）')
     expect(result.text).toContain('- 前置：`间接光在实时渲染中的两个通道`（202609092139_2c27）')
@@ -50,7 +50,7 @@ describe('rename 改名与入链重写', () => {
 
   test('rewriteCardLinks：无 ID 时按反引号标题字面量改写（旧笔记按路径寻址）', () => {
     const raw = '### 关联卡片\n- 后续：`旧标题`（工作目录/旧笔记.md）\n- 前置：`无关`（x）'
-    const result = rewriteCardLinks(raw, { oldTitle: '旧标题', newTitle: '新标题' })
+    const result = rewriteLinkLines(raw, { oldTitle: '旧标题', newTitle: '新标题' })
     expect(result.changed).toBe(1)
     expect(result.text).toContain('`新标题`（工作目录/旧笔记.md）')
     expect(result.text).toContain('`无关`（x）')
@@ -58,7 +58,7 @@ describe('rename 改名与入链重写', () => {
 
   test('rewriteCardLinks：不误改正文里的标题出现（只动关联块的行）', () => {
     const raw = '### 核心思想\nURP IBL 接入 的关键是查表。\n\n### 关联\n- 后续：`URP IBL 接入`（202609092139_92d2）'
-    const result = rewriteCardLinks(raw, { oldTitle: 'URP IBL 接入', newTitle: '新名字', targetId: '202609092139_92d2' })
+    const result = rewriteLinkLines(raw, { oldTitle: 'URP IBL 接入', newTitle: '新名字', targetId: '202609092139_92d2' })
     expect(result.text).toContain('### 核心思想\nURP IBL 接入 的关键是查表。')
     expect(result.text).toContain('- 后续：`新名字`（202609092139_92d2）')
   })
