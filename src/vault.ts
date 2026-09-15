@@ -326,7 +326,6 @@ export interface VaultLayout {
   vaultRoot: string
   stateDir: string
   fallbackDir: string
-  mocDir: string
   domainFolders?: Record<string, string>
   /** 额外跳过扫描的顶层目录名（与内置通用目录合并） */
   skipDirs?: string[]
@@ -419,10 +418,3 @@ export function fileNameOf(p: string): string {
   return basename(p)
 }
 
-/** MOC 落盘路径：mocDir/日期_标题.md */
-export function mocPathFor(layout: VaultLayout, title: string, date: string): string {
-  const rel = join(layout.mocDir, `${sanitizeFilename(`${date}_${title}`)}.md`)
-  const abs = resolve(layout.vaultRoot, rel)
-  if (!withinRoot(layout.vaultRoot, abs)) throw new Error('MOC 路径越界')
-  return abs
-}

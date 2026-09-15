@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import {
-  atomicWrite, cardDirFor, containsRoot, dedupeFiles, dedupeRoots, findSimilarDomainKeys, isFsRoot, mocPathFor,
+  atomicWrite, cardDirFor, containsRoot, dedupeFiles, dedupeRoots, findSimilarDomainKeys, isFsRoot,
   resolveSearchRoots, sanitizeFilename, skipSetFor, uniqueCardPath, walk, withinRoot, MAX_WALK_DEPTH,
   type VaultLayout,
 } from '../src/vault.ts'
@@ -51,7 +51,6 @@ const layout = (domainFolders?: Record<string, string>): VaultLayout => ({
   vaultRoot: dir,
   stateDir: '.study',
   fallbackDir: '未分类',
-  mocDir: '目录',
   domainFolders: domainFolders ?? { 图形学与渲染: '游戏开发/图形学' },
 })
 
@@ -165,10 +164,7 @@ describe('vault', () => {
     expect(merged.map((f) => f.rel.replace(/\\/g, '/'))).toEqual(['计算机/卡片.md'])
   })
 
-  test('mocPathForUnderMocDir', () => {
-    const p = mocPathFor(layout(), '知识目录', '2026-08-16')
-    expect(p).toBe(join(dir, '目录', '2026-08-16_知识目录.md'))
-  })
+  // v1.0：MOC 已随 card_moc 退场（导航改由各级微目录承担），mocPathFor 与其用例一并删除
 
   // N6：文件数安全阀超限时截断 + 上报原因（旧实现直接 throw，让大库用户整体不可用）
   test('N6：walk 超过 maxFiles 时截断并上报（不抛错）', async () => {

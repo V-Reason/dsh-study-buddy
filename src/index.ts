@@ -60,13 +60,11 @@ export const inject = ['tools']
  * 插件配置：`VaultLayout` 的"可省略默认值"视图（EXT-6：配置类型只有一份定义，
  * 不再三处同构搬运；新增配置项只改 vault.ts）。
  */
-export interface StudyConfig extends Omit<VaultLayout, 'stateDir' | 'fallbackDir' | 'mocDir'> {
+export interface StudyConfig extends Omit<VaultLayout, 'stateDir' | 'fallbackDir'> {
   /** 进度状态目录（相对 vaultRoot），默认 .study */
   stateDir?: string
   /** 未映射领域的落盘目录（相对 vaultRoot），默认 未分类 */
   fallbackDir?: string
-  /** MOC 知识目录落盘位置（相对 vaultRoot），默认 目录 */
-  mocDir?: string
 }
 
 /** 进度队列长度上限（BIZ-11f：无上限会长成 progress.json 里的巨型数组） */
@@ -109,7 +107,6 @@ function normalizeConfig(config: StudyConfig | undefined): VaultLayout {
     vaultRoot,
     stateDir: String(config.stateDir ?? '.study').trim() || '.study',
     fallbackDir: String(config.fallbackDir ?? '未分类').trim() || '未分类',
-    mocDir: String(config.mocDir ?? '目录').trim() || '目录',
     domainFolders: config.domainFolders ?? {},
     skipDirs: Array.isArray(config.skipDirs) ? config.skipDirs.map(String) : [],
     searchRoots: Array.isArray(config.searchRoots) ? config.searchRoots.map(String) : [],
@@ -516,7 +513,7 @@ export class VaultStore {
   }
 
   /**
-   * 质量体检（card_lint）。
+   * 质量体检（note_lint）。
    *
    * 2026-10：跨卡一致性 / 质量趋势 / 可执行性评级三个分析开关随模板与 100 分制一起
    * 退场（架构选型 A9 / §6.4）——它们的输入（模板、分值）已不存在。
@@ -599,7 +596,7 @@ export class VaultStore {
     this.invalidate()
     const { card, raw } = await this.resolveCard(ref, sessionCwd)
     if (card.id === null) {
-      throw new Error(`"${card.title}" 是旧笔记（无 ID），不支持改名；请用 Obsidian 重命名，或用 card_update(replace) 原地升级为卡片`)
+      throw new Error(`"${card.title}" 是旧笔记（无 ID），不支持改名；请用 Obsidian 重命名，或用 note_update(replace) 原地升级为块`)
     }
     this.assertWritable(card)
     const title = String(newTitle ?? '').trim()
