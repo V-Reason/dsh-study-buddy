@@ -344,6 +344,8 @@ export interface VaultLayout {
   maxWalkFiles?: number
   /** 规划凭据有效期（小时，默认 24）：超期必须重新提案，避免门禁死锁 */
   planTtlHours?: number
+  /** 《笔记期望.md》的文件名（vault 根下），默认 `笔记期望.md` */
+  expectFile?: string
 }
 
 /** 索引读取上限（字节）：超过只取前 256KB 做 token 化——避免索引阶段把巨型文件读进内存 */

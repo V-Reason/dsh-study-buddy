@@ -306,4 +306,32 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     const record = buildPlanRecord({ rootPath: ROOT, items: ITEMS })
     expect(record.confirmed).toBe(false)
   })
+
+  test('expectFile 配置生效：自定义文件名也要能被读到与门禁校验', async () => {
+    // 2026-10 收口修复：此前该键"配了不生效"（路径写死常量），属静默陷阱
+    await rm(join(dir, '笔记期望.md'), { force: true })
+    await writeFile(join(dir, '我的笔记期望.md'), EXPECT_TEXT, 'utf8')
+    const s = new VaultStore({
+      vaultRoot: dir, stateDir: '.study', fallbackDir: '未分类', mocDir: '目录', expectFile: '我的笔记期望.md',
+    })
+    const check = await s.noteLibrary('check')
+    // 自定义文件名被真的读到了：状态是"尚未读取"，而不是"文件不存在"
+    expect(check).toContain('笔记期望尚未读取')
+    expect(check).not.toContain('笔记期望文件不存在')
+    const read = await s.noteExpectGet()
+    expect(read).toContain('已读取笔记期望：我的笔记期望.md')
+    expect(await s.noteLibrary('check')).toContain('- 笔记期望：已读（我的笔记期望.md）')
+    // 门禁按自定义文件名开门：规划确认后可以写入
+    const planId = await planAndConfirm(s)
+    await expect(s.noteWrite({
+      planId, title: '高斯消元法', path: ITEMS[0].path, source: '《计算方法》', content: '正文。',
+    })).resolves.toContain('已写入：')
+  })
+
+  test('expectPathFor 拒绝含路径分隔符的文件名（越界防御）', async () => {
+    const s = new VaultStore({
+      vaultRoot: dir, stateDir: '.study', fallbackDir: '未分类', mocDir: '目录', expectFile: '../外面.md',
+    })
+    await expect(s.noteLibrary('check')).rejects.toThrow(/不能含路径分隔符/)
+  })
 })

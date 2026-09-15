@@ -121,6 +121,7 @@ function normalizeConfig(config: StudyConfig | undefined): VaultLayout {
     planTtlHours: Number.isFinite(Number(config.planTtlHours)) && Number(config.planTtlHours) > 0
       ? Number(config.planTtlHours)
       : 24,
+    expectFile: String(config.expectFile ?? '').trim() || EXPECT_FILE,
   }
 }
 
@@ -471,7 +472,7 @@ export class VaultStore {
    */
   private async expectRules(): Promise<ExpectRule[]> {
     try {
-      const raw = await fsp.readFile(expectPathFor(this.layout.vaultRoot), 'utf8')
+      const raw = await fsp.readFile(this.expectPath(), 'utf8')
       return parseExpectRules(raw)
     } catch {
       return []
@@ -787,9 +788,19 @@ export class VaultStore {
     return readSession(this.sessionFile())
   }
 
+  /** 期望文件名（配置 `expectFile`，默认 `笔记期望.md`） */
+  private expectFileName(): string {
+    return this.layout.expectFile ?? EXPECT_FILE
+  }
+
+  /** 《笔记期望.md》的绝对路径（文件名由配置 `expectFile` 决定） */
+  private expectPath(): string {
+    return expectPathFor(this.layout.vaultRoot, this.expectFileName())
+  }
+
   /** 当前《笔记期望.md》的文件签名（`null` = 文件不存在） */
   private async expectSignature(): Promise<string | null> {
-    return signatureOf(expectPathFor(this.layout.vaultRoot))
+    return signatureOf(this.expectPath())
   }
 
   /** 组装门禁输入（三连校验共用） */
@@ -822,9 +833,9 @@ export class VaultStore {
       `- 领域快捷方式：${Object.keys(this.layout.domainFolders ?? {}).length} 个（落盘目录以规划确认为准）`,
       '',
       signature === null
-        ? `⚠ 笔记期望文件不存在：${EXPECT_FILE}（应在 vault 根）——请先把 presets/study/assets/笔记期望.md 复制到 vault 根并改成你的写法，否则无法写入`
+        ? `⚠ 笔记期望文件不存在：${this.expectFileName()}（应在 vault 根）——请先把 presets/study/assets/笔记期望.md 复制到 vault 根并改成你的写法，否则无法写入`
         : session.expect?.signature === signature
-          ? `- 笔记期望：已读（${EXPECT_FILE}）`
+          ? `- 笔记期望：已读（${this.expectFileName()}）`
           : `⚠ 笔记期望尚未读取（或已更新）：请调用 note_expect_get 读取后再写入`,
       session.activePlanId ? `- 待消费规划：${session.activePlanId}` : '- 待消费规划：无',
       this.noteSkips(),
@@ -835,19 +846,19 @@ export class VaultStore {
   /** `note_expect_get`：读期望全文并**标记已读**（门禁开门动作） */
   async noteExpectGet(): Promise<string> {
     await this.assertVault()
-    const expectPath = expectPathFor(this.layout.vaultRoot)
+    const expectPath = this.expectPath()
     let raw: string
     try {
       raw = await fsp.readFile(expectPath, 'utf8')
     } catch {
       throw new Error(
-        `${EXPECT_FILE} 不存在（期望路径：${expectPath}）——请先把 presets/study/assets/笔记期望.md 复制到 vault 根并改成你的写法。`
+        `${this.expectFileName()} 不存在（期望路径：${expectPath}）——请先把 presets/study/assets/笔记期望.md 复制到 vault 根并改成你的写法。`
         + '笔记写法只从这份文件来，代码里没有内建模板。',
       )
     }
     const signature = await signatureOf(expectPath)
     if (signature) await markExpectRead(this.sessionFile(), { signature, rel: EXPECT_FILE })
-    return `已读取笔记期望：${EXPECT_FILE}（${raw.split(/\r?\n/).length} 行）\n\n${raw}`
+    return `已读取笔记期望：${this.expectFileName()}（${raw.split(/\r?\n/).length} 行）\n\n${raw}`
   }
 
   /**

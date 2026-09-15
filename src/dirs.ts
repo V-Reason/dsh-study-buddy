@@ -62,10 +62,19 @@ export function depthOf(dir: string): number {
   return dirSegments(dir).length
 }
 
-/** 笔记期望文件的绝对路径 */
-export function expectPathFor(vaultRoot: string): string {
-  const p = resolve(vaultRoot, EXPECT_FILE)
-  if (!withinRoot(vaultRoot, p)) throw new Error(`笔记期望路径越界：${EXPECT_FILE}`)
+/**
+ * 笔记期望文件的绝对路径。
+ *
+ * `fileName` 来自配置 `expectFile`（默认 `笔记期望.md`）。这个参数是 2026-10 收口时补的：
+ * 之前该配置键**配了不生效**（路径写死常量），属于"配了没用"的静默陷阱。
+ */
+export function expectPathFor(vaultRoot: string, fileName = EXPECT_FILE): string {
+  const name = String(fileName ?? '').trim() || EXPECT_FILE
+  if (name.includes('/') || name.includes('\\')) {
+    throw new Error(`笔记期望文件名不能含路径分隔符：${name}（应只是 vault 根下的文件名）`)
+  }
+  const p = resolve(vaultRoot, name)
+  if (!withinRoot(vaultRoot, p)) throw new Error(`笔记期望路径越界：${name}`)
   return p
 }
 
