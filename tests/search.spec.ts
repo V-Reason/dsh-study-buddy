@@ -105,13 +105,13 @@ describe('SearchIndex', () => {
     expect(index.candidatesForRef('不存在.md')).toEqual([])
   })
 
-  test('indexNote 标记根与类型（card=有 ID，note=无 ID）', () => {
+  test('indexNote 标记根与类型（block=有 ID 且有来源章节，legacy=有 ID，note=无 ID）', () => {
     const note = indexNote(file('CS/迭代器.md', '工作目录'), LEGACY)
     expect(note.root).toBe('工作目录')
     expect(note.kind).toBe('note')
     expect(note.fullRel).toBe('工作目录/CS/迭代器.md')
     const card = indexNote(file('计算机/图形学/透视投影矩阵.md', 'vault'), CARD)
-    expect(card.kind).toBe('card')
+    expect(card.kind).toBe('legacy')
     expect(card.fullRel).toBe('vault/计算机/图形学/透视投影矩阵.md')
   })
 
@@ -122,20 +122,35 @@ describe('SearchIndex', () => {
       indexNote(file('图形学/投影矩阵草稿.md', '工作目录'), '> 概念: 投影矩阵草稿\n\n# 投影矩阵草稿\n正文\n'),
     ], true)
     const hits = index.search('投影矩阵')
-    expect(hits.map((h) => h.kind)).toEqual(expect.arrayContaining(['card', 'note']))
+    expect(hits.map((h) => h.kind)).toEqual(expect.arrayContaining(['legacy', 'note']))
     expect(hits.length).toBe(2)
     // 分数降序（同分兜底：卡片优先于旧笔记，且 fullRel 字典序）
     for (let i = 1; i < hits.length; i++) expect(hits[i - 1].score).toBeGreaterThanOrEqual(hits[i].score)
     const noteHit = hits.find((h) => h.kind === 'note')!
     expect(noteHit.fullRel).toBe('工作目录/图形学/投影矩阵草稿.md')
     expect(index.search('投影矩阵', { kind: 'note' }).length).toBe(1)
-    expect(index.search('投影矩阵', { kind: 'card' })[0].id).toBe('202608161430_ab12')
+    expect(index.search('投影矩阵', { kind: 'legacy' })[0].id).toBe('202608161430_ab12')
   })
 
   test('单根重建时 fullRel 不带根前缀（向后兼容展示）', () => {
     const index = new SearchIndex()
     index.rebuild([indexNote(file('计算机/图形学/透视投影矩阵.md'), CARD)])
     expect(index.search('投影矩阵')[0].fullRel).toBe('计算机/图形学/透视投影矩阵.md')
+  })
+
+  // A4：索引只驻留元数据 + 倒排 token，**不再保存正文**。
+  // 这条断言是"内存不随笔记变长而膨胀"的守门人：有人把 body 加回 IndexedCard 就会红。
+  test('索引不常驻正文（A4）：IndexedCard 与命中结果都不含 body 字段', () => {
+    const big = `---\nID: 202610241200_abcdef\n标题: 大笔记\n---\n\n> 定位\n\n${'正文内容大量重复。'.repeat(2000)}`
+    const index = new SearchIndex()
+    index.rebuild([indexNote(file('大笔记.md'), big)])
+    const card = index.all()[0] as unknown as Record<string, unknown>
+    expect('body' in card).toBe(false)
+    // 正文仍然**可被搜到**（token 化了，只是不留原文）
+    expect(index.search('正文内容').length).toBe(1)
+    const hit = index.search('正文内容')[0] as unknown as Record<string, unknown>
+    expect('body' in hit).toBe(false)
+    expect(hit.snippet).toBeNull() // snippet 由调用方按需读盘后填入
   })
 
   test('candidatesForRef 支持根限定路径与歧义', () => {

@@ -33,12 +33,12 @@ import {
   cardTitleOf, detectBrokenLinks, formatRenameReport, planRename, replaceCardTitle, rewriteCardLinks, rewriteWikilinks,
   type BrokenLinkHit, type RenamePlan,
 } from './rename.ts'
-import { indexNote, SearchIndex, type IndexedCard, type SearchHit } from './search.ts'
+import { indexNote, SearchIndex, snippetOf, type IndexedCard, type NoteKind, type SearchHit } from './search.ts'
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
 import { buildToolDefs, type ToolDef } from './tools.ts'
 import {
   atomicWrite, canonicalRootKey, cardDirFor, dedupeFiles, dedupeRoots, findSimilarDomainKeys, isFsRoot, MAX_WALK_FILES,
-  mocPathFor, resolveSearchRoots, sanitizeFilename, skipSetFor, uniqueNotePath, walkRoots, withinRoot,
+  mocPathFor, readNoteSource, resolveSearchRoots, sanitizeFilename, skipSetFor, uniqueNotePath, walkRoots, withinRoot,
   type SearchRoot, type VaultLayout,
 } from './vault.ts'
 
@@ -123,6 +123,8 @@ function byUniqueRef(index: SearchIndex, ref: string): IndexedCard | undefined {
   return candidates[0]
 }
 
+const KIND_LABEL: Record<string, string> = { block: '块', legacy: '存量卡', note: '旧笔记' }
+
 function fmtHits(hits: SearchHit[]): string {
   const lines = hits.map((h) => {
     const id = h.id ? ` [${h.id}]` : ''
@@ -130,15 +132,16 @@ function fmtHits(hits: SearchHit[]): string {
       h.domain ? `领域: ${h.domain}` : `目录: ${h.inferredDomain}`,
       h.status ? `状态: ${h.status}` : '',
       h.source ? `来源: ${h.source}` : '',
+      h.sourceSection ? `来源章节: ${h.sourceSection}` : '',
     ].filter(Boolean).join('，')
-    const def = h.definition ? `- 定义：${h.definition.length > 40 ? `${h.definition.slice(0, 40)}…` : h.definition}` : ''
+    const def = h.definition ? `- 简介：${h.definition.length > 60 ? `${h.definition.slice(0, 60)}…` : h.definition}` : ''
     return [
       `### ${h.title}${id}`,
-      `- 类型：${h.kind === 'card' ? '卡片' : '旧笔记'}`,
+      `- 类型：${KIND_LABEL[h.kind] ?? h.kind}`,
       `- 路径：${h.fullRel}`,
       meta ? `- ${meta}` : '',
       def,
-      `- 片段：${h.snippet}`,
+      h.snippet ? `- 片段：${h.snippet}` : '',
     ].filter(Boolean).join('\n')
   })
   return lines.join('\n\n')
@@ -326,7 +329,8 @@ export class VaultStore {
     const cards: IndexedCard[] = []
     for (const f of files) {
       try {
-        const raw = await fsp.readFile(f.path, 'utf8')
+        // 4a：读盘量不退化，但索引**不再保存正文**（只留倒排 token），见架构选型 A4
+        const { raw } = await readNoteSource(f.path)
         cards.push(indexNote(f, raw))
       } catch (error) {
         // 读取失败（锁定/删除）：计入 skipped 并回显，不再静默（BIZ-7）
@@ -372,7 +376,7 @@ export class VaultStore {
     return { card, raw }
   }
 
-  async search(query: string, opts: { domain?: string; status?: string; kind?: 'card' | 'note'; limit?: number } = {}, call?: { sessionCwd?: string }): Promise<string> {
+  async search(query: string, opts: { domain?: string; status?: string; kind?: NoteKind; dirPath?: string; limit?: number } = {}, call?: { sessionCwd?: string }): Promise<string> {
     let index = await this.ensureIndex(call?.sessionCwd)
     let hits = index.search(query, opts)
     if (hits.length === 0 && this.servedFromCache) {
@@ -381,8 +385,18 @@ export class VaultStore {
       hits = index.search(query, opts)
     }
     if (hits.length === 0) {
-      return `未命中（共检索 ${index.size} 篇${this.indexScopes(index)}）。可换词再试；新概念直接进入讲解，归档时新建卡片。${this.noteSkips()}`
+      return `未命中（共检索 ${index.size} 篇${this.indexScopes(index)}）。可换词再试；新概念直接进入讲解，归档时新建笔记。${this.noteSkips()}`
     }
+    // snippet 只在命中前 N 篇时现读正文（PERF-6：旧实现对全部命中算 snippet 再丢弃）
+    const tokens = SearchIndex.queryTokens(query)
+    hits = await Promise.all(hits.map(async (hit) => {
+      try {
+        const body = parseFrontmatter(await fsp.readFile(hit.path, 'utf8')).body
+        return { ...hit, snippet: snippetOf(body, tokens) }
+      } catch {
+        return hit
+      }
+    }))
     return `命中 ${hits.length}（共 ${index.size} 篇${this.indexScopes(index)}）：\n\n${fmtHits(hits)}${this.noteSkips()}`
   }
 
@@ -607,12 +621,23 @@ export class VaultStore {
     }, { ...this.lintCtx(), kind: this.kindOf(card) })
   }
 
-  /** 批量报告：直接用索引里已有的正文，不再逐文件读盘（PERF-2） */
-  private reportOfIndexed(card: IndexedCard): LintReport {
+  /**
+   * 批量报告：正文按需现读（A4 之后索引不再持有正文）。
+   *
+   * 代价是批量体检要逐篇读盘——这是"索引不常驻正文"的必然交换：内存从
+   * 全库正文降到倒排表，而批量体检本来就是低频重操作。
+   */
+  private async reportOfIndexed(card: IndexedCard): Promise<LintReport> {
+    let body = ''
+    try {
+      body = parseFrontmatter(await fsp.readFile(card.path, 'utf8')).body
+    } catch (error) {
+      this.skipped.push({ path: card.path, reason: `文件读取失败（${(error as NodeJS.ErrnoException).code ?? '未知错误'}）` })
+    }
     return lintNote({
       title: card.title,
       summary: card.definition ?? '',
-      body: card.body,
+      body,
     }, { ...this.lintCtx(), kind: this.kindOf(card) })
   }
 
@@ -657,7 +682,7 @@ export class VaultStore {
     // 默认只体检"块 + 存量卡"（有 ID）；scope='all' 才带上旧笔记
     const cards = index.all().filter((c) => (opts.scope === 'all' ? true : c.id !== null))
     if (cards.length === 0) return '未找到可体检的笔记。'
-    const reports: LintReport[] = cards.map((card) => this.reportOfIndexed(card))
+    const reports: LintReport[] = await Promise.all(cards.map((card) => this.reportOfIndexed(card)))
     if (opts.rule) {
       const hit = reports.filter((r) => r.findings.some((f) => f.rule === opts.rule))
       const lines = [`规则 ${opts.rule}（${ruleTitle(opts.rule)}）：${hit.length}/${reports.length} 篇命中`]
@@ -749,13 +774,22 @@ export class VaultStore {
     const needles = [oldTitle, plan.oldBase, card.id].filter(Boolean) as string[]
     for (const other of index.all()) {
       if (canonicalRootKey(other.path) === canonicalRootKey(card.path)) continue
-      // 预筛（PERF-5）：索引里已持有正文，不含任何待改字面量的文件直接跳过，不读盘
-      if (!needles.some((n) => other.body.includes(n))) continue
-      const linkRewrite = rewriteCardLinks(other.body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
+      // 预筛说明：A4 之后索引不再持有正文，无法再用"正文不含待改字面量就跳过"。
+      // 改为**不预筛**（索引里仍有的元数据不足以判断 wikilink 的目标名）——改名的
+      // 正确性优先于省几次读盘，且只有真的改动了（freshChanged > 0）才会进写入计划。
+      let otherBody = ''
+      try {
+        otherBody = parseFrontmatter(await fsp.readFile(other.path, 'utf8')).body
+      } catch (error) {
+        this.skipped.push({ path: other.path, reason: `文件读取失败（${(error as NodeJS.ErrnoException).code ?? '未知错误'}）` })
+        continue
+      }
+      void needles
+      const linkRewrite = rewriteCardLinks(otherBody, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
       let nextBody = linkRewrite.text
       let changedCount = linkRewrite.changed
       const samples = [...linkRewrite.samples]
-      if (other.kind === 'card') {
+      if (other.id !== null) {
         const wiki = rewriteWikilinks(nextBody, plan.oldBase, plan.newBase)
         nextBody = wiki.text
         changedCount += wiki.changed
@@ -785,7 +819,7 @@ export class VaultStore {
       let freshBody = fresh.text
       let freshChanged = fresh.changed
       const freshSamples = [...fresh.samples]
-      if (other.kind === 'card') {
+      if (other.id !== null) {
         const wiki = rewriteWikilinks(freshBody, plan.oldBase, plan.newBase)
         freshBody = wiki.text
         freshChanged += wiki.changed
@@ -795,7 +829,7 @@ export class VaultStore {
       if (freshChanged === 0) continue
       const fileHead = content.slice(0, content.length - parsed.body.length)
       writes.push({ path: other.path, text: `${fileHead}${freshBody}` })
-      changed.push({ rel: other.fullRel, kind: other.kind === 'card' ? '卡片入链' : '文档入链', changed: freshChanged, samples: freshSamples })
+      changed.push({ rel: other.fullRel, kind: other.id !== null ? '笔记入链' : '旧笔记入链', changed: freshChanged, samples: freshSamples })
     }
     // ── 全部冲突校验前置（BIZ-2）：任何写入之前完成 ──
     let targetPath: string | null = null

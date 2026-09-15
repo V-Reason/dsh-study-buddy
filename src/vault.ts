@@ -344,8 +344,34 @@ export interface VaultLayout {
   maxWalkFiles?: number
 }
 
+/** 索引读取上限（字节）：超过只取前 256KB 做 token 化——避免索引阶段把巨型文件读进内存 */
+export const MAX_INDEX_BYTES = 262144
+
 /**
- * 解析某领域键的落盘目录：优先 `domainFolders` 快捷方式，未映射落入
+ * 读一篇笔记用于**建索引**：返回全文（受 `MAX_INDEX_BYTES` 截断，`truncated` 标记）。
+ *
+ * 为什么不像 `dirs.readNoteHeader` 那样只读 4KB 头：检索要对**正文**做 token 化，
+ * 只读头会让"正文里的关键词"搜不到。这里读全文但设上限——索引常驻的内存由
+ * "不再保存正文"（架构选型 A4）保证，单次读盘量则与旧实现持平。
+ */
+export async function readNoteSource(
+  filePath: string,
+  maxBytes = MAX_INDEX_BYTES,
+): Promise<{ raw: string; truncated: boolean }> {
+  const handle = await fsp.open(filePath, 'r')
+  try {
+    const st = await handle.stat()
+    const size = Math.min(st.size, maxBytes)
+    if (size === st.size) return { raw: await fsp.readFile(filePath, 'utf8'), truncated: false }
+    const buf = Buffer.alloc(size)
+    const { bytesRead } = await handle.read(buf, 0, size, 0)
+    return { raw: buf.subarray(0, bytesRead).toString('utf8'), truncated: true }
+  } finally {
+    await handle.close()
+  }
+}
+
+/** 解析某领域键的落盘目录：优先 `domainFolders` 快捷方式，未映射落入
  * `fallbackDir/<领域名>`。
  *
  * 2026-10 起这只是**兜底路径**：正常情况下目录来自用户确认的文件夹规划

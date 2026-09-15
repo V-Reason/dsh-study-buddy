@@ -86,7 +86,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       execute: (args, exec) => store.search(String(args.query ?? ''), {
         domain: args.domain ? String(args.domain) : undefined,
         status: args.status ? String(args.status) : undefined,
-        kind: args.kind === 'card' || args.kind === 'note' ? args.kind : undefined,
+        kind: args.kind === 'block' || args.kind === 'legacy' || args.kind === 'note' ? args.kind : undefined,
         limit: Number(args.limit) > 0 ? Number(args.limit) : undefined,
       }, { sessionCwd: sessionCwdOf(exec) }),
     },

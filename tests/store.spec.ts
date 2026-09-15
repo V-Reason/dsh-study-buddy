@@ -105,7 +105,7 @@ describe('VaultStore 端到端', () => {
     const search = await store.search('投影矩阵')
     expect(search).toContain('透视投影矩阵的三步分解')
     // 定稿格式卡片检索结果展示一句话定义（extractDefinition 裸引用块回退）
-    expect(search).toContain('- 定义：透视投影矩阵可拆解为缩放、平移与齐次除三步')
+    expect(search).toContain('- 简介：透视投影矩阵可拆解为缩放、平移与齐次除三步')
     const legacy = await store.search('迭代器')
     expect(legacy).toContain('迭代器主要方法')
     expect(legacy).toContain('目录: 计算机')
@@ -449,7 +449,7 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
     const store = new VaultStore({ ...layout(), searchRoots: [extra], includeSessionCwd: true })
 
     const mixed = await store.search('投影矩阵', {}, { sessionCwd: cwdDir })
-    expect(mixed).toContain('类型：卡片')
+    expect(mixed).toContain('类型：存量卡')
     expect(mixed).toContain('类型：旧笔记')
     expect(mixed).toContain(`- 路径：${basename(extra)}/图形学/投影矩阵旧笔记.md`)
     expect(mixed).toContain(`来源：vault / ${basename(extra)} / 工作目录`)
@@ -460,9 +460,9 @@ describe('VaultStore 多根检索（工作目录与额外根的旧笔记）', ()
 
     // 不传 cwd：工作目录不可见（vault 无此笔记）
     expect(await store.search('迭代器', {}, {})).toContain('未命中')
-    // kind 过滤：只找卡片
-    const onlyCards = await store.search('投影矩阵', { kind: 'card' }, { sessionCwd: cwdDir })
-    expect(onlyCards).toContain('类型：卡片')
+    // kind 过滤：只找有 ID 的笔记（存量卡）
+    const onlyCards = await store.search('投影矩阵', { kind: 'legacy' }, { sessionCwd: cwdDir })
+    expect(onlyCards).toContain('类型：存量卡')
     expect(onlyCards).not.toContain('类型：旧笔记')
   })
 
