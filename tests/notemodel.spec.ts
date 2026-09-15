@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'vitest'
 import {
-  blankOutBlocks, codeFenceLanguages, countListItems, findSection, inlineText, makeLineOf,
-  insertBlockBefore, layerNumbers, matchesTitle, renderSections, splitSections,
-} from '../src/cardmodel.ts'
+  blankOutBlocks, codeFenceLanguages, findSection, inlineText, makeLineOf,
+  insertBlockBefore, matchesTitle, renderSections, splitSections,
+} from '../src/notemodel.ts'
 
 const BODY = [
-  '> 一句话定义',
+  '> 一句话定位',
   '',
   '### 核心思想',
   '讲清 + 为什么 + 锚点',
@@ -16,18 +16,18 @@ const BODY = [
   '### 实例走查',
   '数值代入',
   '',
-  '### 关联卡片',
-  '- 前置：`A`（id1）',
+  '### 关联',
+  '- 前置：[[A]]',
 ].join('\n')
 
-describe('cardmodel 段落模型', () => {
+describe('notemodel 段落模型', () => {
   test('splitSections 切出 lead 与小节，正文不含标题行', () => {
     const { lead, sections } = splitSections(BODY)
-    expect(lead).toBe('> 一句话定义')
-    expect(sections.map((s) => s.title)).toEqual(['核心思想', '阶梯式解剖（第 1 层 → 第 4 层）', '实例走查', '关联卡片'])
+    expect(lead).toBe('> 一句话定位')
+    expect(sections.map((s) => s.title)).toEqual(['核心思想', '阶梯式解剖（第 1 层 → 第 4 层）', '实例走查', '关联'])
     expect(sections[0].body).toBe('讲清 + 为什么 + 锚点')
     expect(sections[0].level).toBe(3)
-    expect(sections[3].body).toBe('- 前置：`A`（id1）')
+    expect(sections[3].body).toBe('- 前置：[[A]]')
   })
 
   test('renderSections 往返等价（空行归一化后逐字一致）', () => {
@@ -72,33 +72,23 @@ describe('cardmodel 段落模型', () => {
     expect(lineOf(999)).toBe(4)
   })
 
-  test('insertBlockBefore：插到「关联卡片」之前，不破坏前后空行', () => {
-    const text = insertBlockBefore(BODY, '### 版本更新（来源：X）\n补充内容')
-    expect(text.indexOf('### 版本更新')).toBeGreaterThan(text.indexOf('### 实例走查'))
-    expect(text.indexOf('### 版本更新')).toBeLessThan(text.indexOf('### 关联卡片'))
-    expect(text).toContain('- 前置：`A`（id1）')
+  test('insertBlockBefore：插到「关联」之前，不破坏前后空行', () => {
+    const text = insertBlockBefore(BODY, '### 补充（来源：X）\n补充内容')
+    expect(text.indexOf('### 补充')).toBeGreaterThan(text.indexOf('### 实例走查'))
+    expect(text.indexOf('### 补充')).toBeLessThan(text.indexOf('### 关联'))
+    expect(text).toContain('- 前置：[[A]]')
     expect(text).not.toContain('\n\n\n')
   })
 
-  test('insertBlockBefore：无关联卡片小节时追加到末尾', () => {
-    const raw = '> 定义\n\n### 核心思想\n内容'
-    const text = insertBlockBefore(raw, '### 勘误\n纠正')
-    expect(text.endsWith('### 勘误\n纠正')).toBe(true)
+  test('insertBlockBefore：无「关联」小节时追加到末尾', () => {
+    const raw = '> 定位\n\n### 核心思想\n内容'
+    const text = insertBlockBefore(raw, '### 补充\n补充内容')
+    expect(text.endsWith('### 补充\n补充内容')).toBe(true)
     expect(text).toContain('### 核心思想\n内容')
   })
 
   test('codeFenceLanguages 取语言标注（空串 = 未标）', () => {
     expect(codeFenceLanguages('```hlsl\nx\n```\n```\ny\n```')).toEqual(['hlsl', ''])
-  })
-
-  test('layerNumbers 提取层号并去重排序', () => {
-    expect(layerNumbers('第 3 层 第 1 层 第 2 层 第 2 层')).toEqual([1, 2, 3])
-    expect(layerNumbers('没有层级')).toEqual([])
-  })
-
-  test('countListItems 统计编号与项目符号', () => {
-    expect(countListItems('1. a\n2. b\n- c\n* d')).toBe(4)
-    expect(countListItems('只有段落')).toBe(0)
   })
 
   test('blankOutBlocks 抹掉代码块与 details（保留行号）', () => {

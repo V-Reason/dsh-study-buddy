@@ -6,7 +6,7 @@
  * @module insight
  */
 
-import { codeFenceLanguages, findSection, makeLineOf, splitSections } from './cardmodel.ts'
+import { codeFenceLanguages, findSection, makeLineOf, splitSections } from './notemodel.ts'
 import type { LintReport } from './lint.ts'
 
 export interface CardFact {

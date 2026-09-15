@@ -8,7 +8,7 @@
  * @module lint
  */
 
-import { blankOutBlocks, findSection, hasSection, splitSections, type CardSection } from './cardmodel.ts'
+import { blankOutBlocks, findSection, hasSection, splitSections, type CardSection } from './notemodel.ts'
 import { DEFINITION_MAX } from './card.ts'
 import {
   ENGINEERING_SECTIONS, PREREQ_SECTION, REENTRY_SECTION, templateSpec,

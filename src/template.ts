@@ -7,7 +7,7 @@
  * @module template
  */
 
-import { hasSection, splitSections, type CardSection } from './cardmodel.ts'
+import { hasSection, splitSections, type CardSection } from './notemodel.ts'
 
 export const TEMPLATE_TYPES = ['理论型', '工程型', '对比型'] as const
 export type TemplateType = (typeof TEMPLATE_TYPES)[number]

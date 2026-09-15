@@ -8,7 +8,7 @@
  */
 
 import { parseFrontmatter } from './frontmatter.ts'
-import { findSection, inlineText, renderSections, splitSections } from './cardmodel.ts'
+import { findSection, inlineText, renderSections, splitSections } from './notemodel.ts'
 import { sanitizeFilename } from './vault.ts'
 
 /** 转义正则元字符（用于把标题/文件名当字面量匹配） */

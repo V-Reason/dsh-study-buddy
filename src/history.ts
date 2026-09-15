@@ -7,7 +7,7 @@
  * @module history
  */
 
-import { inlineText, insertBlockBefore, makeLineOf, renderSections, splitSections } from './cardmodel.ts'
+import { inlineText, insertBlockBefore, makeLineOf, renderSections, splitSections } from './notemodel.ts'
 
 export type HistoryKind = 'version' | 'errata' | 'details'
 

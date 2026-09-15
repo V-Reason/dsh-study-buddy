@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { inlineText, matchesTitle, splitSections } from './cardmodel.ts'
+import { inlineText, matchesTitle, splitSections } from './notemodel.ts'
 import { parseFrontmatter, renderFrontmatter } from './frontmatter.ts'
 import { errataBlock, insertHistoryBlock, versionBlock } from './history.ts'
 import { checkTemplate, inferTemplate, isTemplateType, sectionHints, type TemplateHints, type TemplateType } from './template.ts'
@@ -174,10 +174,15 @@ export function renderCard(card: CardDoc): string {
     domain: tags.map((t) => `#${t}`).join(' '),
     source: card.source,
     status: card.status,
-    template: card.template,
   }
   const body = `> ${inlineText(card.definition)}\n\n${card.content.trim()}\n` + linksSection(card.links)
-  return `${renderFrontmatter(meta)}\n${body}`
+  // 迁移期：`模板` 键已从 frontmatter 渲染口径移出（模板概念退场），这里按旧格式
+  // 补回「状态」之后、「---」之前，保证存量卡与 legacy 用例在阶段 3~6 期间字节不变。
+  const rendered = renderFrontmatter(meta).trimEnd()
+  if (!card.template) return `${rendered}\n\n${body}`
+  const lines = rendered.split('\n')
+  lines.splice(lines.length - 1, 0, `模板: ${inlineText(card.template)}`)
+  return `${lines.join('\n')}\n\n${body}`
 }
 
 export type UpdateMode = 'append-version' | 'errata' | 'definition' | 'replace'

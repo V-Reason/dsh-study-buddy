@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { splitSections } from '../src/cardmodel.ts'
+import { splitSections } from '../src/notemodel.ts'
 import {
   checkCodeFences, checkDomainTags, checkExperiments, checkLayers, checkLinksBlock,
   checkSelfTest, countSection, scanResidue,

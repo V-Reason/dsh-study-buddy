@@ -14,7 +14,7 @@
 import {
   blankOutBlocks, codeFenceLanguages, countListItems, findSection, layerNumbers, matchesTitle,
   type CardSection,
-} from './cardmodel.ts'
+} from './notemodel.ts'
 
 /** 会话残留：文件路径（`.md` 引用不算——卡片互引是合法内容） */
 export const RESIDUE_PATH_RE = /(?:[A-Za-z]:\\|Assets[\\/]|\.(?:shader|unity|mat|asset|hlsl|cs|cginc|compute)\b)/
