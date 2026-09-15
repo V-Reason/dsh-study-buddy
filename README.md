@@ -122,6 +122,15 @@ pnpm install && pnpm run check     # typecheck → vitest → esbuild 构建 lib
 
 - `src/` 零运行时依赖（只用 Node 内置模块）；模块清单、工具契约、测试布局见 [技术文档](docs/技术文档.md)。
 - 想改行为？先读 [docs/README.md](docs/README.md) §二"改代码要同步哪些文档"，再动手。
+- **DSH 升级后先跑这两条**（只读，10 秒出结论；判读口径见 [tools/README.md](tools/README.md)）：
+
+  ```bash
+  pnpm run verify:contract                        # 插件 ↔ 本机 DSH 的平台契约（没装 DSH 时自动跳过探针）
+  pnpm run verify:deploy -- -Profile web          # 产物哈希 / 部署预设 / 技能目录 / 《笔记期望.md》
+  ```
+
+  平台与插件之间的契约变更不会以编译错误的形式暴露，`pnpm run check` 对它无感；部署副本落后
+  （插件升了、预设还是老模板）同样是"看着改了其实没生效"。
 
 ## 致谢与许可
 

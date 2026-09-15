@@ -80,6 +80,27 @@ interface PluginContext {
   get?: (key: string) => unknown
 }
 
+/**
+ * `normalizeConfig` 认得的所有配置键（唯一来源）。
+ *
+ * 分开维护的原因：`normalizeConfig` 逐键取值 + 兜底，读不出"哪些键我不认"；
+ * 而**不认的键是静默陷阱**——预设行里留着 `mocDir` 这类已退场键（v0.9 → v1.0
+ * 删掉的两个键之一）时，插件照常挂载、功能正常，配置却"以为配了其实没配"。
+ * 本轮 DSH 升级排查就是被这种漂移咬了一次（部署副本的 `mocDir`）。
+ */
+const KNOWN_CONFIG_KEYS: readonly string[] = [
+  'vaultRoot', 'expectFile', 'planTtlHours', 'stateDir', 'fallbackDir',
+  'domainFolders', 'skipDirs', 'searchRoots', 'includeSessionCwd', 'linkIntoNotes',
+  'lint', 'indexTtlMs', 'maxWalkFiles',
+]
+
+/** 预设行 config 里插件不认识的键（已退场键 / 拼写错误），按出现顺序返回 */
+function unknownConfigKeys(config: StudyConfig | undefined): string[] {
+  if (!config || typeof config !== 'object') return []
+  const known = new Set<string>(KNOWN_CONFIG_KEYS)
+  return Object.keys(config).filter((key) => !known.has(key))
+}
+
 function normalizeConfig(config: StudyConfig | undefined): VaultLayout {
   if (!config?.vaultRoot || !String(config.vaultRoot).trim()) {
     throw new Error('dsh-study-buddy 需要 config.vaultRoot（Obsidian vault 根目录）')
@@ -1347,6 +1368,16 @@ function fmtProgress(state: ProgressState): string {
 }
 
 export function apply(ctx: PluginContext, config?: StudyConfig): void {
+  // fail-quiet 的一处例外：不认识的配置键只告警，不抛错。
+  // 抛错会让"配置里多了个历史键"这种退化把整行挂载掉（工具全没、功能全失），
+  // 代价远大于收益；告警则让它在启动日志里直接可见。
+  const unknown = unknownConfigKeys(config)
+  if (unknown.length > 0) {
+    console.error(
+      `[dsh-study-buddy] 预设行 config 含插件不认识的键：${unknown.join('、')}`
+      + `（已退场键或拼写错误；已知键见 presets/study/agent.cordis.yml。这些键会被忽略，但留在配置里=以为配了其实没配）`,
+    )
+  }
   let store: VaultStore
   try {
     store = new VaultStore(normalizeConfig(config))

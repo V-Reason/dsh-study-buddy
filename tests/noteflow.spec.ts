@@ -37,7 +37,7 @@ afterEach(async () => {
 })
 
 function store(): VaultStore {
-  return new VaultStore({ vaultRoot: dir, stateDir: '.study', fallbackDir: '未分类', mocDir: '目录' })
+  return new VaultStore({ vaultRoot: dir, stateDir: '.study', fallbackDir: '未分类' })
 }
 
 const ROOT = '计算机通识/计算方法/第2章 线性方程组数值解法'
@@ -312,7 +312,7 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     await rm(join(dir, '笔记期望.md'), { force: true })
     await writeFile(join(dir, '我的笔记期望.md'), EXPECT_TEXT, 'utf8')
     const s = new VaultStore({
-      vaultRoot: dir, stateDir: '.study', fallbackDir: '未分类', mocDir: '目录', expectFile: '我的笔记期望.md',
+      vaultRoot: dir, stateDir: '.study', fallbackDir: '未分类', expectFile: '我的笔记期望.md',
     })
     const check = await s.noteLibrary('check')
     // 自定义文件名被真的读到了：状态是"尚未读取"，而不是"文件不存在"
@@ -330,7 +330,7 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
 
   test('expectPathFor 拒绝含路径分隔符的文件名（越界防御）', async () => {
     const s = new VaultStore({
-      vaultRoot: dir, stateDir: '.study', fallbackDir: '未分类', mocDir: '目录', expectFile: '../外面.md',
+      vaultRoot: dir, stateDir: '.study', fallbackDir: '未分类', expectFile: '../外面.md',
     })
     await expect(s.noteLibrary('check')).rejects.toThrow(/不能含路径分隔符/)
   })

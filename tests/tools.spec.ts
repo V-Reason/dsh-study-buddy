@@ -10,7 +10,6 @@ const store = new VaultStore({
   vaultRoot: 'T:/vault',
   stateDir: '.study',
   fallbackDir: '未分类',
-  mocDir: '目录',
 })
 
 /**

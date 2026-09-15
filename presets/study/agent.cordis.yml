@@ -190,7 +190,8 @@
 - id: study
   name: dsh-study-buddy
   config:
-    # ⚠ 必改：换成你自己的 Obsidian vault 绝对路径（部署时编辑，勿提交真实路径）
+    # 本机 vault 绝对路径（部署副本专用：仓库模板里是占位符 <你的vault绝对路径>，
+    # 重铺模板时记得把这一行换回本机值，别把占位符抄进来）
     vaultRoot: '<你的vault绝对路径>'
     stateDir: .study
     fallbackDir: 未分类

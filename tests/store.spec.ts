@@ -73,7 +73,6 @@ function layout(): VaultLayout {
     vaultRoot: dir,
     stateDir: '.study',
     fallbackDir: '未分类',
-    mocDir: '目录',
     domainFolders: { 图形学与渲染: '游戏开发/图形学' },
   }
 }

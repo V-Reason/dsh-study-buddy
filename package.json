@@ -31,7 +31,10 @@
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "pnpm run typecheck && pnpm run test && pnpm run build"
+    "check": "pnpm run typecheck && pnpm run test && pnpm run build",
+    "verify:contract": "node tools/verify-contract.mjs",
+    "verify:contract:self-test": "node tools/verify-contract.mjs --self-test",
+    "verify:deploy": "pwsh -NoProfile -File tools/verify-deploy.ps1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

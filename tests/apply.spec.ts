@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { apply } from '../src/index.ts'
 
 let dir: string
@@ -257,5 +257,66 @@ describe('apply（开场门禁接线）', () => {
     const fake = fakeCtx()
     expect(() => apply(fake.ctx, { vaultRoot: dir })).not.toThrow()
     expect(fake.registered).toHaveLength(NOTE_TOOLS.length)
+  })
+})
+
+/**
+ * 配置键漂移告警：预设行里留着已退场键（v1.0 删了 `mocDir` / `templateHints`）
+ * 或拼错键时，插件照常挂载——但必须在启动日志里点名，否则"以为配了其实没配"
+ * 会一直静默。本轮 DSH 升级排查就是被部署副本的 `mocDir` 咬到的。
+ */
+describe('apply（配置键漂移告警，fail-quiet 而不 fail-loud）', () => {
+  /** 拦截 console.error 并只保留本插件前缀的行（apply 内部还打印别的） */
+  function errorSpy(): string[] {
+    const seen: string[] = []
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      seen.push(args.map(String).join(' '))
+    })
+    return seen
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  test('含已退场键时：工具照常注册 18 个，并点名该键', () => {
+    const seen = errorSpy()
+    const fake = fakeCtx()
+    expect(() => apply(fake.ctx, { vaultRoot: dir, mocDir: '目录' } as never)).not.toThrow()
+    expect(fake.registered).toHaveLength(NOTE_TOOLS.length)
+    const warned = seen.filter((line) => line.includes('不认识的键'))
+    expect(warned).toHaveLength(1)
+    expect(warned[0]).toContain('mocDir')
+  })
+
+  test('多个未知键按出现顺序一次列全', () => {
+    const seen = errorSpy()
+    const fake = fakeCtx()
+    apply(fake.ctx, { vaultRoot: dir, mocDir: '目录', templateHints: {} } as never)
+    const warned = seen.filter((line) => line.includes('不认识的键'))
+    expect(warned).toHaveLength(1)
+    expect(warned[0]).toContain('mocDir、templateHints')
+  })
+
+  test('全部是合法键时不告警（含仓库预设用到的每一个键）', () => {
+    const seen = errorSpy()
+    const fake = fakeCtx()
+    apply(fake.ctx, {
+      vaultRoot: dir,
+      expectFile: '笔记期望.md',
+      planTtlHours: 24,
+      stateDir: '.study',
+      fallbackDir: '未分类',
+      domainFolders: { 算法: '计算机/编程/数据结构与算法' },
+      skipDirs: ['资源'],
+      searchRoots: [],
+      includeSessionCwd: true,
+      linkIntoNotes: false,
+      lint: { rulesOff: ['session-residue'] },
+      indexTtlMs: 2000,
+      maxWalkFiles: 20000,
+    })
+    expect(fake.registered).toHaveLength(NOTE_TOOLS.length)
+    expect(seen.filter((line) => line.includes('不认识的键'))).toHaveLength(0)
   })
 })
