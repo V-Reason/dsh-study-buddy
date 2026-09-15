@@ -44,7 +44,7 @@ export function sanitizeFilename(title: string): string {
 
 /**
  * 领域键近似匹配：按字符重合度（共同字符 / 较长键长度）≥0.6 排序，取前 2。
- * 用于 card_create 领域键未精确命中时回显"最接近的已映射键"（如
+ * 用于笔记领域键未精确命中时回显"最接近的已映射键"（如
  * "图形学-动画与特效" → "图形学-动画特效"），避免 agent 翻配置文件绕路。
  */
 export function findSimilarDomainKeys(domain: string, keys: string[]): string[] {
