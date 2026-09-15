@@ -181,7 +181,14 @@ export declare class VaultStore {
         path?: string;
         material?: string;
     }): Promise<string>;
-    /** `note_plan`：文件夹规划提案与确认（提案只在对话里，不落盘，需求 R11） */
+    /**
+     * `note_plan`：文件夹规划提案与确认（提案只在对话里，不落盘，需求 R11）。
+     *
+     * 三个动作共用 `rootPath` 入参（`create` 传规划根，`confirm` / `abandon` 传 planId）：
+     * 工具 schema 的必填集合因此不必随动作变化，模型也能只靠提案回显完成后续动作。
+     * **确认才置位 `confirmed`**——门禁的第二环由 `action=confirm` 打开，且有效期从
+     * 确认时刻重新起算（搁置过久的提案要先重新提案，不把有效期变成"提案起算"）。
+     */
     notePlan(args: {
         action?: string;
         rootPath?: string;

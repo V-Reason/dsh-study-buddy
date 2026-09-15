@@ -47,7 +47,7 @@ export interface BlockInput {
   sourceSection?: string
   /** 微目录排序键 */
   order?: number
-  /** 一句话定位（可选，无长度限制；缺省时从正文首个引用块提取） */
+  /** 一句话定位（可选，无长度限制；缺省时从正文首个引用块提取，**不另写一遍引用块**） */
   summary?: string
   /** 额外领域标签（如 线性代数） */
   tags?: string[]
@@ -134,10 +134,15 @@ function linksSection(links?: BlockLinks): string {
  * 渲染整篇笔记：
  * frontmatter → 一句话定位（裸 `>` 引用块，可选）→ 正文 → 关联小节。
  * 不加尾部标签；键序由 `renderFrontmatter` 固定。
+ *
+ * **引用块不重复写两遍**：只有显式传了 `summary` 才前置引用块；缺省时 `简介`
+ * 从正文首个引用块提取（`extractDefinition`），那一段本身就是正文的一行定位，
+ * 再前置一遍就会让同一句话连着出现两次（2026-09-15 真机检查实测 4 篇全中）。
  */
 export function renderNote(doc: BlockDoc): string {
   const tags = [...new Set([doc.domain, ...(doc.tags ?? [])].filter((t): t is string => Boolean(t)))]
-  const summary = doc.summary?.trim() || extractDefinition(doc.content) || ''
+  const explicitSummary = doc.summary?.trim() ?? ''
+  const summary = explicitSummary || extractDefinition(doc.content) || ''
   const meta: CardMeta = {
     id: doc.id,
     title: doc.title,
@@ -148,7 +153,7 @@ export function renderNote(doc: BlockDoc): string {
     order: doc.order,
     summary: summary || undefined,
   }
-  const lead = summary ? `> ${inlineText(summary)}\n\n` : ''
+  const lead = explicitSummary ? `> ${inlineText(explicitSummary)}\n\n` : ''
   const body = `${lead}${doc.content.trim()}\n${linksSection(doc.links)}`
   return `${renderFrontmatter(meta).trimEnd()}\n\n${body}`
 }

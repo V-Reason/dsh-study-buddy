@@ -23,7 +23,9 @@ import {
   EXPECT_FILE, TOC_FILE, DirIndex, dirOfRel, dirPathFor, expectPathFor, listDir, nestHint, normRel,
 } from './dirs.ts'
 import { checkWrite, formatPlanProposal, type GateInput } from './gate.ts'
-import { abandonPlan, buildPlanRecord, consumePlanItem, planFileFor, readPlan, writePlan } from './planstore.ts'
+import {
+  DEFAULT_PLAN_TTL_HOURS, abandonPlan, buildPlanRecord, consumePlanItem, isPlanExpired, planFileFor, readPlan, writePlan,
+} from './planstore.ts'
 import { archiveBody, archiveThenWrite, listArchives, readArchive } from './archive.ts'
 import { markExpectRead, readSession, sessionFileFor, signatureOf, writeSession, type SessionState } from './store.ts'
 import { formatOverview, summarizeOverview } from './overview.ts'
@@ -939,7 +941,14 @@ export class VaultStore {
     return `${formatOverview(result, { scope: base || '整个库' })}${this.noteSkips()}`
   }
 
-  /** `note_plan`：文件夹规划提案与确认（提案只在对话里，不落盘，需求 R11） */
+  /**
+   * `note_plan`：文件夹规划提案与确认（提案只在对话里，不落盘，需求 R11）。
+   *
+   * 三个动作共用 `rootPath` 入参（`create` 传规划根，`confirm` / `abandon` 传 planId）：
+   * 工具 schema 的必填集合因此不必随动作变化，模型也能只靠提案回显完成后续动作。
+   * **确认才置位 `confirmed`**——门禁的第二环由 `action=confirm` 打开，且有效期从
+   * 确认时刻重新起算（搁置过久的提案要先重新提案，不把有效期变成"提案起算"）。
+   */
   async notePlan(args: {
     action?: string
     rootPath?: string
@@ -957,7 +966,47 @@ export class VaultStore {
       if (session.activePlanId === planId) await writeSession(this.sessionFile(), { ...session, activePlanId: undefined })
       return `已放弃规划：${planId}`
     }
-    if (action !== 'create') throw new Error(`note_plan 未知 action "${action}"（可用 create / abandon）`)
+    if (action === 'confirm') {
+      const planId = String(args.rootPath ?? '').trim()
+      if (!planId) throw new Error('note_plan(action=confirm) 需要把 rootPath 传成要确认的 planId')
+      // 常见误用是把规划根目录当成 planId 传进来：先给一句可自我纠正的话，不让它落到"id 非法"的泛化报错
+      if (dirOfRel(planId) !== '') {
+        throw new Error(`规划 id 非法："${planId}" 看着像目录——请把 note_plan 返回的 planId（形如 202610241430_ab12cd）原样传入`)
+      }
+      const file = planFileFor(this.layout.vaultRoot, planId, this.layout.stateDir)
+      const record = await readPlan(file)
+      if (!record) throw new Error(`规划不存在或已损坏：${planId}——请重新调用 note_plan 提案`)
+      if (record.confirmed) {
+        return `规划已确认（planId：${planId}），直接 note_write 逐个落盘即可。`
+      }
+      const ttl = this.layout.planTtlHours ?? DEFAULT_PLAN_TTL_HOURS
+      if (isPlanExpired(record, ttl)) {
+        const created = Date.parse(record.createdAt)
+        const at = Number.isFinite(created) ? new Date(created).toLocaleString('zh-CN') : record.createdAt
+        // 过期即拒绝且**不改任何状态**：否则"过期确认"与"有效期从确认时刻起算"会自相矛盾
+        throw new Error(
+          `规划已过期（提案于 ${at}，超过 ${ttl} 小时未确认，planId：${planId}）——请重新调用 note_plan 提案并确认`,
+        )
+      }
+      const now = new Date()
+      // 用户确认是凭据生效的时刻：有效期从这里重新起算，否则搁置过久的提案会在确认后立刻失效
+      record.confirmed = true
+      record.confirmedAt = now.toISOString()
+      record.createdAt = now.toISOString()
+      await writePlan(file, record)
+      const session = await this.sessionState()
+      await writeSession(this.sessionFile(), { ...session, activePlanId: planId })
+      const remaining = record.items.map((it) => it.title)
+      return [
+        `已确认规划（planId：${planId}）`,
+        `- 规划根：${record.rootPath || '（vault 根）'}`,
+        `- 待落块 ${remaining.length} 项：${remaining.join('、')}`,
+        `- 有效期自确认时刻起算：${ttl} 小时`,
+        '',
+        '现在可以用该 planId 调 note_write 逐个落盘；结构要改就重新 note_plan 提案（会得到新的 planId）。',
+      ].join('\n')
+    }
+    if (action !== 'create') throw new Error(`note_plan 未知 action "${action}"（可用 create / confirm / abandon）`)
     const rootPath = normRel(args.rootPath ?? '')
     const items = (args.items ?? []).map((it) => ({
       title: String(it.title ?? '').trim(),
@@ -984,7 +1033,7 @@ export class VaultStore {
     const session = await this.sessionState()
     await writeSession(this.sessionFile(), { ...session, activePlanId: record.planId })
     const proposal = formatPlanProposal(record, { reusedDirs: reused })
-    return `${proposal}\n\n（planId：${record.planId}；确认后直接调用 note_write 逐个落盘）`
+    return `${proposal}\n\n（planId：${record.planId}；**用户拍板后**先 note_plan({ action: "confirm", rootPath: "${record.planId}" }) 确认，再逐个 note_write 落盘）`
   }
 
   /** `note_write`：落一个块（硬门禁三连校验 + 规划消费记账） */

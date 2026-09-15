@@ -72,12 +72,18 @@ describe('buildToolDefs（18 个工具的 schema 契约）', () => {
     expect(def.description).toContain('planId')
   })
 
-  test('note_plan：rootPath + items 必填，items 项契约完整', () => {
+  test('note_plan：rootPath + items 必填（confirm/abandon 复用 rootPath 传 planId），items 项契约完整', () => {
     const def = defOf('note_plan')
+    // 三个动作共用同一组必填：confirm / abandon 把 rootPath 当 planId 传，schema 不随动作漂移
     expect(def.parameters.required).toEqual(['rootPath', 'items'])
-    const props = def.parameters.properties as Record<string, { items?: { items?: { required?: string[] } }; enum?: string[] }>
-    expect(props.action?.enum).toEqual(['create', 'abandon'])
+    const props = def.parameters.properties as Record<string, { items?: { items?: { required?: string[] } }; enum?: string[]; description?: string }>
+    expect(props.action?.enum).toEqual(['create', 'confirm', 'abandon'])
+    expect(props.rootPath?.description).toContain('planId')
     expect(props.items?.items?.required).toEqual(['title', 'path'])
+    // 确认这一步必须写在描述里：模型据此知道"提案之后还有一步"，而不是去找不存在的入口
+    expect(def.description).toContain('action=confirm')
+    expect(def.description).toContain('会被 note_write 拒绝')
+    expect(def.description).toContain('有效期从确认时刻起算')
   })
 
   test('note_update：ref + action 必填，四动作枚举完整', () => {

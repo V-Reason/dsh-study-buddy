@@ -320,8 +320,6 @@ export interface LintBatch {
   legacyCount: number
   /** 有问题（至少一条 finding）的文档数 */
   problemCount: number
-  /** 平均问题数（保留 1 位） */
-  average: number
   /** 按"问题数"的分布桶标签（如 `1~2 条`）与计数 */
   distribution: Array<{ label: string; count: number }>
   /** 规则命中统计（规则 id → 命中文档数） */
@@ -346,13 +344,12 @@ export function summarizeLint(reports: LintReport[]): LintBatch {
   for (const r of reports) {
     for (const id of new Set(r.findings.map((f) => f.rule))) ruleHits.set(id, (ruleHits.get(id) ?? 0) + 1)
   }
-  const sum = counts.reduce((a, b) => a + b, 0)
+  // 不提供均分（架构选型 A9）：分值制随模板退场，平均问题数同样是把"问题"当分数的残留口径
   return {
     total,
     noteCount: reports.filter((r) => r.kind === 'note').length,
     legacyCount: reports.filter((r) => r.kind === 'legacy').length,
     problemCount: counts.filter((n) => n > 0).length,
-    average: total === 0 ? 0 : Math.round((sum / total) * 10) / 10,
     distribution: [...buckets.entries()]
       .sort((a, b) => Number(a[0].split(' ')[0]) - Number(b[0].split(' ')[0]))
       .map(([label, count]) => ({ label, count })),
@@ -373,7 +370,7 @@ export function formatBatch(batch: LintBatch, limit = 10): string {
   if (batch.noteCount > 0 || batch.legacyCount > 0) {
     lines.push(`- 其中旧笔记 ${batch.noteCount} 篇、存量卡 ${batch.legacyCount} 篇（不参与"块"的规则口径）`)
   }
-  lines.push(`- 有问题的文档：${batch.problemCount} 篇；平均问题数：${batch.average} 条`)
+  lines.push(`- 有问题的文档：${batch.problemCount} 篇（共 ${batch.total} 篇）`)
   if (batch.distribution.length > 0) {
     lines.push(`- 问题数分布：${batch.distribution.map((d) => `${d.label} ${d.count} 篇`).join('，')}`)
   }

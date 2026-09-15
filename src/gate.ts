@@ -85,7 +85,10 @@ export function checkExpect(input: GateInput): GateResult {
 export async function checkPlan(input: GateInput): Promise<GateResult> {
   const planId = input.session.activePlanId
   if (!planId) {
-    return blocked('本次会话没有已确认的文件夹规划', '请先调用 note_plan 输出提案，让用户拍板确认后再写入')
+    return blocked(
+      '本次会话没有已确认的文件夹规划',
+      '请先调用 note_plan 输出提案，用户拍板后用 note_plan(action=confirm) 确认，再写入',
+    )
   }
   let file: string
   try {
@@ -98,13 +101,16 @@ export async function checkPlan(input: GateInput): Promise<GateResult> {
     return blocked(`规划记录不存在或已损坏（planId：${planId}）`, '请重新调用 note_plan 提案并确认')
   }
   if (!record.confirmed) {
-    return blocked(`规划尚未确认（planId：${planId}）`, '请让用户拍板后用 note_plan(action=confirm) 确认')
+    return blocked(
+      `规划尚未确认（planId：${planId}）`,
+      `请让用户拍板后用 note_plan({ action: "confirm", rootPath: "${planId}" }) 确认`,
+    )
   }
   const ttl = input.planTtlHours ?? DEFAULT_PLAN_TTL_HOURS
   if (isPlanExpired(record, ttl)) {
     return blocked(
       `规划已过期（超过 ${ttl} 小时，planId：${planId}）`,
-      '请重新调用 note_plan 提案并确认',
+      '请重新调用 note_plan 提案并确认（确认后有效期重新起算）',
     )
   }
   return { ok: true, plan: record }

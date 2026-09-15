@@ -62,10 +62,18 @@ describe('note 块契约', () => {
     expect(text).toContain('领域: #计算方法-线性方程组 #线性代数')
     expect(text).toContain('来源章节: 《计算方法》第2章 线性方程组数值解法 / 2.1节')
     expect(text).toContain('顺序: 3')
-    // 简介缺省时从正文首个引用块提取
+    // 简介缺省时从正文首个引用块提取，且**不再另写一遍**（否则同一句话连着出现两次）
     const withLead = renderNote({ id: 'y', ...BASE, content: '> 化上三角后回代\n\n## 直接法\n\n正文。' })
     expect(withLead).toContain('简介: 化上三角后回代')
-    expect(withLead).toContain('> 化上三角后回代')
+    expect(withLead.match(/^> 化上三角后回代$/gm)).toHaveLength(1)
+    // 显式传 summary 时才前置引用块（正文里没有定位时仍会补上）
+    const explicit = renderNote({ id: 'y', ...BASE, summary: '化上三角后回代', content: '## 直接法\n\n正文。' })
+    expect(explicit).toContain('简介: 化上三角后回代')
+    expect(explicit.match(/^> 化上三角后回代$/gm)).toHaveLength(1)
+    // 旧笔记形态 `> 概念: …` 仍优先取概念行，此时正文自带的引用块保留（不回归）
+    const concept = renderNote({ id: 'y', ...BASE, content: '> 概念: 迭代器是一种设计模式\n\n正文。' })
+    expect(concept).toContain('简介: 迭代器是一种设计模式')
+    expect(concept).toContain('> 概念: 迭代器是一种设计模式')
     // 键序：ID → 标题 → 领域 → 来源 → 状态 → 来源章节 → 顺序 → 简介
     const keys = [...text.matchAll(/^([^:\n]+):/gm)].map((m) => m[1])
     expect(keys.indexOf('标题')).toBeLessThan(keys.indexOf('领域'))

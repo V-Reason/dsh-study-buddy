@@ -159,7 +159,8 @@ describe('报告与批量汇总（无分值）', () => {
     const batch = summarizeLint(reports)
     expect(batch.total).toBe(3)
     expect(batch.problemCount).toBe(2)
-    expect(batch.average).toBeGreaterThan(0)
+    // 没有均分字段（架构选型 A9：分值制随模板退场，平均问题数同属残留口径）
+    expect('average' in batch).toBe(false)
     expect(batch.distribution.find((d) => d.label === '0 条')?.count).toBe(1)
     expect(batch.rules[0].id).toBe('session-residue')
     expect(batch.rules[0].count).toBe(2)
@@ -167,10 +168,11 @@ describe('报告与批量汇总（无分值）', () => {
 
     const text = formatBatch(batch)
     expect(text).toContain('## 批量体检（共 3 篇）')
-    expect(text).toContain('有问题的文档：2 篇')
+    expect(text).toContain('有问题的文档：2 篇（共 3 篇）')
     expect(text).toContain('规则命中：')
     expect(text).toContain('问题最多的文档')
     expect(text).not.toContain('均分')
+    expect(text).not.toContain('平均')
     expect(PROBLEM_BUCKET).toBe(2)
   })
 

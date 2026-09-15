@@ -56,10 +56,21 @@ export interface PlanRecord {
 /** 默认有效期（小时）：超过则规划失效，必须重新提案 */
 export const DEFAULT_PLAN_TTL_HOURS = 24
 
-/** 规划 id：与笔记 ID 同源格式，便于人工核对（时间 + 6 位随机） */
+/** 两位补零（月份/日期/小时/分钟都是 1 位或 2 位，必须补满才凑得齐 12 位时间戳） */
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+/**
+ * 规划 id：与笔记 ID 同源格式，便于人工核对（`YYYYMMDDHHmm` + 6 位随机）。
+ *
+ * **每个两位字段都要补零**：`planFileFor` 的校验式要求恰好 12 位时间戳。
+ * 只要有一处漏补，00:00~09:59（或每月 1~9 日）生成的 id 就只有 11 位，
+ * 同一个 id 传给 confirm / note_write 会被自己的合法性校验拒绝——
+ * "凭据刚发出去就读不回来"，正是门禁最该避免的死锁（实测于 23:05，漏的是小时位）。
+ */
 export function generatePlanId(now = new Date()): string {
-  const pad = (n: number, w = 2): string => String(n).padStart(w, '0')
-  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`
+  const stamp = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}${pad2(now.getHours())}${pad2(now.getMinutes())}`
   return `${stamp}_${randomBytes(3).toString('hex')}`
 }
 
@@ -140,8 +151,11 @@ export interface CreatePlanInput {
 }
 
 /**
- * 建规划记录。`confirmed` 由调用方在用户拍板后置位——提案与确认是同一条记录
- * 的两次调用（覆盖写），因此用户改结构时直接重提一次即可。
+ * 建规划记录（提案即落凭据，但 **`confirmed` 恒为 false**）。
+ *
+ * 置位只发生在 `notePlan(action=confirm)`：门禁的第二环要求"用户显式拍板"，
+ * 而这一步由工具的 confirm 分支完成（覆盖写同一条记录并盖 `confirmedAt`）。
+ * 提案与确认是同一条记录的两次写，因此用户改结构时直接重提一次即可。
  */
 export function buildPlanRecord(input: CreatePlanInput, planId = generatePlanId(input.now)): PlanRecord {
   const rootPath = assertDirPath(input.rootPath)
@@ -204,9 +218,9 @@ export async function consumePlanItem(
 ): Promise<ConsumeResult> {
   const record = await readPlan(file)
   if (!record) return { ok: false, reason: '规划记录不存在' }
-  if (!record.confirmed) return { ok: false, reason: '规划尚未确认；请让用户拍板后重新提交' }
+  if (!record.confirmed) return { ok: false, reason: '规划尚未确认；请先用 note_plan(action=confirm) 确认后再提交' }
   if (isPlanExpired(record, opts.ttlHours ?? DEFAULT_PLAN_TTL_HOURS, opts.now)) {
-    return { ok: false, reason: '规划已过期；请重新提案并确认' }
+    return { ok: false, reason: '规划已过期；请重新提案并确认（确认后有效期重新起算）' }
   }
   const wanted = String(title ?? '').trim()
   const item = record.items.find((it) => it.title === wanted)

@@ -1,6 +1,6 @@
 # docs — 文档地图
 
-> 版本基线：v1.0.0 ｜ 读者：使用者、插件维护者、二次开发者
+> 版本基线：v1.0.2 ｜ 读者：使用者、插件维护者、二次开发者
 >
 > 本文件是 `docs/` 的**单一导航入口**：哪份文档在哪里、负责什么、改代码时该同步哪一份、什么情况下归档。
 > 逐键配置与工具行为看 [`用户使用指南.md`](用户使用指南.md)；"为什么这样设计"看 [`设计文档.md`](设计文档.md)；
@@ -40,6 +40,8 @@ DSH 升级后排障先跑它们，判读口径见 [`tools/README.md`](../tools/R
 | **过程** | `refactor/` | [`重构计划.md`](refactor/重构计划.md) | **按什么顺序做**：8 个阶段、批次门禁、测试资产处置、回归策略、实测记录、**计划偏离记录** | 每批完成时回填看板与实测；偏离时记一行 |
 | **验证** | `check/` | [`check/prompt-verify-all-features.md`](check/prompt-verify-all-features.md) | 全功能验证开场提示词（v1.0：重点验证**三条硬门禁真的挡住写入**） | 新增/修改用户可见行为时补验证项 |
 | **验证** | `check/` | [`check/升级后验收清单.md`](check/升级后验收清单.md) | 升级 DSH/插件/预设后的验收清单（命令层 → 会话层 → 归档链路 → 定位顺序） | 部署形态或校验命令变化时 |
+| **验证** | `check/` | [`check/验证报告-2026-09-15-学习伙伴预设实战检查.md`](check/验证报告-2026-09-15-学习伙伴预设实战检查.md) | v1.0.0 真机会话逐条跑 50 项的**实测结果**（含 P0 缺陷：`note_plan` 无确认入口）；时间点快照 | 不改写；修完另起一份新报告 |
+| **验证** | `check/` | [`check/验证报告-2026-09-15-归档链路修复复验.md`](check/验证报告-2026-09-15-归档链路修复复验.md) | 上份报告的 **P0/P1/P2 逐条修复状态 + 复验证据**（含新查出的 `generatePlanId` 补零死锁）；源码级与命令层复验，会话层待重跑 | 会话层复验完成后在同一份里回填结论 |
 | **归档** | `archive/` | [`archive/README.md`](archive/README.md) | 历史文档索引（审查报告原件、提案、早期需求稿、体检、复盘、体验报告） | 文档被取代/已完成/仅供溯源时 |
 | **归档** | `archive/` | [`archive/审查修复记录.md`](archive/审查修复记录.md) | v0.9 两轮审查的**结论 + 逐项修复状态 + 为什么不修**（历史台账，仅溯源） | 不再更新；新问题走需求/设计文档 |
 | **权威细则** | `presets/` | [`../presets/study/skills/*/SKILL.md`](../presets/study/skills/) | 6 个技能的执行口径（study-loop / note-format / file-reading / incremental-update / domain-adaptation / memory-auto） | 技能行为变化（与 persona 一起改） |
@@ -59,7 +61,7 @@ DSH 升级后排障先跑它们，判读口径见 [`tools/README.md`](../tools/R
 | 用户可见行为 / 报错文案 / 配置键 | `用户使用指南.md`（§4 配置表、§11 排障表） | 验证提示词 |
 | 新增/删除 lint 规则 | `lint.ts` 的 `RULES` → 工具描述自动跟随；`技术文档.md` 规则表、`用户使用指南.md` §7.13 | `设计文档.md` D16/D17 |
 | 新增工具 / 改工具 schema | `技术文档.md` §3、`用户使用指南.md` §7 | `tests/tools.spec.ts` 名字集合、`tests/apply.spec.ts` 工具数 |
-| 硬门禁的判定或文案 | `gate.ts` → `设计文档.md` §3、`用户使用指南.md` §6.6 拒绝文案表 | 验证提示词第 2 部分（门禁专项） |
+| 硬门禁的判定或文案 | `gate.ts` / `planstore.ts` → `设计文档.md` §3、`用户使用指南.md` §6.6 拒绝文案表 | 验证提示词第 2 部分（门禁专项）、`presets/study/**`（persona 与技能里的动作名） |
 | frontmatter 键变化 | `frontmatter.ts` → `技术文档.md` §5.1、`用户使用指南.md` §8.3、`note-format/SKILL.md` | `tests/frontmatter.spec.ts` 往返 |
 | 目录/微目录格式变化 | `dirs.ts` 与 `index.ts` 的 `noteToc` → `用户使用指南.md` §7.9、`note-format/SKILL.md` | `tests/noteflow.spec.ts` |
 | 覆盖度口径变化 | `overview.ts` → `用户使用指南.md` §7.6、`设计文档.md` D14/D15 | `tests/overview.spec.ts` |

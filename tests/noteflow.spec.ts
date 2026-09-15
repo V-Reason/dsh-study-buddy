@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { VaultStore } from '../src/index.ts'
-import { buildPlanRecord, planFileFor, readPlan, writePlan } from '../src/planstore.ts'
+import { buildPlanRecord, isPlanExpired, planFileFor, readPlan, writePlan } from '../src/planstore.ts'
 import { readSession, sessionFileFor } from '../src/store.ts'
 
 /**
@@ -55,16 +55,17 @@ async function exists(rel: string): Promise<boolean> {
   }
 }
 
-/** 走到"规划已确认"这一步（门禁第二环通过），返回 planId */
+/**
+ * 走到"规划已确认"这一步（门禁第二环通过），返回 planId。
+ *
+ * **走真实确认入口**：早先这里直接手改 `.study/plans/<id>.json` 置位 `confirmed`，
+ * 于是"用户点不出一个已确认的规划"与 `pnpm run check` 全绿同时成立
+ * （2026-09-15 真机检查报告的 P0）。现在确认只经 `note_plan(action=confirm)`。
+ */
 async function planAndConfirm(s: VaultStore): Promise<string> {
   const proposal = await s.notePlan({ rootPath: ROOT, items: ITEMS, material: '《计算方法》' })
-  const planId = /planId：([0-9]{12}_[0-9a-f]{6})/.exec(proposal)?.[1] as string
-  // 用户拍板：把记录标记为已确认（真实会话里由用户回复确认后由工具写入）
-  const file = planFileFor(dir, planId, '.study')
-  const record = await readPlan(file)
-  record!.confirmed = true
-  record!.confirmedAt = new Date().toISOString()
-  await writePlan(file, record!)
+  const planId = /planId：(\d{11,12}_[0-9a-f]{6})/.exec(proposal)?.[1] as string
+  await s.notePlan({ action: 'confirm', rootPath: planId })
   return planId
 }
 
@@ -118,11 +119,98 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     })).rejects.toThrow(/没有已确认的文件夹规划/)
 
     const proposal = await s.notePlan({ rootPath: ROOT, items: ITEMS })
-    const planId = /planId：([0-9]{12}_[0-9a-f]{6})/.exec(proposal)?.[1] as string
+    const planId = /planId：(\d{11,12}_[0-9a-f]{6})/.exec(proposal)?.[1] as string
     await expect(s.noteWrite({
       planId, title: '高斯消元法', path: ITEMS[0].path, source: 'x', content: '正文',
     })).rejects.toThrow(/规划尚未确认/)
+    // 拒绝文案必须指向真实存在的入口（旧文案里的 note_plan(action=confirm) 曾经是空头支票）
+    await expect(s.noteWrite({
+      planId, title: '高斯消元法', path: ITEMS[0].path, source: 'x', content: '正文',
+    })).rejects.toThrow(/note_plan\(\{ action: "confirm", rootPath: "\d{11,12}_[0-9a-f]{6}" \}\)/)
     expect(await exists(ITEMS[0].path)).toBe(false)
+
+    // 确认之后同一条规划立刻可用（P0 修复的核心链路）
+    await s.notePlan({ action: 'confirm', rootPath: planId })
+    const out = await s.noteWrite({
+      planId, title: '高斯消元法', path: ITEMS[0].path, source: '《计算方法》', content: '正文内容。',
+    })
+    expect(out).toContain('已写入：')
+    expect(await exists(ITEMS[0].path)).toBe(true)
+  })
+
+  test('note_plan(action=confirm)：置位 confirmed 并接管 activePlanId；重复确认幂等', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const proposal = await s.notePlan({ rootPath: ROOT, items: ITEMS, material: '《计算方法》' })
+    const planId = /planId：(\d{11,12}_[0-9a-f]{6})/.exec(proposal)?.[1] as string
+    const file = planFileFor(dir, planId, '.study')
+
+    // 提案阶段：凭据已落盘但未确认（"提案只在对话里"指的是不落 vault 可见文件）
+    expect((await readPlan(file))?.confirmed).toBe(false)
+
+    const confirmed = await s.notePlan({ action: 'confirm', rootPath: planId })
+    expect(confirmed).toContain(`已确认规划（planId：${planId}）`)
+    expect(confirmed).toContain(ROOT)
+    expect(confirmed).toContain('待落块 2 项：高斯消元法、列主元消元')
+    expect(confirmed).toContain('note_write')
+    expect((await readSession(sessionFileFor(dir, '.study'))).activePlanId).toBe(planId)
+    const record = await readPlan(file)
+    expect(record?.confirmed).toBe(true)
+    expect(record?.confirmedAt).toBeTruthy()
+
+    // 重复确认：幂等，不破坏已确认状态（不覆盖 confirmedAt）
+    const before = record!.confirmedAt
+    const again = await s.notePlan({ action: 'confirm', rootPath: planId })
+    expect(again).toContain('规划已确认')
+    expect((await readPlan(file))?.confirmedAt).toBe(before)
+  })
+
+  test('note_plan(action=confirm)：planId 缺失/传成目录/不存在 → 各自的修复提示，磁盘零改动', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    await expect(s.notePlan({ action: 'confirm', rootPath: '' }))
+      .rejects.toThrow(/需要把 rootPath 传成要确认的 planId/)
+    // 常见误用：把规划根目录当成 planId
+    await expect(s.notePlan({ action: 'confirm', rootPath: ROOT }))
+      .rejects.toThrow(/看着像目录/)
+    await expect(s.notePlan({ action: 'confirm', rootPath: '202610241200_abcdef' }))
+      .rejects.toThrow(/规划不存在或已损坏/)
+    // 未知 action 会点名可用动作（confirm 不再缺席）
+    await expect(s.notePlan({ action: 'bogus', rootPath: ROOT, items: ITEMS }))
+      .rejects.toThrow(/可用 create \/ confirm \/ abandon/)
+  })
+
+  test('note_plan(action=confirm)：过期提案必须重新提案；确认后有效期从确认时刻重新起算', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const proposal = await s.notePlan({ rootPath: ROOT, items: ITEMS })
+    const planId = /planId：(\d{11,12}_[0-9a-f]{6})/.exec(proposal)?.[1] as string
+    const file = planFileFor(dir, planId, '.study')
+
+    // 搁置超过 TTL 再确认：拒绝，且不改任何状态（避免"过期确认"与"从确认时刻起算"自相矛盾）
+    const stale = (await readPlan(file))!
+    stale.createdAt = new Date(Date.now() - 48 * 3600_000).toISOString()
+    await writePlan(file, stale)
+    await expect(s.notePlan({ action: 'confirm', rootPath: planId })).rejects.toThrow(/规划已过期/)
+    expect((await readPlan(file))?.confirmed).toBe(false)
+
+    // 重新提案（新 planId）后确认：createdAt 被重置为确认时刻，之后的写入不再受旧提案时间拖累
+    const fresh = await s.notePlan({ rootPath: ROOT, items: ITEMS })
+    const freshId = /planId：(\d{11,12}_[0-9a-f]{6})/.exec(fresh)?.[1] as string
+    const freshFile = planFileFor(dir, freshId, '.study')
+    const aged = (await readPlan(freshFile))!
+    // 20 小时：仍在 TTL 内（可确认），但已接近临界——确认必须把有效期重新拉满
+    aged.createdAt = new Date(Date.now() - 20 * 3600_000).toISOString()
+    await writePlan(freshFile, aged)
+    expect(isPlanExpired(aged, 24)).toBe(false)
+    await s.notePlan({ action: 'confirm', rootPath: freshId })
+    const after = (await readPlan(freshFile))!
+    expect(after.confirmed).toBe(true)
+    expect(isPlanExpired(after, 24)).toBe(false)
+    expect(Date.parse(after.createdAt)).toBeGreaterThan(Date.now() - 60_000)
+    expect((await s.noteWrite({
+      planId: freshId, title: '高斯消元法', path: ITEMS[0].path, source: '《计算方法》', content: '正文。',
+    }))).toContain('已写入：')
   })
 
   test('硬门禁③：越界路径 → 拒绝并回显规划根', async () => {
@@ -275,7 +363,7 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     const s = store()
     await s.noteExpectGet()
     const proposal = await s.notePlan({ rootPath: ROOT, items: ITEMS })
-    const planId = /planId：([0-9]{12}_[0-9a-f]{6})/.exec(proposal)?.[1] as string
+    const planId = /planId：(\d{11,12}_[0-9a-f]{6})/.exec(proposal)?.[1] as string
     expect((await readSession(sessionFileFor(dir, '.study'))).activePlanId).toBe(planId)
     await s.notePlan({ action: 'abandon', rootPath: planId })
     expect((await readSession(sessionFileFor(dir, '.study'))).activePlanId).toBeUndefined()
@@ -296,6 +384,24 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     // plan 未被消费：正式写入仍然可以
     expect((await s.noteWrite({ planId, title: '高斯消元法', path: ITEMS[0].path, source: '《计算方法》', content: '正文。' })))
       .toContain('已写入：')
+  })
+
+  test('落盘正文不留重复定位：首行引用块只出现一次，且被提取进 frontmatter 简介', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const planId = await planAndConfirm(s)
+    // 《笔记期望.md》要求的"术语首现用引用块给定义"正是这种写法
+    await s.noteWrite({
+      planId, title: '高斯消元法', path: ITEMS[0].path, source: '《计算方法》',
+      content: '> 用初等行变换把系数矩阵化为上三角，再回代求解。\n\n## 直接法\n\n主元非零时逐列消元。',
+    })
+    const text = await readFile(join(dir, ITEMS[0].path), 'utf8')
+    expect(text).toContain('简介: 用初等行变换把系数矩阵化为上三角，再回代求解。')
+    // 关键断言：同一句话不再"frontmatter 一遍 + 正文首行一遍"
+    expect(text.match(/^> 用初等行变换/gm)).toHaveLength(1)
+    // 正文首行仍是那句话（不是被删掉，而是不再重复）
+    const body = text.replace(/^---[\s\S]*?\n---\n/, '').trimStart()
+    expect(body.startsWith('> 用初等行变换')).toBe(true)
   })
 
   test('buildPlanRecord 之外：规划里已存在的目录算"复用"不算新建', async () => {

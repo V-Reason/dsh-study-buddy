@@ -42,6 +42,17 @@ describe('planstore 规划存储', () => {
     expect(() => planFileFor(dir, '')).toThrow('规划 id 非法')
   })
 
+  // 2026-09-15 实测的 P0 死锁：漏补零的小时位让 id 变成 11 位，同一个 id 立刻被 planFileFor 拒绝
+  test('generatePlanId 在单位数小时/日期也补零（否则 confirm 读不回自己刚发的凭据）', () => {
+    const id = generatePlanId(new Date(2026, 0, 5, 9, 7))
+    expect(id).toMatch(/^202601050907_[0-9a-f]{6}$/)
+    // 刚生成的 id 必须能立刻换回路径——这是"凭据可读回"的不变量
+    expect(() => planFileFor(dir, id)).not.toThrow()
+    for (const at of [new Date(2026, 8, 1, 0, 0), new Date(2026, 10, 30, 23, 59)]) {
+      expect(() => planFileFor(dir, generatePlanId(at))).not.toThrow()
+    }
+  })
+
   test('buildPlanRecord 校验路径必须在规划根之下、标题唯一、items 非空', () => {
     const record = buildPlanRecord({ rootPath: '计算方法/第2章', items: ITEMS })
     expect(record.confirmed).toBe(false)
@@ -173,6 +184,8 @@ describe('gate 三连校验', () => {
       vaultRoot: dir, stateDir: '.study', session: { activePlanId: planId }, expectSignature: 's',
     })
     expect((unconfirmed as { reason: string }).reason).toContain('规划尚未确认')
+    // 拒绝文案必须点名真实入口与本次的 planId（旧文案的 note_plan(action=confirm) 曾是空头支票）
+    expect((unconfirmed as { reason: string }).reason).toContain(`note_plan({ action: "confirm", rootPath: "${planId}" })`)
 
     const record = await readPlan(file)
     record!.confirmed = true

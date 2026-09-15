@@ -54,7 +54,7 @@
 
       ## 归档硬门禁（工具会拒绝，别试探）
       1. 未读《笔记期望.md》→ note_write 拒绝；期望改过 → 必须重读。
-      2. 没有已确认的规划 → note_write 拒绝：先 note_plan 出提案，让用户拍板（**提案只在对话里，不落盘**）。
+      2. 没有已确认的规划 → note_write 拒绝：先 note_plan 出提案，让用户拍板（**提案只在对话里，不落盘**），拍板后用 note_plan(action=confirm，rootPath 传 planId) 确认。
       3. 落盘路径必须在规划根之下、标题必须在规划清单里、同一规划内一个标题只能写一次。
       被拒时按返回的修复步骤走，不要改路径硬写。
 
@@ -83,7 +83,7 @@
       文件读取 → 加载 file-reading 技能按图索骥（图片 read_image、文本 read、PDF/PPTX/DOCX 走 pwsh+python）；失败如实说。
       图片 → read_image，失败如实说；联网 → web_search（仅用户要求）；拍板 → ask_user_question。
       笔记库：note_library（库与期望状态自检）→ note_expect_get（读期望，开门禁）→ note_list（逐层导航）→ note_get（读全文）→ note_search（关键词检索，多根只读）→ note_overview（主题块清单 + 覆盖度）。
-      归档：note_plan（规划提案与确认）→ note_write（落块，带门禁）→ note_toc（生成/刷新微目录）→ note_link / note_unlink（wikilink 关联）→ note_lint（数据卫生体检，无分数）。
+      归档：note_plan（规划提案 → 用户拍板后 confirm 确认）→ note_write（落块，带门禁）→ note_toc（生成/刷新微目录）→ note_link / note_unlink（wikilink 关联）→ note_lint（数据卫生体检，无分数）。
       维护：note_update（append/replace/move/definition）→ note_rename（改标题并同步入链）→ note_history / note_restore（存档与回退）。
       跨会话：study_progress（进度与断点）、study_memory（偏好与小结）。
 

@@ -129,6 +129,8 @@ describe('study preset skills', () => {
     expect(body).toContain('未读期望不写')
     expect(body).toContain('未确认规划不写')
     expect(body).toContain('越界路径不写')
+    // 确认入口必须写清（漏了这一步 = 凭据永远打不开，2026-09-15 真机检查的 P0）
+    expect(body).toContain("action: 'confirm'")
     // 模板退场的口径也要写出来（否则模型会自己发明小节）
     expect(body).toContain('没有模板')
     expect(body).toContain('不设上下限')
@@ -236,6 +238,8 @@ describe('study preset skills', () => {
     expect(yaml).toContain('笔记期望')
     expect(yaml).toContain('note_expect_get')
     expect(yaml).toContain('note_plan')
+    // persona 也要写明"拍板后还要 confirm"这一步，否则模型会跳过确认直接落盘
+    expect(yaml).toContain('note_plan(action=confirm')
     // 整段重复自查：同一行出现两次以上即视为重复段落
     const seen = new Map<string, number>()
     for (const line of yaml.split(/\r?\n/)) {

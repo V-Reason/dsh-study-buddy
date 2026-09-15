@@ -172,14 +172,17 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       name: 'note_plan',
       description:
         '文件夹规划：把"这次要写哪些块、各落到哪个目录"整理成提案，供用户拍板。**提案只在对话里，不落盘**。'
-        + 'items 是待落块清单（title + path，path 为 vault 内相对路径含文件名）；rootPath 是规划根，之后 note_write 的路径必须落在它之下。'
-        + '用户确认（或让你改）后，用返回的 planId 调 note_write 逐个落盘；结构或顺序要改就直接重新提案一次。'
-        + 'action=abandon 放弃规划（把 rootPath 传成要放弃的 planId）。',
+        + 'action=create（默认）出提案：items 是待落块清单（title + path，path 为 vault 内相对路径含文件名），'
+        + 'rootPath 是规划根，之后 note_write 的路径必须落在它之下。'
+        + '**用户拍板后必须调 action=confirm 确认**（rootPath 传要确认的 planId）——未确认的规划会被 note_write 拒绝；'
+        + '确认后规划有效期从确认时刻起算（默认 24 小时），再用该 planId 逐个 note_write 落盘。'
+        + '结构或顺序要改就直接重新提案一次（拿到新的 planId）。'
+        + 'action=abandon 放弃规划（rootPath 传要放弃的 planId）。',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['create', 'abandon'], description: 'create=提案（默认）；abandon=放弃指定规划' },
-          rootPath: { type: 'string', description: 'create：规划根目录；abandon：要放弃的 planId' },
+          action: { type: 'string', enum: ['create', 'confirm', 'abandon'], description: 'create=提案（默认）；confirm=用户拍板后确认；abandon=放弃指定规划' },
+          rootPath: { type: 'string', description: 'create：规划根目录；confirm/abandon：要操作的 planId（形如 202610241430_ab12cd）' },
           material: { type: 'string', description: '本次规划服务的资料名' },
           notes: { type: 'string', description: '给用户的补充说明（如"复用已有目录、只新增一个节"）' },
           items: {
@@ -222,13 +225,14 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       name: 'note_write',
       description:
         '写入一个笔记块。硬门禁（会被拒绝并列修复步骤）：① 必须先 note_expect_get 读过《笔记期望.md》且之后没改过；'
-        + '② 必须带已确认的 planId；③ path 必须在规划根之下、标题在规划清单里且未被写过。'
+        + '② 必须带**已确认**的 planId（未确认的规划先调 note_plan(action=confirm) 确认）；'
+        + '③ path 必须在规划根之下、标题在规划清单里且未被写过。'
         + '正文写法（结构/详略/公式/图表/互引）完全按《笔记期望.md》，**没有模板与必填小节，字数不设限**。'
         + 'dryRun=true 只回显将写入的内容，不落盘。目标已存在时报错——改写用 note_update，避免覆盖。',
       parameters: {
         type: 'object',
         properties: {
-          planId: { type: 'string', description: 'note_plan 返回的规划 id（必须已确认）' },
+          planId: { type: 'string', description: 'note_plan 返回的规划 id（必须已用 note_plan(action=confirm) 确认）' },
           title: { type: 'string', description: '块标题（必须与规划里的某一项一致）' },
           path: { type: 'string', description: '落盘路径（vault 内相对路径，含 .md）' },
           source: { type: 'string', description: '资料名（课程/书/项目）' },
@@ -237,7 +241,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
           order: { type: 'number', description: '同目录阅读顺序（缺省用规划里的值）' },
           domain: { type: 'string', description: '领域键（可选；用于检索过滤与落盘快捷方式）' },
           status: { type: 'string', enum: [...VALID_STATUS], description: '草稿/已确认/需更新，默认 草稿' },
-          summary: { type: 'string', description: '一句话定位（可选，无长度限制；缺省时从正文首个引用块提取）' },
+          summary: { type: 'string', description: '一句话定位（可选，无长度限制；缺省时从正文首个引用块提取，此时不再另写一遍引用块）' },
           tags: { type: 'array', items: { type: 'string' }, description: '额外领域标签' },
           links: {
             type: 'object',
