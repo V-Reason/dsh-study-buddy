@@ -3,7 +3,6 @@
  * 全部走 node:fs 直写（插件是可信 preset 代码，不经沙箱 fs）。
  * @module vault
  */
-import type { TemplateHints } from './template.ts';
 /** 扫描时跳过的通用目录（vault 特定目录如"资源"由 config.skipDirs 配置） */
 export declare const SKIP_DIRS: Set<string>;
 /** 文件名长度上限（标题↔文件名同口径的唯一来源，CPLX-7） */
@@ -21,7 +20,7 @@ export declare function skipSetFor(extra?: string[]): Set<string>;
 export declare function sanitizeFilename(title: string): string;
 /**
  * 领域键近似匹配：按字符重合度（共同字符 / 较长键长度）≥0.6 排序，取前 2。
- * 用于 card_create 领域键未精确命中时回显"最接近的已映射键"（如
+ * 用于笔记领域键未精确命中时回显"最接近的已映射键"（如
  * "图形学-动画与特效" → "图形学-动画特效"），避免 agent 翻配置文件绕路。
  */
 export declare function findSimilarDomainKeys(domain: string, keys: string[]): string[];
@@ -111,13 +110,35 @@ export interface VaultLayout {
     indexTtlMs?: number;
     /** 每根扫描文件数上限（默认 20000）：超限截断扫描并回显警告，不再让工具整体失败（N6） */
     maxWalkFiles?: number;
-    /** 模板推断提示词表（缺省用内置默认值） */
-    templateHints?: TemplateHints;
+    /** 规划凭据有效期（小时，默认 24）：超期必须重新提案，避免门禁死锁 */
+    planTtlHours?: number;
 }
-/** 解析某领域卡片的落盘目录：优先映射表，未映射落入 fallbackDir/<领域名> */
+/** 索引读取上限（字节）：超过只取前 256KB 做 token 化——避免索引阶段把巨型文件读进内存 */
+export declare const MAX_INDEX_BYTES = 262144;
+/**
+ * 读一篇笔记用于**建索引**：返回全文（受 `MAX_INDEX_BYTES` 截断，`truncated` 标记）。
+ *
+ * 为什么不像 `dirs.readNoteHeader` 那样只读 4KB 头：检索要对**正文**做 token 化，
+ * 只读头会让"正文里的关键词"搜不到。这里读全文但设上限——索引常驻的内存由
+ * "不再保存正文"（架构选型 A4）保证，单次读盘量则与旧实现持平。
+ */
+export declare function readNoteSource(filePath: string, maxBytes?: number): Promise<{
+    raw: string;
+    truncated: boolean;
+}>;
+/** 解析某领域键的落盘目录：优先 `domainFolders` 快捷方式，未映射落入
+ * `fallbackDir/<领域名>`。
+ *
+ * 2026-10 起这只是**兜底路径**：正常情况下目录来自用户确认的文件夹规划
+ * （`dirs.resolveNoteDir` 的第一档），领域映射退化为语法糖（需求 R30）。
+ */
 export declare function cardDirFor(layout: VaultLayout, domain: string): string;
+/** 笔记落盘路径：`dir`（vault 内相对目录） + 标题清洗后的文件名 */
+export declare function notePathFor(vaultRoot: string, dir: string, title: string): string;
 /** 生成唯一文件名：`标题.md`，冲突时追加 ID 后缀（末 6 位），再冲突用完整 ID */
-export declare function uniqueCardPath(dir: string, title: string, id: string): Promise<string>;
+export declare function uniqueNotePath(dir: string, title: string, id: string): Promise<string>;
+/** @deprecated 旧名（卡片时代）；新调用点一律用 `uniqueNotePath` */
+export declare const uniqueCardPath: typeof uniqueNotePath;
 export declare function fileNameOf(p: string): string;
 /** MOC 落盘路径：mocDir/日期_标题.md */
 export declare function mocPathFor(layout: VaultLayout, title: string, date: string): string;

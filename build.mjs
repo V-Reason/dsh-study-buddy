@@ -4,10 +4,13 @@
  * profile's node_modules provides them). tsc then emits declarations.
  */
 import { build } from 'esbuild'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, rmSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 
 mkdirSync('lib', { recursive: true })
+// 清掉上一次的声明产物：删掉的模块（card/insight/template/moc/history…）如果留着
+// `lib/types/*.d.ts`，消费方还是能 import 到"已经不存在的 API"——编译期零信号。
+rmSync('lib/types', { recursive: true, force: true })
 
 await build({
   entryPoints: ['src/index.ts'],

@@ -10,8 +10,9 @@
  * 用户在会话里永远拿不到 vault 的沙箱 fs 权限，只能通过本插件的工具操作。
  * @module index
  */
-import { type CardInput, type LinkKind, type UpdatePayload } from './card.ts';
-import { type HistoryKind } from './history.ts';
+/** 笔记契约的唯一来源（阶段 6 起 card.ts / history.ts / moc.ts 已删除） */
+import { type BlockLinks, type LinkKind } from './note.ts';
+import { type NoteKind } from './search.ts';
 import { type ToolDef } from './tools.ts';
 import { type VaultLayout } from './vault.ts';
 export type { ToolDef, ToolExecLike } from './tools.ts';
@@ -50,7 +51,7 @@ export declare class VaultStore {
     private skipped;
     private extraRoots;
     /**
-     * 标题 → 卡片摘要：`card_create` 的同名提示用 O(1) 查询（N2）。
+     * 标题 → 笔记摘要：写入时的同名提示用 O(1) 查询（N2）。
      * 旧实现为了一条提示调用 `ensureIndex`，让每次建卡都全库重扫。
      * 索引重建时整体填充，写入（create/replace/rename）后增量维护。
      */
@@ -90,7 +91,8 @@ export declare class VaultStore {
     search(query: string, opts?: {
         domain?: string;
         status?: string;
-        kind?: 'card' | 'note';
+        kind?: NoteKind;
+        dirPath?: string;
         limit?: number;
     }, call?: {
         sessionCwd?: string;
@@ -99,57 +101,41 @@ export declare class VaultStore {
     get(ref: string, call?: {
         sessionCwd?: string;
     }): Promise<string>;
-    /**
-     * 建卡。第三参保留与其他工具一致的 `call` 形状（tools.ts 统一传 `sessionCwd`），
-     * 但建卡本身**不再读索引**（N2），因此会话 cwd 对它没有影响。
-     */
-    create(input: CardInput, _call?: {
-        sessionCwd?: string;
-    }): Promise<{
-        text: string;
-        rel: string;
-    }>;
-    update(id: string, payload: UpdatePayload, call?: {
-        sessionCwd?: string;
-    }): Promise<string>;
-    link(fromId: string, toId: string, kind: LinkKind, call?: {
-        sessionCwd?: string;
-    }): Promise<string>;
-    /** 解析 MOC 引用清单（纯查询，不落盘）：未解析到的与旧笔记分开报告 */
-    private collectMocEntries;
-    moc(opts: {
-        title?: string;
-        cardIds: string[];
-        domain?: string;
-    }, call?: {
-        sessionCwd?: string;
-    }): Promise<string>;
     private lintCtx;
-    /** 单卡报告：用刚从磁盘读到的原文（保证是最新版） */
+    /**
+     * 从《笔记期望.md》解析出的检查项（`- [检查] 禁止/必须 …`）。
+     *
+     * 这一步让"检查什么"也走热配置：期望文件里没写规则时，`expect-rule` 会明确
+     * 列为"未执行"而不是假装通过（N7）。
+     */
+    private expectRules;
+    /** 文档类型判定（三态）：有 ID 且有来源章节 = 块；有 ID = 存量卡；无 ID = 旧笔记 */
+    private kindOf;
+    /** 单篇报告：用刚从磁盘读到的原文（保证是最新版） */
     private reportOfRaw;
-    /** 批量报告：直接用索引里已有的正文与模板，不再逐文件读盘（PERF-2） */
+    /**
+     * 批量报告：正文按需现读（A4 之后索引不再持有正文）。
+     *
+     * 代价是批量体检要逐篇读盘——这是"索引不常驻正文"的必然交换：内存从
+     * 全库正文降到倒排表，而批量体检本来就是低频重操作。
+     */
     private reportOfIndexed;
-    /** 单卡/批量质量体检（card_lint）+ 跨卡一致性 / 质量趋势 / 可执行性评级（P2） */
+    /**
+     * 质量体检（card_lint）。
+     *
+     * 2026-10：跨卡一致性 / 质量趋势 / 可执行性评级三个分析开关随模板与 100 分制一起
+     * 退场（架构选型 A9 / §6.4）——它们的输入（模板、分值）已不存在。
+     */
     lint(opts: {
         ref?: string;
         scope?: 'vault' | 'all';
         limit?: number;
         rule?: string;
-        cross?: boolean;
-        trend?: boolean;
-        rating?: boolean;
     }, call?: {
         sessionCwd?: string;
     }): Promise<string>;
     private lintOne;
     private lintBatch;
-    /** 版本更新 / 勘误 / 历史折叠块管理（card_history） */
-    history(ref: string, action: 'list' | 'strip', opts?: {
-        kinds?: HistoryKind[];
-        dryRun?: boolean;
-    }, call?: {
-        sessionCwd?: string;
-    }): Promise<string>;
     /**
      * 改名：**先算出全部改动并做完冲突校验，再落盘**（BIZ-2），
      * 落盘失败按已写文件逆序回滚。入链扫描用索引正文预筛（PERF-5）。
@@ -162,6 +148,103 @@ export declare class VaultStore {
     /** 提交改名：写本卡 → 写全库入链 → 改文件名；任一失败按已写文件回滚 */
     private commitRename;
     private fileExists;
+    /** `session.json` 的绝对路径（门禁状态文件） */
+    private sessionFile;
+    /** 读会话门禁状态（`session.json`；损坏回空态，不阻断） */
+    private sessionState;
+    /** 当前《笔记期望.md》的文件签名（`null` = 文件不存在） */
+    private expectSignature;
+    /** 组装门禁输入（三连校验共用） */
+    private gateInput;
+    /** `note_library`：库状态与期望文件自检（硬门禁的第一环） */
+    noteLibrary(action: string): Promise<string>;
+    /** `note_expect_get`：读期望全文并**标记已读**（门禁开门动作） */
+    noteExpectGet(): Promise<string>;
+    /**
+     * `note_list`：逐层导航（子目录 + 该层笔记；**不读正文**，只读 frontmatter 头）。
+     *
+     * 两个刻意的口径：
+     * - 目录计数与"有无微目录"都按**子树累加**（父级只放章节标题时，其下几层才是块）；
+     * - vault 根的《笔记期望.md》不是笔记，不列出来（否则每次导航都多一行噪声）。
+     */
+    noteList(opts?: {
+        path?: string;
+        depth?: number;
+    }): Promise<string>;
+    /** 由索引构建目录索引（A6：重建时整体构建，写入后增量维护） */
+    private dirIndexFor;
+    /** `note_overview`：主题块清单 + 按来源章节的覆盖情况 */
+    /** `note_overview`：主题块清单 + 按来源章节的覆盖情况（聚合在 overview.ts，纯函数） */
+    noteOverview(opts?: {
+        path?: string;
+        material?: string;
+    }): Promise<string>;
+    /** `note_plan`：文件夹规划提案与确认（提案只在对话里，不落盘，需求 R11） */
+    notePlan(args: {
+        action?: string;
+        rootPath?: string;
+        items?: Array<{
+            title?: string;
+            path?: string;
+            sourceSection?: string;
+            order?: number;
+        }>;
+        material?: string;
+        notes?: string;
+    }): Promise<string>;
+    /** `note_write`：落一个块（硬门禁三连校验 + 规划消费记账） */
+    noteWrite(input: {
+        planId: string;
+        title: string;
+        source: string;
+        content: string;
+        path: string;
+        domain?: string;
+        status?: string;
+        sourceSection?: string;
+        order?: number;
+        summary?: string;
+        tags?: string[];
+        links?: BlockLinks;
+        dryRun?: boolean;
+    }): Promise<string>;
+    /** `note_update`：append（补充）/ replace（替换，先存档）/ move（迁目录） */
+    noteUpdate(args: {
+        ref: string;
+        action: string;
+        changes?: string;
+        section?: string;
+        newContent?: string;
+        summary?: string;
+        targetPath?: string;
+        sourceSection?: string;
+        dryRun?: boolean;
+    }, call?: {
+        sessionCwd?: string;
+    }): Promise<string>;
+    /** `note_history`：列出/读取某篇笔记的历史存档 */
+    noteHistory(ref: string, opts?: {
+        action?: string;
+        archiveId?: string;
+    }, call?: {
+        sessionCwd?: string;
+    }): Promise<string>;
+    /** `note_restore`：恢复某份存档（当前正文先转入存档，绝不丢内容） */
+    noteRestore(ref: string, opts?: {
+        archiveId?: string;
+        dryRun?: boolean;
+    }, call?: {
+        sessionCwd?: string;
+    }): Promise<string>;
+    /** `note_toc`：生成/刷新某目录的微目录（只重写生成段，用户手写段保留） */
+    noteToc(dir: string, opts?: {
+        dryRun?: boolean;
+        title?: string;
+    }): Promise<string>;
+    /** `note_link` / `note_unlink`：wikilink 关联的双向增删（先校验后写盘） */
+    noteLink(fromRef: string, toRef: string, kind: LinkKind, remove?: boolean, call?: {
+        sessionCwd?: string;
+    }): Promise<string>;
     progress(action: string, fields: {
         material?: string;
         section?: string;
