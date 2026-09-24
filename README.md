@@ -52,6 +52,12 @@ Copy-Item presets/study/assets/笔记期望.md "D:\你的vault绝对路径\笔�
 - **装法**：`dsh plugin --profile <name> add dsh-study-buddy`（或 `plugin_manager install_bundle`），
   然后确认 `dsh.profile.bundles` 里有本包 —— 少了这一步只是"预设不出现"，**不会报错**，
   这是 2026-09-24 那次失效的真实形态（详见 [技术文档 §9.2](docs/技术文档.md)）。
+- **升级 / 本地改动**：profile 里记的是 `github:V-Reason/dsh-study-buddy`，所以**改了必须先 `git push`，
+  再 `dsh plugin --profile <name> update dsh-study-buddy`**。只改本机不推，下一次 profile 里的任何
+  `pnpm install`（装卸别的插件也会触发）都会把 `node_modules\<插件>` 换回远端那个提交——旧版没有
+  `dsh.bundle.patch`，于是被从 `dsh.profile.bundles` 里摘掉、预设在注册表里消失，而 `dsh web`
+  只会报别的插件的错。`pnpm tools/verify-deploy.ps1 -Profile <name>` 的第 1、2 节就是为这种
+  "看着改了、其实被回滚"准备的。
 - **兼容门禁**：本包在 `package.json` 声明 `peerDependencies["@deepseek-ai/dsh"]`。DSH 会按它拒绝装载不兼容版本；
   升级 DSH minor（如 0.2.x）需要同步提这个范围，或用 `plugin_manager` 的版本豁免（有风险，慎用）。
   忘了提范围的表现是"插件被拒绝装载"，跑 `pnpm run verify:contract` 会直接点名。
