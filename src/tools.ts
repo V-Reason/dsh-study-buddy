@@ -15,7 +15,14 @@
 
 import { VALID_STATUS, type BlockLinks } from './note.ts'
 import { RULES, ruleIds } from './lint.ts'
+import { sessionCwdOf, type ToolExecLike } from './host.ts'
 import type { VaultStore } from './index.ts'
+
+/**
+ * 宿主形状与读取函数都在 host.ts（本插件唯一的宿主接触面）；这里 re-export 是为了
+ * 保持 `ToolExecLike` / `sessionCwdOf` 这两个既有公开出口不漂移（index.ts 继续转发）。
+ */
+export { sessionCwdOf, type ToolExecLike }
 
 export interface ToolDef {
   name: string
@@ -30,18 +37,8 @@ export interface ToolDef {
   execute: (args: Record<string, unknown>, exec?: ToolExecLike) => Promise<string> | string
 }
 
-/** 工具方会话信息的最小结构类型（不引入 @deepseek-ai 类型，保持构建 external） */
-export interface ToolExecLike {
-  agent?: { session?: { header?: { cwd?: string } } }
-}
-
 const renderText = (_args: unknown, value: string) => [{ type: 'text', text: value }]
 const output = { schema: { type: 'string' as const }, render: renderText }
-
-export function sessionCwdOf(exec?: ToolExecLike): string | undefined {
-  const cwd = exec?.agent?.session?.header?.cwd
-  return cwd && String(cwd).trim() ? String(cwd) : undefined
-}
 
 function stringList(value: unknown): string[] | undefined {
   return Array.isArray(value) ? value.map(String) : undefined

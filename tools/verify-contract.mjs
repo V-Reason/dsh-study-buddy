@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 契约校验：本插件与「本机 DSH」之间的平台契约断言。
+ * 契约校验：本插件与「本机 DSH」之间的平台契约断言 + 交付形态断言。
  *
  * 为什么需要它（见 troubleshooting.md §六）：平台与插件之间的契约变更**不会以
  * 编译错误的形式暴露**——2026-09-15 的 DSH 更新就把 Typert strict codec 的
@@ -8,9 +8,16 @@
  * （typecheck + vitest）永远绿：源码零 `@deepseek-ai/*` 运行时导入，也没有任何
  * 断言真的去碰宿主。
  *
- * 本脚本把「插件实际用到的 4 个宿主契约点」（见下方 CONTRACTS）变成可执行断言，
- * 外加一层"平台符号探针"：能定位到 DSH 安装就直接 import 平台包，断言被用到的
- * 方法仍在；定位不到就**跳过**（CI 在 ubuntu 上没有 DSH，不能因此变红）。
+ * 2026-09-24 又栽了一次，这次是**交付形态**：DSH 0.1.7-rc.1 删除了目录式预设
+ * （提交 d1e22a7e24 / #4569），`$DSH_HOME/.agent-presets/` 再没有任何读者 ——
+ * 预设整行从名单里消失、18 个工具一个不剩，而插件代码与其契约全绿。
+ * 所以本脚本现在有**两类**断言：
+ *
+ *   A. 交付形态（文件级）：package.json 的 `dsh.bundle.patch` 指向的声明文件存在、
+ *      可解析、含 `preset-study`（`@deepseek-ai/dsh-agent-preset`）且其 `study` 行的
+ *      config 键 ⊆ 插件认得的键、且**不含** vaultRoot（机器路径不进包）。
+ *   B. 平台契约（活符号）：产物导出的 `HOST_CONTRACTS` 逐点对**运行中的 DSH** 断言；
+ *      外加"不得再假设已删 API"的负向断言（替身刻意不给 `settings`）。
  *
  * 只读：不写仓库、不写 vault、不在 profile 里装任何东西。
  * 用法：
@@ -21,10 +28,10 @@
  */
 
 import { mkdtemp, rm } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const VERBOSE = process.argv.includes('--verbose')
@@ -32,43 +39,18 @@ const SELF_TEST = process.argv.includes('--self-test')
 /** 仓库根（Windows 盘符路径也正确：用 fileURLToPath 而不是手撕 pathname） */
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const LIB = join(ROOT, 'lib', 'index.js')
-
-/**
- * 插件依赖的宿主契约点：每条都是"平台文件:行号 + 期望形状 + 变了会怎样"。
- * 行号来自 T:\deepseek-harness 工作树 HEAD（`dsh-v0.1.6-alpha.1` + 5 提交）。
- * 行号漂移不影响判定（断言按形状，不按行号），它是给你去平台源码核对用的。
- */
-const CONTRACTS = {
-  toolsRegister: {
-    ref: 'packages/core/tools/src/index.ts:1043',
-    what: 'ctx.tools.register(def) → disposer；def 必须有 output { schema, render }',
-    breaks: 'apply() 里注册工具时同步抛错 → 整行未激活（18 个工具全没）',
-  },
-  sessionSnapshotEvents: {
-    ref: 'packages/core/session/src/index.ts:646',
-    what: 'session.snapshotEvents() → readonly SessionEvent[]',
-    breaks: '开场门禁的"是否恢复会话"判定退化为 false（只多注入一次提醒，不阻断）',
-  },
-  preStep: {
-    ref: 'packages/core/agent/src/runtime-types.ts:320',
-    what: "ctx.on('agent/pre-step', (payload, next))，payload = { agent, messages, turn, step, signal }",
-    breaks: '预步提醒不再注入（系统提示段仍在，门禁降级为单层）',
-  },
-  sessionHeaderCwd: {
-    ref: 'packages/core/agent/src/runtime-types.ts:168',
-    what: 'payload.agent.session.header.cwd → string | undefined',
-    breaks: 'includeSessionCwd 失效：会话工作目录的旧笔记不进检索',
-  },
-  systemPromptSection: {
-    ref: 'packages/core/system-prompt/src/index.ts:455',
-    what: 'ctx.get("systemPrompt").section({ name, order, text }) → disposer（order 必须是有限数）',
-    breaks: '系统提示段注册失败 → 开场门禁第一层消失',
-  },
-}
+const MANIFEST = join(ROOT, 'package.json')
+/** 预设声明随包发的 patch 文件（package.json 的 dsh.bundle.patch 指过来） */
+const DECLARATION = join(ROOT, 'presets', 'study.patch.yml')
 
 /** 判定预算 */
 let passed = 0
 const failures = []
+/**
+ * 契约点说明表：从产物导出的 `HOST_CONTRACTS` 填充（**单一真相**在 src/host.ts）。
+ * 断言失败时用它回显"平台源码坐标 + 失效后果 + 该改哪个文件"。
+ */
+const contractInfo = new Map()
 
 function ok(label, detail) {
   passed += 1
@@ -76,8 +58,7 @@ function ok(label, detail) {
 }
 
 function bad(contract, message) {
-  const info = CONTRACTS[contract]
-  failures.push({ contract, message, info })
+  failures.push({ contract, message, info: contractInfo.get(contract) })
 }
 
 /**
@@ -97,7 +78,150 @@ async function check(label, contract, fn) {
   }
 }
 
-/** 假 ctx：只实现插件真的会用的四个入口，记录每次副作用以便断言可逆性 */
+// ── 零依赖 YAML 子集扫描（只认本仓库写的那几种形状，不引解析器） ──────────────
+
+/**
+ * 扫描 patch 文件里的条目行：`- id: <id>` 及其同级 `name:`、`config:` 下的一级键。
+ *
+ * 只按**缩进**判定（`tests/preset.spec.ts` 同款口径，两个文件各扫各的、互相独立）：
+ * 条目行的缩进是 R，则 `name` / `config` 在 R+2，config 的一级键在 R+4。
+ * 深层嵌套（group 的子行、persona 正文）因缩进不等于 R+4 而自动排除。
+ * @param text - patch 文件全文
+ * @returns 每个条目的 id / 缩进 / 模块名 / config 键 / 行号
+ */
+export function scanEntryRows(text) {
+  const lines = text.split(/\r?\n/)
+  const rows = []
+  let current = null
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]
+    if (line.trimStart().startsWith('#')) continue
+    const rowMatch = /^(\s*)-\s*id:\s*(\S+)\s*$/.exec(line)
+    if (rowMatch) {
+      current = { id: rowMatch[2], indent: rowMatch[1].length, name: '', configKeys: [], line: i + 1, configIndent: null }
+      rows.push(current)
+      continue
+    }
+    if (current === null) continue
+    const indent = /^\s*/.exec(line)[0].length
+    if (line.trim() === '') continue
+    if (indent <= current.indent) continue
+    const propMatch = /^(\s*)name:\s*(\S+)/.exec(line)
+    if (propMatch && propMatch[1].length === current.indent + 2) {
+      current.name = propMatch[2].replace(/^['"]|['"]$/g, '')
+      continue
+    }
+    const configMatch = /^(\s*)config:\s*$/.exec(line)
+    if (configMatch && configMatch[1].length === current.indent + 2) {
+      current.configIndent = current.indent + 4
+      continue
+    }
+    if (current.configIndent !== null && indent === current.configIndent) {
+      const keyMatch = /^([A-Za-z_][A-Za-z0-9_]*):/.exec(line.trim())
+      if (keyMatch) current.configKeys.push(keyMatch[1])
+    }
+  }
+  return rows
+}
+
+/** 交付形态断言：package.json 的 bundle 声明 → patch 文件 → 预设声明 → study 行 */
+async function checkDelivery(mod, log) {
+  log('交付形态（directory preset 已删除：包必须是声明式 bundle）')
+  const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8'))
+  const declared = manifest?.dsh?.bundle?.patch
+
+  await check('package.json 声明 dsh.bundle.patch，且文件存在', 'bundleDeclared', () => {
+    if (declared === undefined) {
+      return {
+        ok: false,
+        message: '没有 dsh.bundle.patch —— DSH 0.1.7 起预设只能由 bundle patch 声明；'
+          + '缺了它，装包后「学习伙伴」不会出现在预设名单里（行消失、不报错）',
+      }
+    }
+    const files = typeof declared === 'string' ? [declared] : Array.isArray(declared) ? declared : []
+    if (files.length === 0) return { ok: false, message: `dsh.bundle.patch 形状不对：${JSON.stringify(declared)}` }
+    const missing = files.filter((file) => typeof file !== 'string' || !existsSync(resolve(ROOT, file)))
+    if (missing.length > 0) return { ok: false, message: `patch 文件不存在：${missing.join('、')}` }
+    return { note: files.join(' + ') }
+  })
+
+  await check('声明文件含 preset-study（@deepseek-ai/dsh-agent-preset）声明', 'bundleDeclared', () => {
+    if (!existsSync(DECLARATION)) return { ok: false, message: `缺少 ${DECLARATION}` }
+    const rows = scanEntryRows(readFileSync(DECLARATION, 'utf8'))
+    const declaration = rows.find((row) => row.id === 'preset-study')
+    if (declaration === undefined) return { ok: false, message: '没有 id: preset-study 的声明行' }
+    if (declaration.name !== '@deepseek-ai/dsh-agent-preset') {
+      return { ok: false, message: `preset-study 的模块名是 ${declaration.name}（应为 @deepseek-ai/dsh-agent-preset）` }
+    }
+    return { note: `preset-study → ${declaration.name}` }
+  })
+
+  await check('预设声明含 12 个组合行 + 3 个压缩子行，且 id 唯一', 'bundleDeclared', () => {
+    const rows = scanEntryRows(readFileSync(DECLARATION, 'utf8'))
+    const declaration = rows.find((row) => row.id === 'preset-study')
+    if (declaration === undefined) return { ok: false, message: '没有 preset-study 声明行' }
+    const topLevel = rows.filter((row) => row.indent === declaration.indent + 6)
+    const expected = [
+      'persona', 'agent-instructions', 'tool-pwsh', 'tool-fs', 'tool-fs-search', 'skill-filesystem',
+      'tool-skill', 'compaction', 'study', 'tool-ask-user', 'tool-todo', 'tool-web',
+    ]
+    const ids = topLevel.map((row) => row.id)
+    const missing = expected.filter((id) => !ids.includes(id))
+    const extra = ids.filter((id) => !expected.includes(id))
+    if (missing.length > 0 || extra.length > 0) {
+      return { ok: false, message: `缺 ${missing.join('、') || '无'}；多 ${extra.join('、') || '无'}` }
+    }
+    if (new Set(ids).size !== ids.length) return { ok: false, message: `id 重复：${ids.join('、')}` }
+    for (const nested of ['compaction-basic', 'command-compact', 'tool-result-pruner']) {
+      if (!rows.some((row) => row.id === nested)) return { ok: false, message: `压缩组缺 ${nested}` }
+    }
+    return { note: `${ids.length} 行 + 3 个嵌套子行` }
+  })
+
+  await check('study 行的 config 键 ⊆ 插件认得的键，且不含 vaultRoot', 'bundleDeclared', () => {
+    const rows = scanEntryRows(readFileSync(DECLARATION, 'utf8'))
+    const study = rows.find((row) => row.id === 'study')
+    if (study === undefined) return { ok: false, message: '组合里没有 study 插件行' }
+    if (study.name !== 'dsh-study-buddy') return { ok: false, message: `study 行的模块名是 ${study.name}` }
+    const known = new Set(mod.KNOWN_CONFIG_KEYS ?? [])
+    const unknown = study.configKeys.filter((key) => !known.has(key))
+    if (unknown.length > 0) {
+      return {
+        ok: false,
+        message: `含插件不认的键：${unknown.join('、')}（留在配置里 = 以为配了其实没配；已知键见 src/config.ts）`,
+      }
+    }
+    if (study.configKeys.includes('vaultRoot')) {
+      return {
+        ok: false,
+        message: 'vaultRoot 又写回包里了 —— 机器相关路径会随包发布（应留给 '
+          + 'DSH_STUDY_VAULT / <DSH_HOME>/study-buddy.json / 部署侧覆盖）',
+      }
+    }
+    return { note: `${study.configKeys.length} 个键，无 vaultRoot` }
+  })
+
+  log('零内部耦合（第三方包不得静态 import @deepseek-ai/*）')
+  await check('src/ 与 lib/ 都没有 @deepseek-ai/* 的静态导入', 'noPlatformImports', () => {
+    const offenders = []
+    const sources = readdirSync(join(ROOT, 'src')).filter((f) => f.endsWith('.ts')).map((f) => [`src/${f}`, join(ROOT, 'src', f)])
+    if (existsSync(LIB)) sources.push(['lib/index.js', LIB])
+    const patterns = [/\bfrom\s+['"]@deepseek-ai\//, /\bimport\s*\(\s*['"]@deepseek-ai\//, /\brequire\s*\(\s*['"]@deepseek-ai\//]
+    for (const [label, file] of sources) {
+      const text = readFileSync(file, 'utf8')
+      if (patterns.some((pattern) => pattern.test(text))) offenders.push(label)
+    }
+    if (offenders.length > 0) {
+      return {
+        ok: false,
+        message: `这些文件静态导入了平台包：${offenders.join('、')}（宿主接触面只能走 src/host.ts 的特性探测）`,
+      }
+    }
+    return { note: `${sources.length} 个文件` }
+  })
+}
+
+/** 假 ctx：只实现插件真的会用的入口，记录每次副作用以便断言可逆性 */
 function fakeContext() {
   const registered = new Map()
   const sections = []
@@ -180,6 +304,11 @@ async function tryImport(specifier, base) {
   }
 }
 
+/**
+ * 平台符号探针：把 HOST_CONTRACTS 的每个点在**运行中的 DSH** 上验一遍。
+ *
+ * 行号漂移不影响判定（断言按形状，不按行号），它是给你去平台源码核对用的。
+ */
 async function probePlatform(log) {
   const base = locatePlatformModules()
   if (base === undefined) {
@@ -188,7 +317,7 @@ async function probePlatform(log) {
   }
   log(`平台符号探针（${base}）`)
   const modules = {}
-  for (const specifier of ['@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session', '@deepseek-ai/dsh-system-prompt']) {
+  for (const specifier of ['@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-app-boot']) {
     modules[specifier] = await tryImport(specifier, base)
     if (modules[specifier] === undefined) log(`  ⏭ ${specifier} 未安装，跳过其断言`)
   }
@@ -199,7 +328,7 @@ async function probePlatform(log) {
       const runtime = tools.ToolRuntime ?? tools.default
       if (typeof runtime !== 'function') return { ok: false, message: `未导出 ToolRuntime（导出：${Object.keys(tools).join(',')}）` }
       if (typeof runtime.prototype?.register !== 'function') return { ok: false, message: 'ToolRuntime.prototype.register 不是函数' }
-      return { note: `ToolRuntime.prototype.register ✓（${CONTRACTS.toolsRegister.ref}）` }
+      return { note: 'ToolRuntime.prototype.register ✓' }
     })
   }
 
@@ -210,7 +339,7 @@ async function probePlatform(log) {
       if (typeof ctor?.prototype?.snapshotEvents !== 'function') {
         return { ok: false, message: 'Session.prototype.snapshotEvents 不存在（开场门禁降级，需改读平台新 API）' }
       }
-      return { note: `Session.prototype.snapshotEvents ✓（${CONTRACTS.sessionSnapshotEvents.ref}）` }
+      return { note: 'Session.prototype.snapshotEvents ✓' }
     })
     await check('Session 实例可读 header.cwd', 'sessionHeaderCwd', () => {
       // header 是构造期必填字段：用最小合法 header 真造一个 Session，
@@ -226,7 +355,7 @@ async function probePlatform(log) {
       })
       const cwd = instance?.header?.cwd
       if (cwd !== 'T:\\probe') return { ok: false, message: `session.header.cwd 读到 ${JSON.stringify(cwd)}` }
-      return { note: `session.header.cwd ✓（${CONTRACTS.sessionHeaderCwd.ref}）` }
+      return { note: 'session.header.cwd ✓' }
     })
   }
 
@@ -237,14 +366,38 @@ async function probePlatform(log) {
       if (typeof ctor?.prototype?.section !== 'function') {
         return { ok: false, message: 'SystemPrompt.prototype.section 不是函数' }
       }
-      return { note: `SystemPrompt.prototype.section ✓（${CONTRACTS.systemPromptSection.ref}）` }
+      return { note: 'SystemPrompt.prototype.section ✓' }
     })
+  }
+
+  // peer 范围：**用平台自己的门禁**判（不手搓 semver，语义与 DSH 完全一致）
+  const boot = modules['@deepseek-ai/dsh-app-boot']
+  if (boot !== undefined && typeof boot.evaluatePluginCompatibility === 'function') {
+    await check('package.json 的 DSH peer 范围接受本机运行时', 'dshPeerRange', () => {
+      const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8'))
+      const runtime = boot.getDshRuntimeVersion()
+      const issue = boot.evaluatePluginCompatibility(manifest, {}, runtime)
+      if (issue !== undefined) {
+        return {
+          ok: false,
+          message: `dsh ${runtime} 判为不兼容：${JSON.stringify(issue.peers)}`
+            + '（DSH 会拒绝装载本插件；随 DSH minor 升级时提 package.json 的 peer 范围）',
+        }
+      }
+      return { note: `dsh ${runtime} ✓（${JSON.stringify(manifest.peerDependencies?.['@deepseek-ai/dsh']) }）` }
+    })
+  } else if (boot !== undefined) {
+    log('  ⏭ dsh-app-boot 没导出 evaluatePluginCompatibility，跳过 peer 范围断言')
   }
 }
 
 /** 载入 lib/index.js 并跑全部断言；被 --self-test 复用（可注入损坏的产物） */
 export async function runChecks(log, load = async () => import(pathToFileURL(LIB).href)) {
   const mod = await load()
+
+  // 契约点说明表：单一真相在 src/host.ts 的 HOST_CONTRACTS（经产物导出）
+  contractInfo.clear()
+  for (const contract of mod.HOST_CONTRACTS ?? []) contractInfo.set(contract.key, contract)
 
   log(`产物出口（${LIB}）`)
   await check('apply 是函数、inject 声明 tools', 'toolsRegister', () => {
@@ -254,6 +407,21 @@ export async function runChecks(log, load = async () => import(pathToFileURL(LIB
     }
     return { note: `inject=${JSON.stringify(mod.inject)}` }
   })
+
+  await check('宿主契约表完整（每个点都有 ref/what/breaks，供失败回显）', 'hostContracts', () => {
+    const contracts = mod.HOST_CONTRACTS ?? []
+    if (contracts.length < 5) return { ok: false, message: `HOST_CONTRACTS 只有 ${contracts.length} 条（应覆盖 5 个接触点）` }
+    const keys = contracts.map((item) => item.key)
+    const missing = ['toolsRegister', 'systemPromptSection', 'preStep', 'sessionSnapshotEvents', 'sessionHeaderCwd']
+      .filter((key) => !keys.includes(key))
+    if (missing.length > 0) return { ok: false, message: `契约表缺 ${missing.join('、')}` }
+    for (const item of contracts) {
+      if (!item.ref || !item.what || !item.breaks) return { ok: false, message: `${item.key} 缺少 ref/what/breaks` }
+    }
+    return { note: `${contracts.length} 条` }
+  })
+
+  await checkDelivery(mod, log)
 
   const tempVault = await mkdtemp(join(tmpdir(), 'study-buddy-contract-'))
   try {
@@ -320,6 +488,32 @@ export async function runChecks(log, load = async () => import(pathToFileURL(LIB
       for (const callback of fake.effects) callback()()
       if (fake.registered.size !== 0) return { ok: false, message: 'effect 执行后仍有残留注册（生命周期不可逆）' }
       return { note: '注册 18 / 注销 18' }
+    })
+
+    // 负向断言（迁移指南铁律 3）：替身刻意**不提供** settings —— DSH 0.1.7-rc.1 删掉了
+    // `ctx.settings.register`，任何"只有 settings 在才工作"的写法会整行未激活。
+    await check('负向：假 ctx 不给 settings（0.1.7 已删 register），apply 仍注册 18 个工具', 'toolsRegister', () => {
+      const fake = fakeContext()
+      if (typeof fake.ctx.get('settings') !== 'undefined') return { ok: false, message: '替身意外提供了 settings' }
+      mod.apply(fake.ctx, { vaultRoot: tempVault })
+      if (fake.registered.size !== expected.length) {
+        return { ok: false, message: `注册了 ${fake.registered.size} 个（应 ${expected.length}）—— 说明依赖了已删 API` }
+      }
+      return { note: '不依赖 settings / 已删方法' }
+    })
+
+    await check('负向：dsh-loader 报错时退到直接服务，不影响注册', 'toolsRegister', () => {
+      const fake = fakeContext()
+      const inner = fake.ctx.get.bind(fake.ctx)
+      fake.ctx.get = (key) => {
+        if (key === 'dshLoader') return { services: { get() { throw new Error('adapter broken') } } }
+        return inner(key)
+      }
+      mod.apply(fake.ctx, { vaultRoot: tempVault })
+      if (fake.registered.size !== expected.length) {
+        return { ok: false, message: `注册了 ${fake.registered.size} 个（应 ${expected.length}）` }
+      }
+      return { note: '可选兼容层坏了也不拖垮插件' }
     })
 
     await check('系统提示段条目形状（name/order 有限数/text）', 'systemPromptSection', () => {
@@ -399,6 +593,18 @@ async function selfTest() {
       name: 'apply 抛错 → 接线断言报错（整行未激活形态）',
       mutate: (mod) => ({ ...mod, apply: () => { throw new Error('strict codec has no create() factory') } }),
     },
+    {
+      name: '契约表被清空 → 契约表断言报错',
+      mutate: (mod) => ({ ...mod, HOST_CONTRACTS: [] }),
+    },
+    {
+      name: '声明一行都不认得的 config 键 → 交付形态断言报错',
+      mutate: (mod) => ({
+        ...mod,
+        // 只改"认得的键"，等价于把 patch 里的 study 行全部标成未知键
+        KNOWN_CONFIG_KEYS: [],
+      }),
+    },
   ]
 
   let caught = 0
@@ -460,7 +666,7 @@ async function main() {
   return 1
 }
 
-// 作为脚本直接运行时才执行（被 import 时只暴露 runChecks）
+// 作为脚本直接运行时才执行（被 import 时只暴露 runChecks / scanEntryRows）
 if (process.argv[1] !== undefined
   && fileURLToPath(pathToFileURL(process.argv[1])) === fileURLToPath(import.meta.url)) {
   process.exitCode = await main()

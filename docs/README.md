@@ -1,6 +1,6 @@
 # docs — 文档地图
 
-> 版本基线：v1.0.2 ｜ 读者：使用者、插件维护者、二次开发者
+> 版本基线：v1.1.0 ｜ 读者：使用者、插件维护者、二次开发者
 >
 > 本文件是 `docs/` 的**单一导航入口**：哪份文档在哪里、负责什么、改代码时该同步哪一份、什么情况下归档。
 > 逐键配置与工具行为看 [`用户使用指南.md`](用户使用指南.md)；"为什么这样设计"看 [`设计文档.md`](设计文档.md)；
@@ -45,6 +45,7 @@ DSH 升级后排障先跑它们，判读口径见 [`tools/README.md`](../tools/R
 | **归档** | `archive/` | [`archive/README.md`](archive/README.md) | 历史文档索引（审查报告原件、提案、早期需求稿、体检、复盘、体验报告） | 文档被取代/已完成/仅供溯源时 |
 | **归档** | `archive/` | [`archive/审查修复记录.md`](archive/审查修复记录.md) | v0.9 两轮审查的**结论 + 逐项修复状态 + 为什么不修**（历史台账，仅溯源） | 不再更新；新问题走需求/设计文档 |
 | **权威细则** | `presets/` | [`../presets/study/skills/*/SKILL.md`](../presets/study/skills/) | 6 个技能的执行口径（study-loop / note-format / file-reading / incremental-update / domain-adaptation / memory-auto） | 技能行为变化（与 persona 一起改） |
+| **预设声明** | `presets/` | [`../presets/study.patch.yml`](../presets/study.patch.yml) | 「学习伙伴」的**声明式 preset**（persona + 12 个工具行 + `study` 插件行 config）——DSH 0.1.7 起目录式预设已删除，组合只在这里 | 增删工具行 / 改 persona / 改机器无关的默认配置（机器路径见 `DSH_STUDY_VAULT`） |
 | **默认模板** | `presets/` | [`../presets/study/assets/笔记期望.md`](../presets/study/assets/笔记期望.md) | 用户复制到 vault 根的《笔记期望.md》默认内容（笔记写法的单一来源） | 想调整"默认写法建议"时（**不改代码**） |
 
 根目录 [`README.md`](../README.md) 是**项目门面**：定位、快速开始、三条硬门禁、笔记样例、最小配置、隐私摘要、文档导航。
@@ -69,10 +70,10 @@ DSH 升级后排障先跑它们，判读口径见 [`tools/README.md`](../tools/R
 | 存档/回退行为变化 | `archive.ts` → `用户使用指南.md` §7.12、`设计文档.md` D9/D10 | `tests/gate.spec.ts` 存档段 |
 | 决策推翻或新增取舍 | `设计文档.md` 决策表（新编号）+ `refactor/重构计划.md` §九 偏离记录 | `经验文档.md` |
 | 性能模型 / 缓存策略 | `技术文档.md` §7、`设计文档.md` D2/D19/D20 | `用户使用指南.md` §12 |
-| preset 配置键 / persona / 技能 | `presets/study/**` + `用户使用指南.md` §4 | `tests/preset.spec.ts`（config 键一致 + persona 不提旧工具）、`tests/skills.spec.ts` |
+| preset 配置键 / persona / 技能 | `presets/study.patch.yml` + `presets/study/{skills,assets}` + `用户使用指南.md` §4 | `tests/preset.spec.ts`（声明四字段 + config 键一致 + 不含 `vaultRoot` + persona 不提旧工具）、`tests/skills.spec.ts` |
 | 版本号 | `package.json` + `dsh.plugin.json`（两处必须一致）、`更新记录.md` 加一条、各现行文档头部基线 | `经验文档.md` 结果行；`tests/docs.spec.ts` 会校验头部基线 |
 | 模块数 / 测试文件数 / 测试项数 | 只改 `技术文档.md` §2、§8（否则改 `tests/docs.spec.ts` 的守卫算法） | —— 数字不再散落在 README/用户指南里 |
-| 平台契约 / 部署形态变化 | `tools/README.md`（两条校验命令的分工与判读）、`用户使用指南.md` §11.2 | `tools/verify-contract.mjs` 的 `CONTRACTS` 表（含平台 `文件:行号`）、`tests/contract.spec.ts` |
+| 平台契约 / 部署形态变化 | `tools/README.md`（两条校验命令的分工与判读）、`用户使用指南.md` §11.2、`技术文档.md` §9.2 | `src/host.ts` 的 `HOST_CONTRACTS` 表（含平台 `文件:行号` + 失效后果）、`tools/verify-contract.mjs`（含交付形态断言）、`tests/contract.spec.ts` |
 | 文档位置变化 | 本文件 §一 + `tests/docs.spec.ts` 的版本基线名单 | 全仓相对链接由该测试逐条校验 |
 | 构建产物布局 | `build.mjs` | `技术文档.md` §1（产物自检） |
 
@@ -100,15 +101,18 @@ DSH 升级后排障先跑它们，判读口径见 [`tools/README.md`](../tools/R
 发布或提交前，逐条过一遍：
 
 - [ ] `pnpm run check` 全绿（typecheck → vitest → esbuild），CI 的非中文 locale 复跑同样全绿
-- [ ] `pnpm run verify:contract` 全绿（含本机 DSH 时的平台探针；CI 无 DSH 则跳过探针）
+- [ ] `pnpm run verify:contract` 全绿（交付形态断言 + 本机 DSH 时的平台探针；CI 无 DSH 则跳过探针）
 - [ ] 动过预设/部署文档时另跑 `pnpm run verify:deploy -- -Profile web` 做终检
+- [ ] 交付形态没退化：`package.json` 仍声明 `dsh.bundle.patch`，`presets/study.patch.yml` 仍是唯一的组合来源，`study` 行**不含** `vaultRoot`（机器路径出包）
+- [ ] `package.json` 的 peer 范围能接受要支持的 DSH 版本（升级 DSH minor 后尤其要核）
 - [ ] `package.json` 与 `dsh.plugin.json` 版本一致，`更新记录.md` 已加一条
 - [ ] 各现行文档头部的"版本基线"已同步
 - [ ] 新增/删除的规则、工具、配置键已在 §二 对应的文档中同步
 - [ ] 模块数、测试文件数、测试项数只在 `技术文档.md` §2/§8（守卫测试会现算比对）
 - [ ] 文档内的相对链接与锚点可跳转（标题改名后尤其注意）
-- [ ] `src/` 与 `presets/` 中不再出现已退场概念（`card_*`、`templateHints`、`mocDir`、三型模板）
+- [ ] `src/` 与 `presets/` 中不再出现已退场概念（`card_*`、`templateHints`、`mocDir`、三型模板、目录式预设）
 - [ ] `src/` 中不再出现裸 `localeCompare` / `Intl.Collator`（排序只走 `order.ts`）
+- [ ] `src/` 与 `lib/` 中不出现 `@deepseek-ai/*` 静态 import（宿主接触面只走 `src/host.ts`）
 - [ ] 两份 manifest 的 `description` 不是旧口径（不复述"卡片库/MOC"）
 - [ ] `lib/types/` 已由构建重建（删掉的模块不残留 `.d.ts`）
 - [ ] 被取代的文档已移入 `archive/` 并在 `archive/README.md` 登记

@@ -12,33 +12,18 @@
  */
 /** 笔记契约的唯一来源（阶段 6 起 card.ts / history.ts / moc.ts 已删除） */
 import { type BlockLinks, type LinkKind } from './note.ts';
+import { type StudyConfig } from './config.ts';
+import { type HostContextLike } from './host.ts';
 import { type NoteKind } from './search.ts';
-import { type ToolDef } from './tools.ts';
 import { type VaultLayout } from './vault.ts';
 export type { ToolDef, ToolExecLike } from './tools.ts';
 export { buildToolDefs } from './tools.ts';
+/** 宿主契约表：`tools/verify-contract.mjs` 的**单一真相**（探针与排障说明都从这里取） */
+export { HOST_CONTRACTS, type HostCapabilities, type HostContract } from './host.ts';
+/** 配置键表：判定"声明行 / 用户级 JSON 里不认的键"，契约探针也用它做静态断言 */
+export { KNOWN_CONFIG_KEYS, unknownConfigKeys, type StudyConfig } from './config.ts';
 export declare const name = "study-buddy";
 export declare const inject: string[];
-/**
- * 插件配置：`VaultLayout` 的"可省略默认值"视图（EXT-6：配置类型只有一份定义，
- * 不再三处同构搬运；新增配置项只改 vault.ts）。
- */
-export interface StudyConfig extends Omit<VaultLayout, 'stateDir' | 'fallbackDir'> {
-    /** 进度状态目录（相对 vaultRoot），默认 .study */
-    stateDir?: string;
-    /** 未映射领域的落盘目录（相对 vaultRoot），默认 未分类 */
-    fallbackDir?: string;
-}
-interface PluginContext {
-    tools?: {
-        register: (def: ToolDef) => () => void;
-    };
-    effect?: (callback: () => () => unknown, label?: string) => unknown;
-    /** Cordis 事件订阅（预步门禁用；返回 disposer） */
-    on?: (event: string, listener: (payload: unknown, next: () => Promise<unknown>) => Promise<unknown>) => () => void;
-    /** Cordis 服务读取（systemPrompt 用；可选服务一律特性探测） */
-    get?: (key: string) => unknown;
-}
 export declare class VaultStore {
     private readonly layout;
     private index;
@@ -271,4 +256,4 @@ export declare class VaultStore {
         value?: string;
     }): Promise<string>;
 }
-export declare function apply(ctx: PluginContext, config?: StudyConfig): void;
+export declare function apply(ctx: HostContextLike | undefined, config?: StudyConfig): void;

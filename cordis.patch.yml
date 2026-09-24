@@ -1,7 +1,13 @@
-# 备用宿主挂载层：正常路径是 study preset 内的插件行
-# （工具注册进 preset 作用域，不污染其他 agent 的工具目录）。
-# 只有当 preset 行无法解析包名时，才把本包加入 profile 的 bundles，
-# 走这里的宿主行（代价：card_* 工具对所有 agent 全局可见）。
+# 备用宿主挂载层（**默认不生效**）。
+#
+# 正常路径：presets/study.patch.yml 声明「学习伙伴」预设，预设内的 study 行挂载本插件
+# ——工具注册进 preset 作用域，不污染其他 agent 的工具目录。
+#
+# 本文件**故意不在** package.json 的 dsh.bundle.patch 列表里：一旦列进去，本包被 profile
+# 选中时这行也会生效，18 个 note_* / study_* 工具就对所有 agent 全局可见。
+# 只有"预设层整体不可用"时才把它接上：
+#   1) 把 './cordis.patch.yml' 追加进 package.json 的 dsh.bundle.patch 列表，或
+#   2) 在 profile 的 cordis.patch.yml 里 insert 下面同样的一行。
 - insert:
     - id: dsh-study-buddy
       name: dsh-study-buddy

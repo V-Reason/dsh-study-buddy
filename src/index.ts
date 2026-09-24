@@ -19,10 +19,12 @@ import {
   type BlockInput, type BlockLinks, type LinkKind,
 } from './note.ts'
 import { addLink, removeLink } from './links.ts'
+import { resolveLayout, type LayoutResolution, type StudyConfig } from './config.ts'
 import {
   EXPECT_FILE, TOC_FILE, DirIndex, dirOfRel, dirPathFor, expectPathFor, listDir, nestHint, normRel,
 } from './dirs.ts'
 import { checkWrite, formatPlanProposal, type GateInput } from './gate.ts'
+import { HOST_CONTRACTS, resolveHost, type HostContextLike } from './host.ts'
 import {
   DEFAULT_PLAN_TTL_HOURS, abandonPlan, buildPlanRecord, consumePlanItem, isPlanExpired, planFileFor, readPlan, writePlan,
 } from './planstore.ts'
@@ -30,7 +32,7 @@ import { archiveBody, archiveThenWrite, listArchives, readArchive } from './arch
 import { markExpectRead, readSession, sessionFileFor, signatureOf, writeSession, type SessionState } from './store.ts'
 import { formatOverview, summarizeOverview } from './overview.ts'
 import { parseFrontmatter } from './frontmatter.ts'
-import { formatBatch, formatReport, lintNote, parseExpectRules, ruleIds, ruleTitle, summarizeLint, type ExpectRule, type LintReport } from './lint.ts'
+import { formatBatch, formatReport, lintNote, parseExpectRules, ruleTitle, summarizeLint, type ExpectRule, type LintReport } from './lint.ts'
 import {
   AUTO_PREFS_KEY, checkMemoryValue, findProgressSentences, formatAutoPrefs, formatMemory,
   normalizeAutoPrefsValue, normalizeMemoryKey, readMemory, writeMemory, type MemoryState,
@@ -45,7 +47,7 @@ import {
 } from './links.ts'
 import { indexNote, SearchIndex, snippetOf, type IndexedCard, type NoteKind, type SearchHit } from './search.ts'
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
-import { buildToolDefs, type ToolDef } from './tools.ts'
+import { buildToolDefs } from './tools.ts'
 import {
   atomicWrite, canonicalRootKey, dedupeFiles, dedupeRoots, ensureDir, isFsRoot, MAX_WALK_FILES,
   readNoteSource, resolveSearchRoots, skipSetFor, walkRoots, withinRoot,
@@ -54,96 +56,17 @@ import {
 
 export type { ToolDef, ToolExecLike } from './tools.ts'
 export { buildToolDefs } from './tools.ts'
+/** 宿主契约表：`tools/verify-contract.mjs` 的**单一真相**（探针与排障说明都从这里取） */
+export { HOST_CONTRACTS, type HostCapabilities, type HostContract } from './host.ts'
+/** 配置键表：判定"声明行 / 用户级 JSON 里不认的键"，契约探针也用它做静态断言 */
+export { KNOWN_CONFIG_KEYS, unknownConfigKeys, type StudyConfig } from './config.ts'
 
 export const name = 'study-buddy'
 export const inject = ['tools']
 
-/**
- * 插件配置：`VaultLayout` 的"可省略默认值"视图（EXT-6：配置类型只有一份定义，
- * 不再三处同构搬运；新增配置项只改 vault.ts）。
- */
-export interface StudyConfig extends Omit<VaultLayout, 'stateDir' | 'fallbackDir'> {
-  /** 进度状态目录（相对 vaultRoot），默认 .study */
-  stateDir?: string
-  /** 未映射领域的落盘目录（相对 vaultRoot），默认 未分类 */
-  fallbackDir?: string
-}
-
 /** 进度队列长度上限（BIZ-11f：无上限会长成 progress.json 里的巨型数组） */
 const MAX_PROGRESS_ITEMS = 50
 const MAX_PROGRESS_ITEM_CHARS = 200
-
-interface PluginContext {
-  tools?: { register: (def: ToolDef) => () => void }
-  effect?: (callback: () => () => unknown, label?: string) => unknown
-  /** Cordis 事件订阅（预步门禁用；返回 disposer） */
-  on?: (event: string, listener: (payload: unknown, next: () => Promise<unknown>) => Promise<unknown>) => () => void
-  /** Cordis 服务读取（systemPrompt 用；可选服务一律特性探测） */
-  get?: (key: string) => unknown
-}
-
-/**
- * `normalizeConfig` 认得的所有配置键（唯一来源）。
- *
- * 分开维护的原因：`normalizeConfig` 逐键取值 + 兜底，读不出"哪些键我不认"；
- * 而**不认的键是静默陷阱**——预设行里留着 `mocDir` 这类已退场键（v0.9 → v1.0
- * 删掉的两个键之一）时，插件照常挂载、功能正常，配置却"以为配了其实没配"。
- * 本轮 DSH 升级排查就是被这种漂移咬了一次（部署副本的 `mocDir`）。
- */
-const KNOWN_CONFIG_KEYS: readonly string[] = [
-  'vaultRoot', 'expectFile', 'planTtlHours', 'stateDir', 'fallbackDir',
-  'domainFolders', 'skipDirs', 'searchRoots', 'includeSessionCwd', 'linkIntoNotes',
-  'lint', 'indexTtlMs', 'maxWalkFiles',
-]
-
-/** 预设行 config 里插件不认识的键（已退场键 / 拼写错误），按出现顺序返回 */
-function unknownConfigKeys(config: StudyConfig | undefined): string[] {
-  if (!config || typeof config !== 'object') return []
-  const known = new Set<string>(KNOWN_CONFIG_KEYS)
-  return Object.keys(config).filter((key) => !known.has(key))
-}
-
-function normalizeConfig(config: StudyConfig | undefined): VaultLayout {
-  if (!config?.vaultRoot || !String(config.vaultRoot).trim()) {
-    throw new Error('dsh-study-buddy 需要 config.vaultRoot（Obsidian vault 根目录）')
-  }
-  const vaultRoot = resolve(String(config.vaultRoot))
-  // 注意：不再拒绝 vaultRoot === 工作目录。launcher 通常以 vault 目录为 cwd
-  // 启动 DSH，vault 即工作目录是受支持的部署形态（曾因此误伤导致 9 个工具
-  // 静默不注册）。只保留"文件系统根"这一真正危险的落盘目标。
-  if (isFsRoot(vaultRoot)) {
-    throw new Error(`vaultRoot 不能是文件系统根：${vaultRoot}`)
-  }
-  // lint.rulesOff 里的未知 id 是"以为关了其实没关"的静默陷阱（N9）：挂载期直接报错
-  const rulesOff = config.lint?.rulesOff
-  if (Array.isArray(rulesOff) && rulesOff.length > 0) {
-    const known = new Set(ruleIds())
-    const unknown = rulesOff.map(String).filter((id) => !known.has(id))
-    if (unknown.length > 0) {
-      throw new Error(
-        `lint.rulesOff 含未识别的规则 id：${unknown.join('、')}（可用：${ruleIds().join('、')}）`,
-      )
-    }
-  }
-  const maxWalkFiles = Number(config.maxWalkFiles)
-  return {
-    vaultRoot,
-    stateDir: String(config.stateDir ?? '.study').trim() || '.study',
-    fallbackDir: String(config.fallbackDir ?? '未分类').trim() || '未分类',
-    domainFolders: config.domainFolders ?? {},
-    skipDirs: Array.isArray(config.skipDirs) ? config.skipDirs.map(String) : [],
-    searchRoots: Array.isArray(config.searchRoots) ? config.searchRoots.map(String) : [],
-    includeSessionCwd: config.includeSessionCwd === true,
-    linkIntoNotes: config.linkIntoNotes === true,
-    lint: config.lint,
-    indexTtlMs: Number.isFinite(Number(config.indexTtlMs)) && Number(config.indexTtlMs) >= 0 ? Number(config.indexTtlMs) : 2000,
-    maxWalkFiles: Number.isFinite(maxWalkFiles) && maxWalkFiles >= 1 ? Math.floor(maxWalkFiles) : MAX_WALK_FILES,
-    planTtlHours: Number.isFinite(Number(config.planTtlHours)) && Number(config.planTtlHours) > 0
-      ? Number(config.planTtlHours)
-      : 24,
-    expectFile: String(config.expectFile ?? '').trim() || EXPECT_FILE,
-  }
-}
 
 /** 引用解析：按路径/文件名取唯一候选；多个候选报歧义（提示根限定路径） */
 function byUniqueRef(index: SearchIndex, ref: string): IndexedCard | undefined {
@@ -1416,30 +1339,45 @@ function fmtProgress(state: ProgressState): string {
   return `位置：${pos}\n追问：${q}\n卡片：${c}`
 }
 
-export function apply(ctx: PluginContext, config?: StudyConfig): void {
-  // fail-quiet 的一处例外：不认识的配置键只告警，不抛错。
-  // 抛错会让"配置里多了个历史键"这种退化把整行挂载掉（工具全没、功能全失），
-  // 代价远大于收益；告警则让它在启动日志里直接可见。
-  const unknown = unknownConfigKeys(config)
-  if (unknown.length > 0) {
-    console.error(
-      `[dsh-study-buddy] 预设行 config 含插件不认识的键：${unknown.join('、')}`
-      + `（已退场键或拼写错误；已知键见 presets/study/agent.cordis.yml。这些键会被忽略，但留在配置里=以为配了其实没配）`,
-    )
-  }
-  let store: VaultStore
+export function apply(ctx: HostContextLike | undefined, config?: StudyConfig): void {
+  // 宿主接触面一律经适配层探测（见 host.ts）：唯一 fail-loud 的是工具注册。
+  const host = resolveHost(ctx)
+
+  // 配置来源：声明行 config > 环境变量 > <DSH_HOME>/study-buddy.json（见 config.ts）。
+  // fail-quiet 的一处例外：不认识的键只告警，不抛错——"配置里多了个历史键"这种退化
+  // 不该把整行挂载掉（工具全没、功能全失），告警让它在启动日志里直接可见。
+  let resolved: LayoutResolution
   try {
-    store = new VaultStore(normalizeConfig(config))
+    resolved = resolveLayout(config)
   } catch (error) {
     console.error(`[dsh-study-buddy] ${(error as Error).message}`)
     // fail-loud：静默 return 曾让"行已挂载、工具全无"的故障潜伏数天。
     // 抛错会让 preset 挂载失败（agent-preset-invalid），原因立即可见。
     throw error
   }
-  const tools = ctx?.tools
+  for (const warning of resolved.warnings) console.error(`[dsh-study-buddy] ⚠ ${warning}`)
+  // 来源回显：排障第一问是"到底读的哪个 vault"，让它出现在启动日志里（不翻配置文件）
+  console.info(
+    `[dsh-study-buddy] vaultRoot ← ${resolved.vaultRootFrom}：${resolved.layout.vaultRoot}`
+    + `（宿主适配：${host.viaDshLoader ? 'dsh-loader 稳定入口' : '直接 Cordis 服务'}）`,
+  )
+
+  let store: VaultStore
+  try {
+    store = new VaultStore(resolved.layout)
+  } catch (error) {
+    console.error(`[dsh-study-buddy] ${(error as Error).message}`)
+    throw error
+  }
+
+  const tools = host.tools
   if (typeof tools?.register !== 'function') {
+    const contract = HOST_CONTRACTS.find((item) => item.key === 'toolsRegister')
     console.error('[dsh-study-buddy] tools 注册表不可用，插件未挂载工具')
-    throw new Error('dsh-study-buddy: ctx.tools.register 不可用，无法注册卡片工具')
+    throw new Error(
+      `dsh-study-buddy: ctx.tools.register 不可用，无法注册笔记工具`
+      + `（宿主契约点 ${contract?.ref ?? 'toolsRegister'}：${contract?.what ?? '工具注册表'}；改了就在这里对：src/host.ts / tools/verify-contract.mjs）`,
+    )
   }
   const disposers: Array<() => void> = []
   try {
@@ -1454,11 +1392,9 @@ export function apply(ctx: PluginContext, config?: StudyConfig): void {
   }
 
   // ── 开场门禁（需求 3）：系统提示段 + 预步提醒，双层强制「首条消息先读记忆再办事」。
-  // 一律特性探测：宿主任何一环缺失都不影响工具注册（fail-loud 只针对工具与配置）。
-  const systemPrompt = typeof (ctx as PluginContext | undefined)?.get === 'function'
-    ? (ctx as PluginContext).get?.('systemPrompt') as { section?: (entry: unknown) => () => void } | undefined
-    : undefined
-  if (typeof systemPrompt?.section === 'function') {
+  // 能力缺失只降级（第一层没了还有第二层），绝不因为宿主某一环变化就整行挂掉。
+  const systemPrompt = host.systemPrompt
+  if (systemPrompt !== undefined) {
     const disposeSection = systemPrompt.section({
       name: OPENER_SECTION_NAME,
       order: OPENER_SECTION_ORDER,
@@ -1466,8 +1402,8 @@ export function apply(ctx: PluginContext, config?: StudyConfig): void {
     })
     if (typeof disposeSection === 'function') disposers.push(disposeSection)
   }
-  const on = (ctx as PluginContext | undefined)?.on
-  if (typeof on === 'function') {
+  const on = host.on
+  if (on !== undefined) {
     const disposeListener = on(
       'agent/pre-step',
       async (payload: unknown, next: () => Promise<unknown>): Promise<unknown> => {
@@ -1475,7 +1411,7 @@ export function apply(ctx: PluginContext, config?: StudyConfig): void {
         const p = payload as {
           turn?: unknown
           step?: unknown
-          agent?: { session?: { events?: Array<{ type?: string }> } }
+          agent?: { session?: { events?: Array<{ type?: string }>; snapshotEvents?: () => Array<{ type?: string }> } }
         }
         const turn = Number(p?.turn)
         const step = Number(p?.step)

@@ -12,6 +12,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { sessionEventsOf, type SessionLike } from './host.ts'
 
 /** 系统提示段名（按 system-prompt 的「category:slug」惯例） */
 export const OPENER_SECTION_NAME = 'study:memory-mandate'
@@ -73,30 +74,21 @@ export function applyOpenerDecision<T>(decision: PreStepDecisionLike<T>, reminde
 /**
  * 从预步载荷提取「会话历史已有 user/message」（恢复会话判定）。
  *
- * 双形状特性探测（零平台类型依赖）：
+ * 事件读取走 host.ts 的 `sessionEventsOf`（本插件唯一的宿主接触面，双形状探测 +
+ * 绝不逸出异常）：
  * - 旧平台（≤2026-08-27 session 重构前）：`session.events` 是数组属性；
  * - 新平台（>=0.1.3-alpha.1，session 拆分为快照 API 后）：`session.snapshotEvents()` 返回快照数组。
  * 两者皆缺/抛错 → 保守返回 false（只多注入一次提醒，不阻断流程）。
  *
- * BIZ-9：`snapshotEvents()` 是宿主 API，跨版本可能抛错；这里**必须**捕获——
+ * BIZ-9：`snapshotEvents()` 是宿主 API，跨版本可能抛错；这里**必须**不逸出——
  * 从 pre-step 处理器逸出的异常会变成步骤级失败（最坏情况首步直接失败），
  * 而不是注释承诺的"只多注入一次提醒"。
  */
 export function hasPriorUserMessage(payload: {
-  agent?: {
-    session?: {
-      events?: Array<{ type?: string }>
-      snapshotEvents?: () => Array<{ type?: string }>
-    }
-  }
+  agent?: { session?: SessionLike }
 }): boolean {
   try {
-    const session = payload?.agent?.session
-    const events = Array.isArray(session?.events)
-      ? session?.events
-      : typeof session?.snapshotEvents === 'function'
-        ? session.snapshotEvents()
-        : undefined
+    const events = sessionEventsOf(payload?.agent?.session)
     return Array.isArray(events) && events.some(event => event?.type === 'user/message')
   } catch {
     return false

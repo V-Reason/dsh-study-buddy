@@ -1,3 +1,4 @@
+import { mkdtempSync, rmSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -8,9 +9,13 @@ let dir: string
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'study-buddy-apply-'))
+  // apply 会打一行"vaultRoot ← 来源"的启动日志（排障用）：测试里静音，别淹掉断言输出
+  vi.spyOn(console, 'info').mockImplementation(() => {})
 })
 
 afterEach(async () => {
+  vi.unstubAllEnvs()
+  vi.restoreAllMocks()
   await rm(dir, { recursive: true, force: true })
 })
 
@@ -78,10 +83,39 @@ describe('apply（fail-loud 与 vaultRoot==cwd 回归）', () => {
     expect(fake.registered).toHaveLength(0)
   })
 
-  test('vaultRoot 缺失时抛错', () => {
+  test('三种来源都没有 vaultRoot 时抛错，且错误里给出三种给法', () => {
     const fake = fakeCtx()
-    expect(() => apply(fake.ctx, undefined)).toThrow(/vaultRoot/)
+    // 空 DSH_HOME（没有 study-buddy.json）+ 清掉两个环境变量 ⇒ 只剩"缺配置"这一条路
+    vi.stubEnv('DSH_HOME', dir)
+    vi.stubEnv('DSH_STUDY_VAULT', '')
+    vi.stubEnv('DSH_VAULT_ROOT', '')
+    expect(() => apply(fake.ctx, undefined)).toThrow(/vault 根目录/)
+    expect(() => apply(fake.ctx, undefined)).toThrow(/DSH_STUDY_VAULT/)
     expect(fake.registered).toHaveLength(0)
+  })
+
+  /**
+   * 包内零绝对路径的部署形态：机器相关路径由环境变量 / 用户级 JSON 给，
+   * 预设声明里只有机器无关的默认值（DSH 0.1.7 起声明随包发布，不能带作者本机路径）。
+   */
+  test('环境变量 DSH_STUDY_VAULT 顶替行 config，apply 照常注册 18 个工具', () => {
+    const fake = fakeCtx()
+    vi.stubEnv('DSH_STUDY_VAULT', dir)
+    expect(() => apply(fake.ctx, undefined)).not.toThrow()
+    expect(fake.registered).toHaveLength(NOTE_TOOLS.length)
+    expect(fake.registered).toEqual(expect.arrayContaining(NOTE_TOOLS))
+  })
+
+  test('行 config 的 vaultRoot 覆盖环境变量（部署侧仍可精细指定）', () => {
+    const other = mkdtempSync(join(tmpdir(), 'study-buddy-other-'))
+    try {
+      const fake = fakeCtx()
+      vi.stubEnv('DSH_STUDY_VAULT', other)
+      apply(fake.ctx, { vaultRoot: dir })
+      expect(fake.registered).toHaveLength(NOTE_TOOLS.length)
+    } finally {
+      rmSync(other, { recursive: true, force: true })
+    }
   })
 
   test('ctx.tools 不可用时抛错（不再静默 return）', () => {

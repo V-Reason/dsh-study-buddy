@@ -1,22 +1,25 @@
 <#
 .SYNOPSIS
-  dsh-study-buddy 部署三要素校验（只读）。
+  dsh-study-buddy 部署校验（只读）。
 
 .DESCRIPTION
-  插件是 `file:` 依赖（pnpm 按内容拷贝）+ 预设是「复制到 %DSH_HOME% 后各机自行编辑」
-  的部署形态，所以"仓库里改好了、跑的还是旧构建/旧预设"是常态（troubleshooting.md §二.2
-  把它列为最容易走错的一步）。本脚本只读比对三件事：
+  交付形态自 DSH 0.1.7-rc.1 起变了：目录式预设被平台删除（提交 d1e22a7e24 / #4569），
+  「学习伙伴」改为随包发布的**声明式预设**（`package.json` 的 `dsh.bundle.patch` →
+  `presets/study.patch.yml`）。这一步的失效形态很隐蔽：**预设整行消失、18 个工具全没，
+  但不报错**——所以本脚本把"看着改了其实没生效"的四个接缝都变成可执行检查：
 
     1. 插件产物：仓库 lib/index.js 的 SHA256 == <profile>\node_modules\dsh-study-buddy\lib\index.js
-    2. 预设分叉：部署副本 agent.cordis.yml 的行/键集合 vs 仓库模板（vaultRoot 允许不同）
-    3. 附带污染：退化技能目录、缺失的《笔记期望.md》、.dsh-module-fallback 里的展开项
+    2. 交付形态：已装包声明 dsh.bundle.patch → patch 文件存在且与仓库同哈希；
+       profile 的 dsh.profile.bundles 含本包；patch 里 study 行**不得**含 vaultRoot
+    3. 退场形态：%DSH_HOME%\.agent-presets\study 必须已删除（没有读者的目录会误导排查）
+    4. vault 门禁：vaultRoot（环境变量 / <DSH_HOME>\study-buddy.json）与《笔记期望.md》
 
   只读：不写任何文件、不复制、不装依赖。退出码 0 = 全绿，1 = 有 FAIL，2 = 参数/环境问题。
 
 .EXAMPLE
   pnpm run verify:deploy -- -Profile web
 .EXAMPLE
-  powershell -NoProfile -File tools/verify-deploy.ps1 -Profile web -RepoRoot . -VaultRoot 'T:\杂七杂八\2.笔记\碎语札'
+  powershell -NoProfile -File tools/verify-deploy.ps1 -Profile web -RepoRoot . -VaultRoot 'D:\vault'
 #>
 [CmdletBinding()]
 param(
@@ -26,7 +29,7 @@ param(
   [string]$RepoRoot = (Split-Path -Parent (Split-Path -Parent $PSCommandPath)),
   # DSH 主目录（默认 $env:DSH_HOME，退到 ~/.dsh）
   [string]$DshHome = $(if ($env:DSH_HOME) { $env:DSH_HOME } else { Join-Path $HOME '.dsh' }),
-  # vault 根（给了就检查《笔记期望.md》；不给则从部署副本的 study 行 config 里读）
+  # vault 根（给了就绕过自动解析，直接检查《笔记期望.md》）
   [string]$VaultRoot = '',
   # 只报告不判定失败（用于"想先看看差多少"）
   [switch]$ReportOnly
@@ -46,17 +49,21 @@ Write-Host "  仓库：$RepoRoot"
 Write-Host "  DSH ：$DshHome (profile: $Profile)"
 Write-Host ''
 
-# ── 1. 插件产物一致性 ────────────────────────────────────────────────────────
-Write-Host '[1/4] 插件产物（file: 依赖按内容拷贝，不比对就会"看着改了其实没生效"）'
+# ── 0. 路径与清单 ────────────────────────────────────────────────────────────
 $repoLib = Join-Path $RepoRoot 'lib\index.js'
+$repoPatch = Join-Path $RepoRoot 'presets\study.patch.yml'
 $profileDir = Join-Path $DshHome "profiles\$Profile"
 $installedDir = Join-Path $profileDir 'node_modules\dsh-study-buddy'
 $installedLib = Join-Path $installedDir 'lib\index.js'
+$installedManifestPath = Join-Path $installedDir 'package.json'
+$profileManifestPath = Join-Path $profileDir 'package.json'
 
+# ── 1. 插件产物一致性 ────────────────────────────────────────────────────────
+Write-Host '[1/4] 插件产物（依赖按内容拷贝，不比对就会"看着改了其实没生效"）'
 if (-not (Test-Path -LiteralPath $repoLib)) {
   Write-Bad "仓库没有构建产物：$repoLib（先跑 pnpm run build）"
 } elseif (-not (Test-Path -LiteralPath $installedLib)) {
-  Write-Bad "profile 里没装插件：$installedLib（见用户指南 §3.3）"
+  Write-Bad "profile 里没装插件：$installedLib（见用户指南 §3）"
 } else {
   $repoHash = (Get-FileHash -LiteralPath $repoLib -Algorithm SHA256).Hash
   $instHash = (Get-FileHash -LiteralPath $installedLib -Algorithm SHA256).Hash
@@ -68,101 +75,106 @@ if (-not (Test-Path -LiteralPath $repoLib)) {
   }
 }
 
-# ── 2. 预设分叉 ──────────────────────────────────────────────────────────────
+# ── 2. 交付形态（声明式预设 + bundle 选中） ───────────────────────────────────
 Write-Host ''
-Write-Host '[2/4] 预设（部署副本 vs 仓库模板；vaultRoot 允许不同，其余应一致）'
-$repoPreset = Join-Path $RepoRoot 'presets\study\agent.cordis.yml'
-$deployPreset = Join-Path $DshHome ".agent-presets\study\agent.cordis.yml"
-
-# 零依赖解析：行 = `- id: xxx`，行内模块名 = `  name:`，config 一级键 = 4 空格缩进
-function Get-Rows {
-  param([string]$Path)
-  $rows = [ordered]@{}
-  $current = $null
-  foreach ($line in (Get-Content -LiteralPath $Path)) {
-    if ($line -match '^-\s*id:\s*(\S+)') {
-      $current = $Matches[1]
-      $rows[$current] = @{ Name = ''; Keys = @() }
-      continue
-    }
-    if ($null -eq $current) { continue }
-    if ($line -match '^\s*#') { continue }
-    if ($line -match '^ {2}name:\s*(\S+)') { $rows[$current].Name = $Matches[1].Trim("'", '"'); continue }
-    if ($line -match '^ {4}([A-Za-z_][A-Za-z0-9_]*):') { $rows[$current].Keys += $Matches[1] }
-  }
-  return $rows
-}
-
-if (-not (Test-Path -LiteralPath $repoPreset)) {
-  Write-Bad "仓库模板缺失：$repoPreset"
-} elseif (-not (Test-Path -LiteralPath $deployPreset)) {
-  Write-Bad "部署副本缺失：$deployPreset（见用户指南 §3.4）"
+Write-Host '[2/4] 交付形态（DSH 0.1.7 起预设只能由 bundle patch 声明；漏了它预设会静默消失）'
+$patchPaths = @()
+if (-not (Test-Path -LiteralPath $installedManifestPath)) {
+  Write-Bad "已安装包没有 package.json：$installedManifestPath"
 } else {
-  $rowsRepo = Get-Rows -Path $repoPreset
-  $rowsDeploy = Get-Rows -Path $deployPreset
-  $missingRows = @($rowsRepo.Keys | Where-Object { -not $rowsDeploy.Contains($_) })
-  $extraRows = @($rowsDeploy.Keys | Where-Object { -not $rowsRepo.Contains($_) })
-  if ($missingRows.Count -eq 0 -and $extraRows.Count -eq 0) {
-    Write-Ok "行集合一致（$($rowsRepo.Count) 行）"
+  $manifest = Get-Content -LiteralPath $installedManifestPath -Raw | ConvertFrom-Json
+  $declared = $manifest.dsh.bundle.patch
+  if (-not $declared) {
+    Write-Bad "已安装包没有 dsh.bundle.patch —— 预设不会被声明（「学习伙伴」不会出现在名单里，且不报错）"
+    Write-Info "修复：重新装包（dsh plugin --profile $Profile add dsh-study-buddy），或把仓库的 package.json 复制过去"
   } else {
-    Write-Bad "行集合不一致：缺 [$($missingRows -join '、')]；多 [$($extraRows -join '、')]"
-  }
-
-  if ($rowsDeploy.Contains('study')) {
-    $keysRepo = @($rowsRepo['study'].Keys)
-    $keysDeploy = @($rowsDeploy['study'].Keys)
-    $unknown = @($keysDeploy | Where-Object { $_ -notin $keysRepo })
-    $absent = @($keysRepo | Where-Object { $_ -notin $keysDeploy })
-    if ($unknown.Count -eq 0 -and $absent.Count -eq 0) {
-      Write-Ok "study 行 config 键一致（$($keysRepo.Count) 个）"
+    foreach ($file in @($declared)) {
+      $relative = ($file -replace '^\./', '') -replace '/', '\'
+      $patchPaths += (Join-Path $installedDir $relative)
+    }
+    $missing = @($patchPaths | Where-Object { -not (Test-Path -LiteralPath $_) })
+    if ($missing.Count -gt 0) {
+      Write-Bad "声明的 patch 文件不存在：$($missing -join '、')"
     } else {
-      if ($unknown.Count -gt 0) {
-        Write-Bad "study 行含模板已删/不认的键：$($unknown -join '、')（留在配置里 = 以为配了其实没配）"
-      }
-      if ($absent.Count -gt 0) {
-        Write-Warn "study 行缺模板里的键：$($absent -join '、')（走插件默认值；若是有意省略可忽略）"
-      }
-    }
-    if ($rowsDeploy['study'].Name -ne $rowsRepo['study'].Name) {
-      Write-Bad "study 行的模块名不一致：部署 $($rowsDeploy['study'].Name) / 模板 $($rowsRepo['study'].Name)"
-    }
-    if (-not $VaultRoot) {
-      $line = Select-String -LiteralPath $deployPreset -Pattern "^\s+vaultRoot:\s*'?([^']+)'?" | Select-Object -First 1
-      if ($line) { $VaultRoot = $line.Matches[0].Groups[1].Value.Trim() }
-    }
-  } else {
-    Write-Bad "部署副本没有 study 插件行"
-  }
-
-  # 技能目录集合（退化的 card-format 这类会在这里露出来）
-  $skillsRepo = Join-Path $RepoRoot 'presets\study\skills'
-  $skillsDeploy = Join-Path $DshHome '.agent-presets\study\skills'
-  if ((Test-Path -LiteralPath $skillsRepo) -and (Test-Path -LiteralPath $skillsDeploy)) {
-    $namesRepo = @(Get-ChildItem -LiteralPath $skillsRepo -Directory | Select-Object -ExpandProperty Name)
-    $namesDeploy = @(Get-ChildItem -LiteralPath $skillsDeploy -Directory | Select-Object -ExpandProperty Name)
-    $ghost = @($namesDeploy | Where-Object { $_ -notin $namesRepo })
-    $gone = @($namesRepo | Where-Object { $_ -notin $namesDeploy })
-    if ($ghost.Count -eq 0 -and $gone.Count -eq 0) {
-      Write-Ok "技能目录一致（$($namesRepo.Count) 个）"
-    } else {
-      if ($ghost.Count -gt 0) { Write-Bad "部署副本有仓库已删的技能目录：$($ghost -join '、')" }
-      if ($gone.Count -gt 0) { Write-Bad "部署副本缺技能目录：$($gone -join '、')" }
+      Write-Ok "dsh.bundle.patch 指向 $($patchPaths.Count) 个存在的文件：$($declared -join ' + ')"
     }
   }
 }
 
-# ── 3. vault 门禁文件 ────────────────────────────────────────────────────────
+if ((Test-Path -LiteralPath $repoPatch) -and ($patchPaths.Count -gt 0) -and (Test-Path -LiteralPath $patchPaths[0])) {
+  $repoPatchHash = (Get-FileHash -LiteralPath $repoPatch -Algorithm SHA256).Hash
+  $instPatchHash = (Get-FileHash -LiteralPath $patchPaths[0] -Algorithm SHA256).Hash
+  if ($repoPatchHash -eq $instPatchHash) {
+    Write-Ok "预设声明与仓库一致（$($repoPatchHash.Substring(0,12))…）"
+  } else {
+    Write-Bad "预设声明与仓库不一致（仓库 $($repoPatchHash.Substring(0,12))… / profile $($instPatchHash.Substring(0,12))…）"
+    Write-Info "修复：Copy-Item '$repoPatch' '$($patchPaths[0])' -Force（改完让 preset 重新挂载：重启 DSH 或触发一次 profile patch 重载）"
+  }
+}
+
+# study 行不得含 vaultRoot：机器相关路径不进包（契约探针也有同款断言）
+if (Test-Path -LiteralPath $installedManifestPath) {
+  $patchForScan = if ($patchPaths.Count -gt 0) { $patchPaths[0] } else { '' }
+  if ($patchForScan -and (Test-Path -LiteralPath $patchForScan)) {
+    $row = Select-String -LiteralPath $patchForScan -Pattern '^\s+vaultRoot:' | Select-Object -First 1
+    if ($row) {
+      Write-Bad "预设声明里出现了 vaultRoot（第 $($row.LineNumber) 行）—— 机器相关路径不该随包发布"
+      Write-Info "改法：删掉这一行，把路径写到 `$env:DSH_STUDY_VAULT 或 <DSH_HOME>\study-buddy.json"
+    } else {
+      Write-Ok '预设声明不含 vaultRoot（机器相关路径出包）'
+    }
+  }
+}
+
+if (Test-Path -LiteralPath $profileManifestPath) {
+  $profileManifest = Get-Content -LiteralPath $profileManifestPath -Raw | ConvertFrom-Json
+  $bundles = @($profileManifest.dsh.profile.bundles)
+  if ($bundles -contains 'dsh-study-buddy') {
+    Write-Ok 'profile 的 dsh.profile.bundles 已选中本包'
+  } else {
+    Write-Bad "profile 的 dsh.profile.bundles 没有本包 —— 预设声明不会被应用（工具全没，且不报错）"
+    Write-Info "修复：plugin_manager set_bundle target=dsh-study-buddy enabled=true（或 dsh plugin --profile $Profile add dsh-study-buddy）"
+  }
+} else {
+  Write-Bad "找不到 profile 清单：$profileManifestPath"
+}
+
+# ── 3. 退场形态 + vault 门禁文件 ─────────────────────────────────────────────
 Write-Host ''
-Write-Host '[3/4] vault（硬门禁第一环：缺《笔记期望.md》则 note_write 一律拒绝）'
+Write-Host '[3/4] 退场形态与 vault（legacy 目录已无人读取；缺《笔记期望.md》则 note_write 一律拒绝）'
+$legacy = Join-Path $DshHome '.agent-presets\study'
+if (Test-Path -LiteralPath $legacy) {
+  Write-Bad "legacy 预设目录还在：$legacy —— DSH 0.1.7 起没有任何读者，留着只会误导排查"
+  Write-Info "修复：确认预设已按新形态挂载后 Remove-Item -Recurse -Force '$legacy'；同步清 vdsh.yaml 的 sync.allowlist"
+} else {
+  Write-Ok 'legacy 目录已清理（%DSH_HOME%\.agent-presets\study 不存在）'
+}
+
+$vaultSource = ''
 if (-not $VaultRoot) {
-  Write-Warn '拿不到 vaultRoot（部署副本里没读到），跳过 vault 检查'
+  if ($env:DSH_STUDY_VAULT) { $VaultRoot = $env:DSH_STUDY_VAULT; $vaultSource = '环境变量 DSH_STUDY_VAULT' }
+  elseif ($env:DSH_VAULT_ROOT) { $VaultRoot = $env:DSH_VAULT_ROOT; $vaultSource = '环境变量 DSH_VAULT_ROOT' }
+  else {
+    $userConfig = Join-Path $DshHome 'study-buddy.json'
+    if (Test-Path -LiteralPath $userConfig) {
+      try {
+        $parsed = Get-Content -LiteralPath $userConfig -Raw | ConvertFrom-Json
+        if ($parsed.vaultRoot) { $VaultRoot = $parsed.vaultRoot; $vaultSource = "用户级配置 $userConfig" }
+      } catch {
+        Write-Warn "用户级配置不是合法 JSON（插件会告警并忽略）：$userConfig"
+      }
+    }
+  }
+}
+if (-not $VaultRoot) {
+  Write-Warn '拿不到 vaultRoot（环境变量与 <DSH_HOME>\study-buddy.json 都没有）——跳过 vault 检查'
+  Write-Info "插件挂载时同样会 fail-loud；给法：`$env:DSH_STUDY_VAULT，或 $DshHome\study-buddy.json 的 {`"vaultRoot`":`"...`"}"
 } elseif ($VaultRoot -match '^<.*>$') {
-  # 重铺模板时最容易犯的错：把占位符原样抄回来（挂载会直接失败）
-  Write-Bad "部署副本的 vaultRoot 还是占位符：$VaultRoot（换成本机 vault 绝对路径，见用户指南 §3.5）"
+  Write-Bad "vaultRoot 还是占位符：$VaultRoot（换成本机 vault 绝对路径）"
 } elseif (-not (Test-Path -LiteralPath $VaultRoot)) {
-  Write-Bad "vault 不存在：$VaultRoot"
+  Write-Bad "vault 不存在：$VaultRoot（来源：$vaultSource）"
 } else {
-  Write-Ok "vault 存在：$VaultRoot"
+  Write-Ok "vault 存在（来源：$vaultSource）：$VaultRoot"
   $expect = Join-Path $VaultRoot '笔记期望.md'
   if (Test-Path -LiteralPath $expect) {
     Write-Ok '笔记期望.md 存在'
@@ -172,10 +184,28 @@ if (-not $VaultRoot) {
   }
   $stateDir = Join-Path $VaultRoot '.study'
   if (Test-Path -LiteralPath $stateDir) {
-    Write-Ok ".study 状态目录在（进度/记忆/存档）"
+    Write-Ok '.study 状态目录在（进度/记忆/存档）'
   } else {
     Write-Info '.study 还没建（首次写入时自动创建，不是问题）'
   }
+}
+
+# 技能资产随包发：比对仓库与已安装副本的目录集合
+$skillsRepo = Join-Path $RepoRoot 'presets\study\skills'
+$skillsInstalled = Join-Path $installedDir 'presets\study\skills'
+if ((Test-Path -LiteralPath $skillsRepo) -and (Test-Path -LiteralPath $skillsInstalled)) {
+  $namesRepo = @(Get-ChildItem -LiteralPath $skillsRepo -Directory | Select-Object -ExpandProperty Name)
+  $namesInstalled = @(Get-ChildItem -LiteralPath $skillsInstalled -Directory | Select-Object -ExpandProperty Name)
+  $ghost = @($namesInstalled | Where-Object { $_ -notin $namesRepo })
+  $gone = @($namesRepo | Where-Object { $_ -notin $namesInstalled })
+  if ($ghost.Count -eq 0 -and $gone.Count -eq 0) {
+    Write-Ok "技能目录一致（$($namesRepo.Count) 个，随包发）"
+  } else {
+    if ($ghost.Count -gt 0) { Write-Bad "已安装副本有仓库已删的技能目录：$($ghost -join '、')" }
+    if ($gone.Count -gt 0) { Write-Bad "已安装副本缺技能目录：$($gone -join '、')" }
+  }
+} elseif (Test-Path -LiteralPath $installedDir) {
+  Write-Bad "技能目录缺失：$skillsInstalled（预设的 customSkillDirs 指着它）"
 }
 
 # ── 4. 解析回退目录污染 ──────────────────────────────────────────────────────
@@ -197,7 +227,7 @@ if (-not (Test-Path -LiteralPath $fallback)) {
 # ── 结论 ─────────────────────────────────────────────────────────────────────
 Write-Host ''
 if ($script:Fail -eq 0) {
-  Write-Host "✓ 部署三要素一致（$script:Warn 条警告）" -ForegroundColor Green
+  Write-Host "✓ 部署四要素一致（$script:Warn 条警告）" -ForegroundColor Green
   exit 0
 }
 if ($ReportOnly) {

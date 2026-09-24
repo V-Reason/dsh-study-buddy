@@ -83,7 +83,7 @@ description: 文档式笔记规范（2026-10 重构）：块的定义与拆分�
 
 ## 落盘位置
 
-领域 → 目录映射（`presets/study/agent.cordis.yml` 的 `domainFolders`）在本轮之后**只是快捷方式**：正常路径下目录来自用户确认的文件夹规划（`note_plan` 的 `path`）；未给 path 时才回退到领域键，仍未映射则落 `未分类/<领域>/`。
+领域 → 目录映射（`presets/study.patch.yml` 里 `study` 行的 `domainFolders`）在本轮之后**只是快捷方式**：正常路径下目录来自用户确认的文件夹规划（`note_plan` 的 `path`）；未给 path 时才回退到领域键，仍未映射则落 `未分类/<领域>/`。
 
 **默认键名表（与 preset 配置一一对应；以你的 preset 配置为准）**：
 

@@ -1,2 +1,11 @@
+# pnpm ≥10 从这里读设置（不再读 .npmrc）。
 allowBuilds:
   esbuild: true
+
+# `@deepseek-ai/dsh*` 是**宿主提供的 peer**（运行中的 DSH 安装里就有），本仓库不该把它整棵树
+# 拖下来：DSH 自己也是这么设的——`@deepseek-ai/dsh-app-boot` 写 profile 的
+# pnpm-workspace.yaml 时固定 `nodeLinker: hoisted` + `autoInstallPeers: false`。
+# 不设的后果实测过：改 package.json 触发一次隐式 install，pnpm 会把 0.1.7-rc.1 的全量 DSH
+# 依赖装进 node_modules（并把 allowBuilds 的问句写回本文件、锁文件涨 8000+ 行）。
+# 注意：profile 侧不受影响——DSH 建 profile 时就写了 autoInstallPeers: false。
+autoInstallPeers: false
