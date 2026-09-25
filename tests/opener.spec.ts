@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
-  MANDATE, OPENER_SECTION_NAME, OPENER_SECTION_ORDER, REMINDER,
+  MANDATE, OPENER_SECTION_NAME, OPENER_SECTION_ORDER, OPENER_SOURCE_KIND, OPENER_SOURCE_SUMMARY, REMINDER,
   applyOpenerDecision, buildOpenerReminder, hasPriorUserMessage, shouldInjectOpener,
 } from '../src/opener.ts'
 
@@ -57,7 +59,34 @@ describe('opener 开场门禁纯逻辑', () => {
     expect(a.id).toBe('id-1')
     expect(a.role).toBe('user')
     expect(a.content).toEqual([{ type: 'text', text: REMINDER }])
-    expect(a.source).toEqual({ kind: 'plugin', plugin: 'dsh-study-buddy' })
+    expect(a.source).toEqual({
+      kind: 'plugin:dsh-study-buddy',
+      form: 'notice',
+      summary: '开场门禁：先读记忆与进度',
+    })
+  })
+
+  /**
+   * v1.1.1 事故回归：平台 v4 会话格式的写盘准入（`message-sources.ts` 的 `source()`）
+   * 要求 `source.kind` 非空且**不是** `'plugin'`。旧包装 `{kind:'plugin', plugin:…}`
+   * 会让整轮失败（异常从 encodeEvent 冒泡出来），所以形状规则在这里单独钉一条。
+   */
+  test('v4 来源准入：kind 非空、非退场的 plugin 包装，且与平台迁移映射同 kind', () => {
+    expect(OPENER_SOURCE_KIND).toBe('plugin:dsh-study-buddy')
+    const source = buildOpenerReminder().source
+    expect(typeof source.kind).toBe('string')
+    expect(source.kind.length).toBeGreaterThan(0)
+    expect(source.kind).toBe(OPENER_SOURCE_KIND)
+    expect(source.kind).not.toBe('plugin')
+    // 平台 V3→V4 迁移对第三方插件的映射就是 `plugin:` + 包名（同 kind = 新旧行同一生产者身份）
+    const pkg = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8')) as { name: string }
+    expect(source.kind).toBe(`plugin:${pkg.name}`)
+    // 退场的包装字段必须不再出现（admission 只认 kind，多写的字段也是误导）
+    expect(Object.hasOwn(source, 'plugin')).toBe(false)
+    // `ContextFormed` 的 notice 形态必须带非空 summary，否则对话里退回不透明展开
+    expect(source.form).toBe('notice')
+    expect(source.summary).toBe(OPENER_SOURCE_SUMMARY)
+    expect(source.summary.length).toBeGreaterThan(0)
   })
 
   test('buildOpenerReminder：默认 id 唯一且非空', () => {

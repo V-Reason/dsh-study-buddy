@@ -59,6 +59,14 @@ export const HOST_CONTRACTS: readonly HostContract[] = [
     breaks: '预步提醒不再注入（门禁降级为单层）',
   },
   {
+    key: 'messageSourceKind',
+    ref: 'packages/session/session-format-v3-to-v4/src/message-sources.ts:9',
+    what: "注入消息的 source.kind 必须是非空字符串且 ≠ 'plugin'（生产者自有 kind；第三方插件用 plugin:<包名>，"
+      + '见平台 llm/src/message.ts:103 的 MessageSourceMap 注释"there is no shared catch-all plugin kind"）',
+    breaks: '预步提醒写盘被 encode 拒绝 → 整轮失败'
+      + '（"本轮运行失败 format v4 message requires a producer-owned source kind"），用户消息也不落盘',
+  },
+  {
     key: 'sessionSnapshotEvents',
     ref: 'packages/core/session/src/index.ts:646',
     what: 'session.snapshotEvents() → readonly SessionEvent[]（旧形态 session.events 数组仍在探测范围内）',

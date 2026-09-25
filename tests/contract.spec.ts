@@ -144,6 +144,13 @@ describe('apply 接线契约', () => {
 
     const injected = await listener!(payload([{ type: 'turn/start' }]), next) as { messages: unknown[] }
     expect(injected.messages).toHaveLength(2)
+    // v1.1.1 事故回归：注入消息的来源必须满足平台 v4 写盘准入
+    // （`kind` 非空且 ≠ 'plugin'，且不再带退场的 `plugin` 包装字段）
+    const source = (injected.messages[1] as { source: { kind?: unknown } }).source
+    expect(typeof source.kind).toBe('string')
+    expect(String(source.kind).length).toBeGreaterThan(0)
+    expect(source.kind).not.toBe('plugin')
+    expect(Object.hasOwn(source, 'plugin')).toBe(false)
     expect(await listener!(payload([{ type: 'user/message' }]), next)).toBe(base)
     expect(await listener!(payload([], 1, 2), next)).toBe(base)
     expect(await listener!(payload([], 2, 1), next)).toBe(base)

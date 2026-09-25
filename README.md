@@ -4,7 +4,7 @@
 >
 > 讲解快节奏、听懂才往下走；笔记不是摘要卡片，而是 vault 里一篇篇能独立复读的 `.md`——**写到哪个目录由你规划，写法由你 vault 根的《笔记期望.md》决定**。
 >
-> 版本基线：v1.1.0 ｜ [MIT](LICENSE) ｜ [快速开始](#快速开始) · [用户使用指南](docs/用户使用指南.md) · [文档地图](docs/README.md) · [更新记录](docs/更新记录.md)
+> 版本基线：v1.1.1 ｜ [MIT](LICENSE) ｜ [快速开始](#快速开始) · [用户使用指南](docs/用户使用指南.md) · [文档地图](docs/README.md) · [更新记录](docs/更新记录.md)
 
 ## 它替你解决什么
 
@@ -46,7 +46,8 @@ Copy-Item presets/study/assets/笔记期望.md "D:\你的vault绝对路径\笔�
 
 | DSH 版本 | 本插件 | 说明 |
 | :-- | :-- | :-- |
-| ≥ 0.1.7-rc.1 | v1.1.0+ | **声明式预设**（`dsh.bundle.patch`）——当前形态 |
+| ≥ 0.1.7-rc.1 | v1.1.1+ | **声明式预设**（`dsh.bundle.patch`）——当前形态；v1.1.1 起注入消息改用生产者自有 kind，才能通过 v4 写盘准入 |
+| ≥ 0.1.7-rc.1 | v1.1.0 | 交付形态对，但开场门禁的来源用了退场的 `{kind:'plugin'}` 包装：**每个新会话的首条消息都会整轮失败**（`format v4 message requires a producer-owned source kind`）→ 升到 v1.1.1 |
 | ≤ 0.1.6 | v1.0.x | 目录式预设（`%DSH_HOME%\.agent-presets\study\`）；该目录**自 0.1.7 起平台已不再读取** |
 
 - **装法**：`dsh plugin --profile <name> add dsh-study-buddy`（或 `plugin_manager install_bundle`），

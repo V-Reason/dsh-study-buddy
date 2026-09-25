@@ -4,7 +4,7 @@
  * 两层防线（独立可测的纯逻辑）：
  * 1. 系统提示段 `study:memory-mandate`（order -1，渲染在 persona 之前）；
  * 2. `agent/pre-step` 预步提醒——首次模型请求前把「先读记忆再办事」作为
- *    本步消息一并注入（来源 plugin，持久化进会话日志，可追溯）。
+ *    本步消息一并注入（来源是**生产者自有 kind**，持久化进会话日志，可追溯）。
  *
  * 纯文本/纯函数模块：不碰文件系统、不引入 @deepseek-ai 运行时依赖、
  * 不假设宿主类型（payload/decision 用最小结构形状），便于单元测试。
@@ -19,6 +19,25 @@ export declare const OPENER_SECTION_ORDER = -1;
 export declare const MANDATE: string;
 /** 预步提醒文案（仅注入一次，零稳态成本） */
 export declare const REMINDER: string;
+/**
+ * 提醒消息的生产者自有来源标识（**v4 会话格式的硬准入**）。
+ *
+ * 平台侧唯一真相：
+ * - `packages/session/session-format-v3-to-v4/src/message-sources.ts` 的 `source()`：
+ *   `source.kind` 必须是非空字符串，且**不得**是 `'plugin'`（退场的旧包装会在
+ *   `encodeEvent`——即线上写盘路径——被拒，异常冒泡成**整轮失败**，见 v1.1.1 事故）；
+ * - 同包 README 的 V3→V4 映射表：「Any other plugin name → `plugin:` + 原名」，
+ *   即第三方插件的规范 kind 就是 `plugin:<包名>`（平台迁移历史行时写出的也是这个值，
+ *   所以新旧行不会分裂成两个生产者身份）；
+ * - `packages/llm/llm/src/message.ts` 的 `MessageSourceMap` 注释：
+ *   "each producer declares its own `kind`; there is no shared catch-all `plugin` kind"。
+ */
+export declare const OPENER_SOURCE_KIND = "plugin:dsh-study-buddy";
+/**
+ * 提醒消息在对话里的折叠一行文案（`ContextFormed` 的 `notice` 形态要求非空 `summary`；
+ * 上限口径见 `dsh-llm` 的 `CONTEXT_SUMMARY_MAX_CHARS = 120`）。
+ */
+export declare const OPENER_SOURCE_SUMMARY = "\u5F00\u573A\u95E8\u7981\uFF1A\u5148\u8BFB\u8BB0\u5FC6\u4E0E\u8FDB\u5EA6";
 /** 是否满足注入条件：会话首轮首步、且会话历史中还没有任何 user/message */
 export declare function shouldInjectOpener(turn: number, step: number, hasPriorUserMessage: boolean): boolean;
 /** 提醒消息的最小结构形状（与 dsh-llm createUserMessage 的运行时形状一致） */
@@ -30,8 +49,9 @@ export interface OpenerReminder {
         readonly text: string;
     }>;
     readonly source: {
-        readonly kind: 'plugin';
-        readonly plugin: 'dsh-study-buddy';
+        readonly kind: typeof OPENER_SOURCE_KIND;
+        readonly form: 'notice';
+        readonly summary: string;
     };
 }
 /** 构建预步提醒消息；id 可注入（测试用），默认 randomUUID */

@@ -18,12 +18,17 @@
  *      config 键 ⊆ 插件认得的键、且**不含** vaultRoot（机器路径不进包）。
  *   B. 平台契约（活符号）：产物导出的 `HOST_CONTRACTS` 逐点对**运行中的 DSH** 断言；
  *      外加"不得再假设已删 API"的负向断言（替身刻意不给 `settings`）。
+ *      其中「注入消息的来源 kind」还有一条**额外**的活平台断言：把真实注入对象喂给
+ *      平台自己的 v4 行编码器（`releasedV4SessionFormatCodec.encodeEvent`，就是线上
+ *      写盘那条路径），必须收下；退场的 `{kind:'plugin'}` 包装必须被拒。
+ *      平台包解析不到时按惯例跳过——规则本身由常跑断言（不依赖平台）兜住。
  *
  * 只读：不写仓库、不写 vault、不在 profile 里装任何东西。
  * 用法：
  *   node tools/verify-contract.mjs
  *   node tools/verify-contract.mjs --self-test   # 额外跑负向对照（改坏一个断言必须报错）
  *   node tools/verify-contract.mjs --verbose
+ *   node tools/verify-contract.mjs --platform <dir>   # 手动指定平台包解析根（含 @deepseek-ai）
  * @module tools/verify-contract
  */
 
@@ -36,6 +41,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const VERBOSE = process.argv.includes('--verbose')
 const SELF_TEST = process.argv.includes('--self-test')
+/** 手动指定的平台包解析根（`--platform <dir>`：目录里直接含 `@deepseek-ai/`） */
+const PLATFORM_OVERRIDE = (() => {
+  const at = process.argv.indexOf('--platform')
+  if (at < 0) return undefined
+  const value = process.argv[at + 1]
+  return value === undefined || value.startsWith('--') ? undefined : resolve(value)
+})()
 /** 仓库根（Windows 盘符路径也正确：用 fileURLToPath 而不是手撕 pathname） */
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const LIB = join(ROOT, 'lib', 'index.js')
@@ -264,15 +276,48 @@ function fakeContext() {
   }
 }
 
-/** 解析本机 DSH：优先 $DSH_HOME，退到 ~/.dsh；profile 目录按实际存在的挑 */
+/**
+ * 取「插件真实注入的那条消息」——假 ctx 跑一遍 apply，再走一遍 `agent/pre-step` 监听器。
+ *
+ * 断言返回的对象本身，而不是插件导出的常量：这样探针看的是**产物真的会发出去的东西**
+ * （常量对、注入路径没接上也照样能骗过前者）。取**最后一条**消息——插件把提醒追加在末尾。
+ * @param mod - 插件产物（lib/index.js）
+ * @param vaultRoot - 假 vault 根（apply 的 config）
+ * @returns 注入消息对象
+ */
+async function injectedReminder(mod, vaultRoot) {
+  const fake = fakeContext()
+  mod.apply(fake.ctx, { vaultRoot })
+  const listener = fake.listeners.get('agent/pre-step')
+  if (typeof listener !== 'function') throw new Error('未注册 agent/pre-step 监听器')
+  const decision = await listener(
+    { agent: { session: { snapshotEvents: () => [{ type: 'turn/start' }] } }, turn: 1, step: 1 },
+    async () => ({ kind: 'enter', messages: [{ id: 'user-1', role: 'user' }] }),
+  )
+  const messages = decision?.messages
+  const injected = Array.isArray(messages) ? messages[messages.length - 1] : undefined
+  if (injected === undefined) throw new Error('首轮首步未注入提醒（拿不到待断言的消息）')
+  return injected
+}
+
+/** 解析本机 DSH：先看 `--platform` 覆盖，再优先 $DSH_HOME，退到 ~/.dsh；profile 目录按实际存在的挑 */
 function locatePlatformModules() {
+  if (PLATFORM_OVERRIDE !== undefined) {
+    return existsSync(join(PLATFORM_OVERRIDE, '@deepseek-ai')) ? PLATFORM_OVERRIDE : undefined
+  }
   const homes = [process.env.DSH_HOME, process.env.USERPROFILE ? join(process.env.USERPROFILE, '.dsh') : undefined,
     process.env.HOME ? join(process.env.HOME, '.dsh') : undefined].filter(Boolean)
   for (const home of homes) {
     const profiles = join(home, 'profiles')
     if (!existsSync(profiles)) continue
-    // profile 自己的 node_modules 优先（平台包按 profile 装），再退到共享布局
-    const candidates = [...['web', 'tui', 'headless'].map((name) => join(profiles, name, 'node_modules')), join(profiles, 'node_modules')]
+    // profile 自己的 node_modules 优先（平台包按 profile 装），再退到共享布局与 pnpm 的 hoist 目录
+    // （DSH 从源码树跑时平台包只在 `.pnpm/node_modules` 里可解析，见 --platform 用法）
+    const candidates = [
+      ...['web', 'tui', 'headless'].map((name) => join(profiles, name, 'node_modules')),
+      ...['web', 'tui', 'headless'].map((name) => join(profiles, name, 'node_modules', '.pnpm', 'node_modules')),
+      join(profiles, 'node_modules'),
+      join(profiles, 'node_modules', '.pnpm', 'node_modules'),
+    ]
     for (const dir of candidates) {
       if (existsSync(join(dir, '@deepseek-ai'))) return dir
     }
@@ -317,7 +362,7 @@ async function probePlatform(log) {
   }
   log(`平台符号探针（${base}）`)
   const modules = {}
-  for (const specifier of ['@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-app-boot']) {
+  for (const specifier of ['@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-session', '@deepseek-ai/dsh-system-prompt', '@deepseek-ai/dsh-app-boot', '@deepseek-ai/dsh-session-format-v3-to-v4']) {
     modules[specifier] = await tryImport(specifier, base)
     if (modules[specifier] === undefined) log(`  ⏭ ${specifier} 未安装，跳过其断言`)
   }
@@ -370,6 +415,45 @@ async function probePlatform(log) {
     })
   }
 
+  const format = modules['@deepseek-ai/dsh-session-format-v3-to-v4']
+  if (format !== undefined) {
+    await check('活平台收下真实注入消息（v4 写盘路径），且拒绝退场的 plugin 包装', 'messageSourceKind', async () => {
+      const codec = format.releasedV4SessionFormatCodec
+      if (codec === undefined || typeof codec.encodeEvent !== 'function') {
+        return { ok: false, message: `未导出 releasedV4SessionFormatCodec.encodeEvent（导出：${Object.keys(format).join(',')}）` }
+      }
+      const mod = await import(pathToFileURL(LIB).href)
+      const tempVault = await mkdtemp(join(tmpdir(), 'study-buddy-source-'))
+      try {
+        const reminder = await injectedReminder(mod, tempVault)
+        const row = { type: 'user/message', seq: 0, time: 1, data: reminder }
+        try {
+          codec.encodeEvent(row)
+        } catch (error) {
+          return {
+            ok: false,
+            message: `平台拒绝了真实注入消息：${error instanceof Error ? error.message : String(error)}`
+              + '（这就是「本轮运行失败」的形态：source.kind 必须是生产者自有的非空 kind 且 ≠ plugin）',
+          }
+        }
+        // 负向对照：退场的包装必须被平台拒——否则本断言失去意义（两边一起改错也不会被发现）
+        const retired = { ...row, data: { ...reminder, source: { kind: 'plugin', plugin: 'dsh-study-buddy' } } }
+        try {
+          codec.encodeEvent(retired)
+        } catch (error) {
+          if (/producer-owned source kind/.test(String(error?.message))) return { note: '真实消息通过 / 退场包装被拒' }
+          throw error
+        }
+        return {
+          ok: false,
+          message: '退场的 {kind:"plugin"} 包装竟然被平台接受了 —— 本断言已失去意义（两边一起改错也不会被发现）',
+        }
+      } finally {
+        await rm(tempVault, { recursive: true, force: true })
+      }
+    })
+  }
+
   // peer 范围：**用平台自己的门禁**判（不手搓 semver，语义与 DSH 完全一致）
   const boot = modules['@deepseek-ai/dsh-app-boot']
   if (boot !== undefined && typeof boot.evaluatePluginCompatibility === 'function') {
@@ -410,9 +494,9 @@ export async function runChecks(log, load = async () => import(pathToFileURL(LIB
 
   await check('宿主契约表完整（每个点都有 ref/what/breaks，供失败回显）', 'hostContracts', () => {
     const contracts = mod.HOST_CONTRACTS ?? []
-    if (contracts.length < 5) return { ok: false, message: `HOST_CONTRACTS 只有 ${contracts.length} 条（应覆盖 5 个接触点）` }
+    if (contracts.length < 6) return { ok: false, message: `HOST_CONTRACTS 只有 ${contracts.length} 条（应覆盖 6 个接触点）` }
     const keys = contracts.map((item) => item.key)
-    const missing = ['toolsRegister', 'systemPromptSection', 'preStep', 'sessionSnapshotEvents', 'sessionHeaderCwd']
+    const missing = ['toolsRegister', 'systemPromptSection', 'preStep', 'messageSourceKind', 'sessionSnapshotEvents', 'sessionHeaderCwd']
       .filter((key) => !keys.includes(key))
     if (missing.length > 0) return { ok: false, message: `契约表缺 ${missing.join('、')}` }
     for (const item of contracts) {
@@ -547,6 +631,49 @@ export async function runChecks(log, load = async () => import(pathToFileURL(LIB
       return { note: '4/4 分支正确' }
     })
 
+    await check('注入消息的来源满足 v4 准入（常跑：不依赖平台包）', 'messageSourceKind', async () => {
+      const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8'))
+      const reminder = await injectedReminder(mod, tempVault)
+      const source = reminder?.source
+      if (source === null || typeof source !== 'object') {
+        return { ok: false, message: `注入消息没有 source：${JSON.stringify(reminder)}` }
+      }
+      if (typeof source.kind !== 'string' || source.kind.length === 0) {
+        return {
+          ok: false,
+          message: `source.kind 不是非空字符串：${JSON.stringify(source.kind)}`
+            + '（平台 v4 准入要求生产者自有 kind；空 kind 会被 v4 校验拒绝）',
+        }
+      }
+      if (source.kind === 'plugin') {
+        return {
+          ok: false,
+          message: "source.kind 还是退场的 'plugin' 包装 —— 平台 v4 写盘会拒绝它，整轮失败"
+            + '（"本轮运行失败 format v4 message requires a producer-owned source kind"）；改用 plugin:<包名>',
+        }
+      }
+      if (source.kind !== `plugin:${manifest.name}`) {
+        return {
+          ok: false,
+          message: `source.kind=${source.kind}，但平台 V3→V4 迁移给本插件的是 plugin:${manifest.name}`
+            + '（第三方插件名的规范 kind；不同名会让同一插件的新旧行分裂成两个生产者身份）',
+        }
+      }
+      if (Object.hasOwn(source, 'plugin')) {
+        return { ok: false, message: 'source 仍带退场的 plugin 字段（准入只认 kind，留着会误导后来人）' }
+      }
+      if (source.form !== undefined) {
+        const known = ['instructions', 'catalog', 'snapshot', 'notice', 'relay', 'recall']
+        if (!known.includes(source.form)) {
+          return { ok: false, message: `source.form=${source.form} 不在平台 ContextFormed 的六种形态里` }
+        }
+        if (source.form === 'notice' && (typeof source.summary !== 'string' || source.summary.length === 0)) {
+          return { ok: false, message: 'form=notice 必须带非空 summary（否则对话里退回不透明展开体）' }
+        }
+      }
+      return { note: `${source.kind}${source.form === undefined ? '' : ` form=${source.form}`}` }
+    })
+
     await check('旧平台形状（session.events 数组）已消失时只多注入一次，不抛错', 'sessionSnapshotEvents', async () => {
       const fake = fakeContext()
       mod.apply(fake.ctx, { vaultRoot: tempVault })
@@ -603,6 +730,30 @@ async function selfTest() {
         ...mod,
         // 只改"认得的键"，等价于把 patch 里的 study 行全部标成未知键
         KNOWN_CONFIG_KEYS: [],
+      }),
+    },
+    {
+      // v1.1.1 事故形态：把注入消息的来源退回 {kind:'plugin', plugin:…}
+      name: '注入消息退回 {kind:"plugin"} 包装 → 来源准入断言报错',
+      mutate: (mod) => ({
+        ...mod,
+        apply: (ctx, config) => {
+          const originalOn = typeof ctx?.on === 'function' ? ctx.on.bind(ctx) : undefined
+          if (originalOn !== undefined) {
+            ctx.on = (event, listener) => originalOn(event, async (payload, next) => {
+              const decision = await listener(payload, next)
+              const messages = decision?.messages
+              if (event !== 'agent/pre-step' || decision?.kind !== 'enter' || !Array.isArray(messages)) return decision
+              return {
+                ...decision,
+                messages: messages.map((message, index) => (index === messages.length - 1 && message?.source?.kind !== 'user'
+                  ? { ...message, source: { kind: 'plugin', plugin: 'dsh-study-buddy' } }
+                  : message)),
+              }
+            })
+          }
+          return mod.apply(ctx, config)
+        },
       }),
     },
   ]

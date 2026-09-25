@@ -12,7 +12,7 @@
 | `execute(args, exec)` 的 `exec.agent.session.header.cwd` | ✅ 未变（`Agent.session: Session` 保留；`SessionHeader.cwd` 保留） |
 | `ctx.get('systemPrompt').section({name, order, text})` | ✅ 签名未变；仅 `FIRST_PARTY_SECTION_ORDER` 导出移除（本插件用字面量 -1，不依赖） |
 | `agent/pre-step` 瀑布（payload `{agent, messages, turn, step, signal}`；决策 `enter/reject`） | ✅ 未变（spread 保留 `startsRequestSeries`） |
-| 提醒消息 `source: {kind:'plugin', plugin:'dsh-study-buddy'}` | ✅ 仍为合法 UserMessage 源（compaction-basic 同款） |
+| 提醒消息 `source: {kind:'plugin', plugin:'dsh-study-buddy'}` | ⚠ **该结论已于 v1.1.1 失效**：DSH 0.1.7 的 v4 会话格式要求 `source.kind` 非空且 ≠ `'plugin'`，旧包装会让整轮失败（`format v4 message requires a producer-owned source kind`）。现行口径见 [`docs/经验文档.md` §十二](../../经验文档.md#十二补记v4-消息来源准入v110--v111) 与 `src/opener.ts` 的 `OPENER_SOURCE_KIND`（当时"compaction-basic 同款"的判断依据也随之作废） |
 | preset 行 `name: dsh-study-buddy` 解析（profile node_modules + 上溯 farm） | ✅ 健康检查与挂载路径均成立 |
 | **`Agent.session.events`（数组）** | ❌ **移除**（08-28 `5660f44d29` perf(session) 起；改 `eventAt`/`snapshotEvents()`/`ownEvents()`） |
 

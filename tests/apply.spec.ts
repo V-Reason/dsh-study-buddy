@@ -247,18 +247,26 @@ describe('apply（开场门禁接线）', () => {
     const entered = await listener!(
       { agent: { session: { snapshotEvents: () => [{ type: 'turn/start' }, { type: 'agent/inbox/spliced' }] } }, turn: 1, step: 1 },
       next,
-    ) as { kind: 'enter'; messages: Array<{ id: string; source?: { plugin?: string } }> }
+    ) as { kind: 'enter'; messages: Array<{ id: string; source?: { kind?: string; form?: string; summary?: string } }> }
     expect(entered.messages).toHaveLength(2)
-    expect(entered.messages[1].source).toEqual({ kind: 'plugin', plugin: 'dsh-study-buddy' })
+    expect(entered.messages[1].source).toEqual({
+      kind: 'plugin:dsh-study-buddy',
+      form: 'notice',
+      summary: '开场门禁：先读记忆与进度',
+    })
     expect(entered.messages[1].id).not.toBe('user-1')
 
     // ①b 全新会话（旧平台 events 数组形状，向后兼容）
     const enteredLegacy = await listener!(
       { agent: { session: { events: [{ type: 'turn/start' }] } }, turn: 1, step: 1 },
       next,
-    ) as { kind: 'enter'; messages: Array<{ id: string; source?: { plugin?: string } }> }
+    ) as { kind: 'enter'; messages: Array<{ id: string; source?: { kind?: string; form?: string; summary?: string } }> }
     expect(enteredLegacy.messages).toHaveLength(2)
-    expect(enteredLegacy.messages[1].source).toEqual({ kind: 'plugin', plugin: 'dsh-study-buddy' })
+    expect(enteredLegacy.messages[1].source).toEqual({
+      kind: 'plugin:dsh-study-buddy',
+      form: 'notice',
+      summary: '开场门禁：先读记忆与进度',
+    })
 
     // ② 恢复会话（已有 user/message，新平台形状）：原样返回
     const restored = await listener!(
