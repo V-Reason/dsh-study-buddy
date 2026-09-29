@@ -22,6 +22,16 @@
  *      平台自己的 v4 行编码器（`releasedV4SessionFormatCodec.encodeEvent`，就是线上
  *      写盘那条路径），必须收下；退场的 `{kind:'plugin'}` 包装必须被拒。
  *      平台包解析不到时按惯例跳过——规则本身由常跑断言（不依赖平台）兜住。
+ *   C. peer 范围（两档）：
+ *      C1. **平台门禁**（装了 DSH 才跑）：用平台自己的 `evaluatePluginCompatibility`
+ *          判，语义与 profile 装载 100% 一致——这是权威判定。
+ *      C2. **离线表**（任何机器都跑，CI 也有增量）：上面那条依赖本机 DSH，CI 上恒被跳过，
+ *          而 `^0.1.7-rc.1` 被 0.2.0-rc.1 判为不兼容正是**只在装了 DSH 的机器上**才看得见
+ *          （2026-09 的 v1.2.0 事故）。所以再加一档：声明的范围必须等于**复核过的那个字符串**，
+ *          并且对一张钉死的版本表给出正确判定。范围写成别的形式（`^`/`~`/`*`/`||`/` - `）
+ *          直接报错，不允许静默放过——一旦它变成 no-op，这档断言就失去意义。
+ *          比较器只实现 `>= > <= < =` 的合取（即我们实际声明的形式），
+ *          **不替代 C1**；语义已与平台 semver 逐格对齐（见 DSH_PEER_ACCEPTS/REJECTS）。
  *
  * 只读：不写仓库、不写 vault、不在 profile 里装任何东西。
  * 用法：
@@ -136,6 +146,133 @@ export function scanEntryRows(text) {
   return rows
 }
 
+// ── 窄范围 semver（只服务离线 peer 断言 C2） ────────────────────────────────
+
+/**
+ * 复核过的 DSH peer 范围（**单一真相**：`package.json` 必须逐字等于它）。
+ *
+ * 选它的理由（2026-09 的 v1.2.0 事故）：
+ * - `^0.1.7-rc.1` 的上界是 `<0.2.0-0`，于是 `0.2.0-rc.1` 被判不兼容 → bundle 层被摘除、
+ *   「学习伙伴」预设整行消失；
+ * - 用 `^0.2.0-rc.1` 又会把仍在 0.1.7-rc.2 上的用户挡在门外（他们本来是能用的）；
+ * - 下界必须带 `-rc.1`：不带的话 `0.1.7-rc.2` 这类前置版本不满足 `>=0.1.7`（semver 里
+ *   前置版本低于同号正式版）；
+ * - 上界用 `<0.3.0-0` 而不是 `<0.3.0`：前者能挡住 0.3 线的前置版本（0.3.0-alpha 之类），
+ *   后者会被 `includePrerelease` 放进来——0.3 线没验证过。
+ */
+export const REVIEWED_DSH_PEER_RANGE = '>=0.1.7-rc.1 <0.3.0-0'
+
+/** 复核过"必须接受"的运行版本（前 4 个是实际部署过的：0.1.7-rc.1/rc.2 → 0.2.0-rc.1） */
+export const DSH_PEER_ACCEPTS = [
+  '0.1.7-rc.1', '0.1.7-rc.2', '0.1.7', '0.2.0-rc.1', '0.2.0-rc.2', '0.2.0', '0.2.1',
+]
+
+/** 复核过"必须拒绝"的运行版本：0.1.6 没有声明式预设；0.3 线未验证 */
+export const DSH_PEER_REJECTS = ['0.1.6', '0.3.0-0', '0.3.0-rc.1', '0.3.0', '1.0.0']
+
+/** 一颗版本：`major.minor.patch` + 可选前置标识符（构建元数据忽略，semver §10 不参与比较） */
+const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+
+/**
+ * 解析一颗严格 semver 版本。
+ * @param value - 版本字符串（不接受 `v` 前缀、范围、通配符）
+ * @returns `{ numbers, prerelease }`；不合法就抛错（宁可报错也不猜）
+ */
+export function parseVersion(value) {
+  const text = typeof value === 'string' ? value.trim() : ''
+  const match = VERSION_PATTERN.exec(text)
+  if (match === null) throw new Error(`不是合法 semver 版本：${JSON.stringify(value)}`)
+  return {
+    numbers: [Number(match[1]), Number(match[2]), Number(match[3])],
+    prerelease: match[4] === undefined ? [] : match[4].split('.'),
+  }
+}
+
+/**
+ * 按 semver §11 比较两颗版本（`includePrerelease` 语义）。
+ * @param a - 左版本
+ * @param b - 右版本
+ * @returns `-1` / `0` / `1`
+ */
+export function compareVersions(a, b) {
+  const left = parseVersion(a)
+  const right = parseVersion(b)
+  for (let i = 0; i < 3; i += 1) {
+    if (left.numbers[i] !== right.numbers[i]) return left.numbers[i] < right.numbers[i] ? -1 : 1
+  }
+  // 有前置标识符的一侧**更低**（0.2.0-rc.1 < 0.2.0）
+  if (left.prerelease.length === 0 && right.prerelease.length === 0) return 0
+  if (left.prerelease.length === 0) return 1
+  if (right.prerelease.length === 0) return -1
+  const count = Math.max(left.prerelease.length, right.prerelease.length)
+  for (let i = 0; i < count; i += 1) {
+    const l = left.prerelease[i]
+    const r = right.prerelease[i]
+    // 标识符少的更低（1.0.0-alpha < 1.0.0-alpha.1）
+    if (l === undefined) return -1
+    if (r === undefined) return 1
+    const lNumeric = /^\d+$/.test(l)
+    const rNumeric = /^\d+$/.test(r)
+    if (lNumeric && rNumeric) {
+      if (Number(l) !== Number(r)) return Number(l) < Number(r) ? -1 : 1
+      continue
+    }
+    // 数字标识符**永远低于**字母标识符（1.0.0-1 < 1.0.0-alpha）
+    if (lNumeric !== rNumeric) return lNumeric ? -1 : 1
+    if (l !== r) return l < r ? -1 : 1
+  }
+  return 0
+}
+
+/** 一个比较器：`>=1.2.3` / `>1.2.3` / `<=1.2.3` / `<1.2.3` / `=1.2.3` 或裸 `1.2.3`（= 精确） */
+const COMPARATOR_PATTERN = /^(>=|<=|>|<|=)?(.+)$/
+
+/**
+ * 解析合取式范围（空白分隔的比较器）。
+ *
+ * **刻意只认这一种形式**：`^` / `~` / `*` / `||` / ` - ` / `x` 通配一律抛错。写成本函数
+ * 不认的形式时，离线断言必须**报错而不是静默通过**——否则"范围被改成别的写法"就等于
+ * 把这档断言关掉了，而它正是为"CI 上也能发现 peer 范围过期"而存在的。
+ * @param range - 范围字符串（如 `>=0.1.7-rc.1 <0.3.0-0`）
+ * @returns 比较器数组
+ */
+export function parseRange(range) {
+  const text = typeof range === 'string' ? range.trim() : ''
+  if (text === '') throw new Error('范围为空')
+  const tokens = text.split(/\s+/)
+  if (tokens.some((token) => /[\^~*]|\|\||,/.test(token) || /^[vV]/.test(token) || /[xX](\.|$)/.test(token))) {
+    throw new Error(`范围用了本断言不认的形式：${JSON.stringify(range)}（只支持 >= > <= < = 的空白合取，如 "${REVIEWED_DSH_PEER_RANGE}"）`)
+  }
+  return tokens.map((token) => {
+    const match = COMPARATOR_PATTERN.exec(token)
+    if (match === null || match[2].trim() === '') throw new Error(`比较器无法解析：${JSON.stringify(token)}`)
+    parseVersion(match[2]) // 形状不合法立刻抛错
+    return { operator: match[1] ?? '=', version: match[2] }
+  })
+}
+
+/**
+ * 合取式范围判定（与平台门禁的参数一致：`semver.satisfies(v, range, { includePrerelease: true })`）。
+ *
+ * `includePrerelease: true` 时前置版本不额外加"同号必须有前置比较器"的限制，判定就是
+ * 逐比较器的先序比较合取——所以这里不需要那套限制逻辑。
+ * @param version - 运行版本
+ * @param range - 范围字符串
+ * @returns 是否满足
+ */
+export function satisfiesRange(version, range) {
+  return parseRange(range).every((comparator) => {
+    const order = compareVersions(version, comparator.version)
+    switch (comparator.operator) {
+      case '>=': return order >= 0
+      case '>': return order > 0
+      case '<=': return order <= 0
+      case '<': return order < 0
+      default: return order === 0
+    }
+  })
+}
+
 /** 交付形态断言：package.json 的 bundle 声明 → patch 文件 → 预设声明 → study 行 */
 async function checkDelivery(mod, log) {
   log('交付形态（directory preset 已删除：包必须是声明式 bundle）')
@@ -230,6 +367,77 @@ async function checkDelivery(mod, log) {
       }
     }
     return { note: `${sources.length} 个文件` }
+  })
+}
+
+/**
+ * 离线 peer 断言（C2）：声明的范围 == 复核过的字符串，且版本表全部命中。
+ *
+ * 为什么需要它：C1（平台门禁）依赖本机装过 DSH，CI 上恒被跳过；而
+ * "`^0.1.7-rc.1` 被 0.2.0-rc.1 判为不兼容"这件事**只在装了 DSH 的机器上才看得见**，
+ * 2026-09 的 v1.2.0 事故就是这么漏出去的（当初 `pnpm run check` 全绿）。
+ *
+ * 两个刻意的设计：
+ * 1. **范围必须逐字等于复核值**：改 peer 范围就必须同时改本文件的复核值，
+ *    不允许"悄悄放宽/收窄"。
+ * 2. **不认的形式直接报错**（见 {@link parseRange}）：否则把 `^0.3.0` 这种写法塞进来
+ *    就让这档断言变成 no-op —— 校验脚本一旦失去"能被改坏"的性质就没有意义。
+ * @param manifest - 仓库 package.json（可由 `--self-test` 注入坏值）
+ * @param log - 分组标题输出
+ */
+async function checkPeerRange(manifest, log) {
+  log('peer 范围（离线表：平台门禁在 CI 上恒被跳过，这档是 CI 的唯一增量）')
+  const declared = manifest?.peerDependencies?.['@deepseek-ai/dsh']
+
+  await check('package.json 的 DSH peer 范围 == 复核过的范围', 'dshPeerRange', () => {
+    if (manifest === undefined || manifest === null) {
+      return { ok: false, message: 'package.json 无法解析（拿不到 peerDependencies）' }
+    }
+    if (declared !== REVIEWED_DSH_PEER_RANGE) {
+      return {
+        ok: false,
+        message: `声明的是 ${JSON.stringify(declared)}，复核过的是 ${JSON.stringify(REVIEWED_DSH_PEER_RANGE)}`
+          + ' —— 改这个范围要同时改 tools/verify-contract.mjs 的 REVIEWED_DSH_PEER_RANGE'
+          + ' 与 DSH_PEER_ACCEPTS/REJECTS，并用平台门禁（C1）复核',
+      }
+    }
+    return { note: declared }
+  })
+
+  await check('范围可被本断言解析，且接受/拒绝表全部命中', 'dshPeerRange', () => {
+    if (typeof declared !== 'string') return { ok: false, message: `peer 范围不是字符串：${JSON.stringify(declared)}` }
+    if (DSH_PEER_ACCEPTS.length < 4 || DSH_PEER_REJECTS.length < 3) {
+      return {
+        ok: false,
+        message: `版本表被清空了（接受 ${DSH_PEER_ACCEPTS.length} / 拒绝 ${DSH_PEER_REJECTS.length}）`
+          + ' —— 空表的断言恒真，等于没有断言',
+      }
+    }
+    let comparators
+    try {
+      comparators = parseRange(declared)
+    } catch (error) {
+      return {
+        ok: false,
+        message: `${error instanceof Error ? error.message : String(error)}`
+          + '（本断言只认 >= > <= < = 的空白合取；换成别的形式就等于把这档断言关掉）',
+      }
+    }
+    if (comparators.length === 0) return { ok: false, message: '范围解析出 0 个比较器' }
+    const wrong = []
+    for (const version of DSH_PEER_ACCEPTS) {
+      if (!satisfiesRange(version, declared)) wrong.push(`应接受却拒绝 ${version}`)
+    }
+    for (const version of DSH_PEER_REJECTS) {
+      if (satisfiesRange(version, declared)) wrong.push(`应拒绝却接受 ${version}`)
+    }
+    if (wrong.length > 0) {
+      return {
+        ok: false,
+        message: `${wrong.join('；')}（表见 tools/verify-contract.mjs 的 DSH_PEER_ACCEPTS/DSH_PEER_REJECTS）`,
+      }
+    }
+    return { note: `接受 ${DSH_PEER_ACCEPTS.length} 个 / 拒绝 ${DSH_PEER_REJECTS.length} 个` }
   })
 }
 
@@ -475,9 +683,24 @@ async function probePlatform(log) {
   }
 }
 
-/** 载入 lib/index.js 并跑全部断言；被 --self-test 复用（可注入损坏的产物） */
-export async function runChecks(log, load = async () => import(pathToFileURL(LIB).href)) {
+/**
+ * 载入 lib/index.js 并跑全部断言；被 --self-test 复用（可注入损坏的产物或坏的清单）。
+ * @param log - 分组标题输出
+ * @param load - 产物加载器（`--self-test` 注入改坏的模块）
+ * @param manifestOf - 仓库清单读取器（`--self-test` 注入坏 peer 范围）
+ */
+export async function runChecks(
+  log,
+  load = async () => import(pathToFileURL(LIB).href),
+  manifestOf = () => JSON.parse(readFileSync(MANIFEST, 'utf8')),
+) {
   const mod = await load()
+  let manifest
+  try {
+    manifest = manifestOf()
+  } catch {
+    manifest = undefined
+  }
 
   // 契约点说明表：单一真相在 src/host.ts 的 HOST_CONTRACTS（经产物导出）
   contractInfo.clear()
@@ -506,6 +729,7 @@ export async function runChecks(log, load = async () => import(pathToFileURL(LIB
   })
 
   await checkDelivery(mod, log)
+  await checkPeerRange(manifest, log)
 
   const tempVault = await mkdtemp(join(tmpdir(), 'study-buddy-contract-'))
   try {
@@ -756,6 +980,24 @@ async function selfTest() {
         },
       }),
     },
+    {
+      // v1.2.0 事故形态：把 DSH peer 范围收回 ^0.1.7-rc.1（不覆盖 0.2.0-rc.1）→ bundle 层被摘除
+      name: 'DSH peer 范围改回 ^0.1.7-rc.1 → 离线 peer 断言报错',
+      mutate: (mod) => mod,
+      manifest: (manifest) => ({
+        ...manifest,
+        peerDependencies: { ...manifest.peerDependencies, '@deepseek-ai/dsh': '^0.1.7-rc.1' },
+      }),
+    },
+    {
+      // 形式守卫：范围写成 * 就等于把"CI 也能拦 peer 过期"这档断言关掉
+      name: 'DSH peer 范围改成 * → 离线 peer 断言报错（形式守卫）',
+      mutate: (mod) => mod,
+      manifest: (manifest) => ({
+        ...manifest,
+        peerDependencies: { ...manifest.peerDependencies, '@deepseek-ai/dsh': '*' },
+      }),
+    },
   ]
 
   let caught = 0
@@ -765,7 +1007,13 @@ async function selfTest() {
     const sink = (line) => collected.push(line)
     const before = failures.length
     try {
-      await runChecks(sink, async () => item.mutate(real))
+      await runChecks(
+        sink,
+        async () => item.mutate(real),
+        item.manifest === undefined
+          ? () => JSON.parse(readFileSync(MANIFEST, 'utf8'))
+          : () => item.manifest(JSON.parse(readFileSync(MANIFEST, 'utf8'))),
+      )
     } catch {
       // 断言之外的意外异常也算"被抓住"
     }

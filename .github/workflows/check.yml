@@ -17,6 +17,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
+      # 交付形态 + peer 范围：本机没装 DSH 时平台探针会打印 ⏭ 跳过，但**离线 peer 断言**
+      # （范围必须等于复核值 + 版本表）在任何机器都有增量——`^0.1.7-rc.1` 被 0.2.0-rc.1 判为
+      # 不兼容正是这一类，当年 `pnpm run check` 全绿也照样被摘了整个 bundle 层。
+      - run: pnpm run verify:contract
       # 排序/文本口径不得依赖宿主 locale：v1.0.0 就是本机（zh-CN）绿、这里（en-US）红
       - name: 测试（非中文 locale，验证结果与宿主环境无关）
         run: pnpm run test

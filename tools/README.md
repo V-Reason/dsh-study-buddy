@@ -4,8 +4,8 @@
 
 | 命令 | 管什么 | 需要什么 | CI |
 | :-- | :-- | :-- | :-- |
-| `pnpm run verify:contract` | **交付形态**（bundle 声明可解析）+ 插件 ↔ 本机 DSH 的平台契约（注入来源的形状规则**不需要** DSH） | 本机装过 DSH 才跑平台探针，否则自动跳过 | 可跑（跳过探针） |
-| `pnpm run verify:deploy -- -Profile web` | 仓库产物 ↔ profile 安装副本 ↔ bundle 选中 ↔ 预设 patch ↔ vault | Windows + pwsh + 本机 DSH | 不跑（依赖本机部署） |
+| `pnpm run verify:contract` | **交付形态**（bundle 声明可解析）+ **peer 范围**（离线版本表 + 平台自己的门禁）+ 插件 ↔ 本机 DSH 的平台契约（注入来源的形状规则**不需要** DSH） | 本机装过 DSH 才跑平台探针，否则自动跳过 | 可跑（跳过探针，但**离线 peer 断言照跑**） |
+| `pnpm run verify:deploy -- -Profile web` | 仓库产物 ↔ profile 安装副本 ↔ bundle 选中 ↔ **peer 范围一致** ↔ 预设 patch ↔ vault | Windows + pwsh + 本机 DSH | 不跑（依赖本机部署） |
 
 ## 为什么需要它们
 
@@ -21,6 +21,11 @@
    `{kind:'plugin', plugin:'x'}` 升级成**生产者自有 kind**，检查挂在 `codec.encodeEvent`（写盘路径）上。
    症状是**每个新会话的第一条消息整轮失败**：`format v4 message requires a producer-owned source kind`。
    同一类"身份字段升级"挂在不同路径上后果完全不同（写盘 = 整轮失败 / 读盘 = 会话打不开 / 投影 = 只是渲染怪）。
+4. **门禁字段过期**：2026-09-29（DSH 0.2.0-rc.1）`peerDependencies["@deepseek-ai/dsh"]` 的上界
+   `<0.2.0-0` 把 0.2.0-rc.1 判成不兼容，而这条判定住在**平台**里、判在**交付形态**上：
+   `loadProfileDirectory` 把整个 bundle 层塞进 `skippedBundles`，预设与 18 个工具一起消失。
+   `pnpm run check` 全绿、平台契约探针全绿，只有 `pnpm run verify:contract` 的 peer 那条会点名。
+   **而且它曾经只在装了 DSH 的机器上才看得见**——所以现在多了一条不依赖平台的离线版本表断言。
 
 所以分工是：
 
@@ -28,20 +33,24 @@
   声明 patch 的卫生（`tests/preset.spec.ts`）。零平台依赖，任何机器任何 CI 都能跑。
 - `pnpm run verify:contract` —— 管**仓库 ↔ 真实 DSH**：①（文件级）`dsh.bundle.patch` 存在、声明可解析、
   `study` 行 config 键 ⊆ 插件认得的键且不含 `vaultRoot`、`src/` 与 `lib/` 无 `@deepseek-ai/*` 静态 import；
-  ②（活符号）能从 `$DSH_HOME/profiles/*/node_modules`（含 `.pnpm/node_modules`，或 `--platform <dir>` 指定）
+  ②（peer 范围，**两档**）**离线表**——声明的范围必须逐字等于复核值 `REVIEWED_DSH_PEER_RANGE`，
+  并对一张钉死的版本表给出正确判定（不认的范围写法直接报错，不许静默通过；任何机器都跑）；
+  **平台门禁**——装了 DSH 就用平台自己的 `evaluatePluginCompatibility` 判（权威判定）；
+  ③（活符号）能从 `$DSH_HOME/profiles/*/node_modules`（含 `.pnpm/node_modules`，或 `--platform <dir>` 指定）
   解析到平台包就 import 真的 `ToolRuntime` / `Session` / `SystemPrompt` / `app-boot` /
-  `dsh-session-format-v3-to-v4` 断言契约仍在（含用平台自己的门禁校验 peer 范围、把**真实注入消息**
-  喂给平台的 v4 行编码器）；解析不到就打印跳过（CI 在 ubuntu 上不会因此变红）——
-  与平台无关的那半（注入来源的形状规则）是**常跑**断言，任何机器都有增量。
-- `pnpm run verify:deploy` —— 管**仓库 ↔ profile 安装副本 ↔ bundle 选中 ↔ 预设 patch ↔ vault**：
-  依赖不自动刷新、bundle 没被选中、preset patch 落后、legacy 目录还在，这四类都是"看着改了其实没生效"的常客。
+  `dsh-session-format-v3-to-v4` 断言契约仍在（含把**真实注入消息**喂给平台的 v4 行编码器）；
+  解析不到就打印跳过（CI 在 ubuntu 上不会因此变红）——
+  与平台无关的那半（注入来源的形状规则 + 离线 peer 表）是**常跑**断言，任何机器都有增量。
+- `pnpm run verify:deploy` —— 管**仓库 ↔ profile 安装副本 ↔ bundle 选中 ↔ peer 范围 ↔ 预设 patch ↔ vault**：
+  依赖不自动刷新、bundle 没被选中、已装副本的范围落后、preset patch 落后、legacy 目录还在，
+  这五类都是"看着改了其实没生效"的常客。
 
 ## 用法
 
 ```powershell
 # 契约 + 交付形态：任何机器
-pnpm run verify:contract                 # 23 条常跑断言；解析到平台包时再加平台探针（逐条打印）
-pnpm run verify:contract:self-test       # 额外跑 7 例负向对照：把断言改坏必须报错
+pnpm run verify:contract                 # 20 条常跑断言（含离线 peer 表）；解析到平台包时再加 6 条平台探针（逐条打印）
+pnpm run verify:contract:self-test       # 额外跑 9 例负向对照：把断言改坏必须报错
 node tools/verify-contract.mjs --verbose # 打印每条断言与它对应的平台「文件:行号」
 node tools/verify-contract.mjs --platform T:\deepseek-harness\node_modules\.pnpm\node_modules
                                          # 平台包不在 profile 里时（DSH 从源码树跑）手动指定解析根，让活断言真的跑起来
@@ -66,7 +75,8 @@ pwsh -NoProfile -File tools/verify-deploy.ps1 -Profile web -ReportOnly   # 只�
 
 `verify-contract.mjs --self-test` 会把断言**故意改坏**（删一个工具、把 `output.schema.type`
 改成 `object`、让 `apply` 不注册/直接抛错、清空契约表、清空认得的配置键列表、
-把注入消息的来源改回退场的 `{kind:'plugin'}` 包装），要求每一种都必须报错。
+把注入消息的来源改回退场的 `{kind:'plugin'}` 包装、把 DSH peer 范围改回 `^0.1.7-rc.1`、
+把范围改成 `*`），要求每一种都必须报错。
 它不是一个形式：写这套脚本时就靠它抓出过一个洞——最初的 `check()` 把「回调返回字符串」当通过，于是
 「读到不对 → 返回一段中文诊断」的分支**把自己的诊断算成了绿灯**。校验脚本一旦失去
 这个性质，两边一起改错就永远不会被发现。

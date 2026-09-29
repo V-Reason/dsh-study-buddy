@@ -32,6 +32,49 @@ interface Row {
   readonly line: number
 }
 
+/**
+ * 解析声明 patch 里 `compaction-basic` 的 `modelPolicies`（缩进块，缩进回落即结束）。
+ *
+ * 为什么单独解析：`modelPolicies[].model` 必须是**目录里真实存在**的 model id——
+ * compaction-basic 按精确 `provider` + `model` 匹配策略，`resolveConfig` 只校验形状/
+ * 类型，**没有成员检查**，所以写错 id 不会报错、也不会告警，那条策略只是静默失效
+ * （`deepseek-v4-flash` 就这么躺了一个版本）。
+ * @param yaml - 声明 patch 全文
+ * @returns 各条策略的 provider / model
+ */
+function parseModelPolicies(yaml: string): { providers: string[]; models: string[] } {
+  const lines = yaml.split(/\r?\n/)
+  const start = lines.findIndex((line) => /^\s*modelPolicies:\s*$/.test(line))
+  if (start === -1) throw new Error('presets/study.patch.yml 缺少 modelPolicies')
+  const indent = lines[start].match(/^\s*/)![0].length
+  const providers: string[] = []
+  const models: string[] = []
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i]
+    if (!line.trim() || /^\s*#/.test(line)) continue
+    if (line.match(/^\s*/)![0].length <= indent) break
+    const provider = /^\s*(?:-\s*)?provider:\s*(\S+)\s*$/.exec(line)
+    if (provider) {
+      providers.push(provider[1].replace(/^['"]|['"]$/g, ''))
+      continue
+    }
+    const model = /^\s*(?:-\s*)?model:\s*(\S+)\s*$/.exec(line)
+    if (model) models.push(model[1].replace(/^['"]|['"]$/g, ''))
+  }
+  return { providers, models }
+}
+
+/**
+ * 复核过的 `modelPolicies` 目标（DSH 0.1.7-rc.1 与 0.2.0-rc.1 一致）。
+ *
+ * 来源：平台 `packages/llm/llm-deepseek/src/models.ts` 的 `DEFAULT_MODELS`
+ * （`deepseek-flash` / `deepseek-v4-pro`）；provider 路由名 `deepseek-official`
+ * 来自 `packages/llm/llm-deepseek-api-key/src/index.ts` 的 `PROVIDER`。
+ * 平台加/改模型 id 时这里会红——那时先对着平台 HEAD 核一遍再改，别只改断言。
+ */
+const REVIEWED_MODEL_IDS = ['deepseek-flash', 'deepseek-v4-pro']
+const REVIEWED_PROVIDER = 'deepseek-official'
+
 describe('presets/study.patch.yml 声明卫生', () => {
   const text = readFileSync(DECLARATION, 'utf8')
   const rows = scanEntryRows(text) as Row[]
@@ -94,6 +137,25 @@ describe('presets/study.patch.yml 声明卫生', () => {
     // 语义未变的键仍在
     for (const key of ['stateDir', 'fallbackDir', 'skipDirs', 'includeSessionCwd', 'searchRoots', 'linkIntoNotes', 'domainFolders']) {
       expect(keys, `config 缺少 ${key}`).toContain(key)
+    }
+  })
+
+  // 2026-09 复核发现的死值：`modelPolicies[0].model: deepseek-v4-flash` 在 0.1.7-rc.1 与
+  // 0.2.0-rc.1 的目录里都不存在（目录是 deepseek-flash / deepseek-v4-pro），而
+  // compaction-basic 没有成员检查 → 那条策略静默失效、不报错也不告警。
+  test('compaction-basic 的 modelPolicies 指向真实存在的 model id 与 provider 路由', () => {
+    const { providers, models } = parseModelPolicies(text)
+    expect(models.length, 'modelPolicies 至少要有一条策略').toBeGreaterThan(0)
+    expect(models.length, '每条策略都应有 provider 与 model').toBe(providers.length)
+    for (const [index, model] of models.entries()) {
+      expect(
+        REVIEWED_MODEL_IDS,
+        `modelPolicies[${index}].model=${model} 不在复核过的目录里（DSH 默认目录见 `
+        + 'packages/llm/llm-deepseek/src/models.ts）；写错的策略不报错、只是静默不生效',
+      ).toContain(model)
+    }
+    for (const [index, provider] of providers.entries()) {
+      expect(REVIEWED_PROVIDER, `modelPolicies[${index}].provider=${provider} 不是复核过的路由名`).toBe(provider)
     }
   })
 

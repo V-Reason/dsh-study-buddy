@@ -4,7 +4,7 @@
 >
 > 讲解快节奏、听懂才往下走；笔记不是摘要卡片，而是 vault 里一篇篇能独立复读的 `.md`——**写到哪个目录由你规划，写法由你 vault 根的《笔记期望.md》决定**。
 >
-> 版本基线：v1.1.1 ｜ [MIT](LICENSE) ｜ [快速开始](#快速开始) · [用户使用指南](docs/用户使用指南.md) · [文档地图](docs/README.md) · [更新记录](docs/更新记录.md)
+> 版本基线：v1.2.0 ｜ [MIT](LICENSE) ｜ [快速开始](#快速开始) · [用户使用指南](docs/用户使用指南.md) · [文档地图](docs/README.md) · [更新记录](docs/更新记录.md)
 
 ## 它替你解决什么
 
@@ -17,7 +17,8 @@
 ## 快速开始
 
 前提：一份能跑的 DSH 部署（web profile）+ Node.js ≥ 22 + pnpm。本仓库是**插件 + 预设**，不含 DSH 本体。
-DSH 要求 **≥ 0.1.7-rc.1**（更低版本没有 `dsh.bundle.patch` 这套声明式预设，见 [安装与兼容性](#安装与兼容性)）。
+DSH 要求 **`>=0.1.7-rc.1` 且 `<0.3.0-0`**（更低版本没有 `dsh.bundle.patch` 这套声明式预设；
+0.3 线未验证，见 [安装与兼容性](#安装与兼容性)）。
 
 ```powershell
 # 1. 装进 DSH profile —— 本包是「bundle」：装它同时把「学习伙伴」预设声明进 profile
@@ -46,7 +47,8 @@ Copy-Item presets/study/assets/笔记期望.md "D:\你的vault绝对路径\笔�
 
 | DSH 版本 | 本插件 | 说明 |
 | :-- | :-- | :-- |
-| ≥ 0.1.7-rc.1 | v1.1.1+ | **声明式预设**（`dsh.bundle.patch`）——当前形态；v1.1.1 起注入消息改用生产者自有 kind，才能通过 v4 写盘准入 |
+| `>=0.1.7-rc.1 <0.3.0-0` | **v1.2.0+** | 现行形态：**接受 0.2.0-rc.1**，同时不把仍在 0.1.7-rc.x 上的用户挡在门外 |
+| 0.1.7-rc.1 / 0.1.7-rc.2 | v1.1.1 | 交付形态与注入来源都对，但 peer 范围 `^0.1.7-rc.1` 的上界是 `<0.2.0-0` → 在 **0.2.0-rc.1 上判不兼容**：整个 bundle 层被跳过，「学习伙伴」与 18 个工具一起消失 → 升到 v1.2.0 |
 | ≥ 0.1.7-rc.1 | v1.1.0 | 交付形态对，但开场门禁的来源用了退场的 `{kind:'plugin'}` 包装：**每个新会话的首条消息都会整轮失败**（`format v4 message requires a producer-owned source kind`）→ 升到 v1.1.1 |
 | ≤ 0.1.6 | v1.0.x | 目录式预设（`%DSH_HOME%\.agent-presets\study\`）；该目录**自 0.1.7 起平台已不再读取** |
 
@@ -58,10 +60,23 @@ Copy-Item presets/study/assets/笔记期望.md "D:\你的vault绝对路径\笔�
   `pnpm install`（装卸别的插件也会触发）都会把 `node_modules\<插件>` 换回远端那个提交——旧版没有
   `dsh.bundle.patch`，于是被从 `dsh.profile.bundles` 里摘掉、预设在注册表里消失，而 `dsh web`
   只会报别的插件的错。`pnpm tools/verify-deploy.ps1 -Profile <name>` 的第 1、2 节就是为这种
-  "看着改了、其实被回滚"准备的。
-- **兼容门禁**：本包在 `package.json` 声明 `peerDependencies["@deepseek-ai/dsh"]`。DSH 会按它拒绝装载不兼容版本；
-  升级 DSH minor（如 0.2.x）需要同步提这个范围，或用 `plugin_manager` 的版本豁免（有风险，慎用）。
-  忘了提范围的表现是"插件被拒绝装载"，跑 `pnpm run verify:contract` 会直接点名。
+  "看着改了、其实被回滚"准备的。另外：`dsh plugin update` 在装完扫描到**不兼容**时会
+  **拒绝安装并回滚**（`dsh: installation rejected: … nothing was installed`），或者——如果这次 update
+  根本没改动那个依赖——只告警并返回 0。所以"没报错"不等于"是新的"，产物哈希仍要核。
+- **兼容门禁**：本包在 `package.json` 声明 `peerDependencies["@deepseek-ai/dsh"]`，当前值为
+  **`>=0.1.7-rc.1 <0.3.0-0`**。注意这条门禁**判在交付形态上**（DSH 按**已装副本**声明的范围判），
+  失效形态随 DSH 版本不同：
+
+  | DSH 侧 | 表现 |
+  | :-- | :-- |
+  | 0.2.0+ | **跳过整个 bundle 层**，启动 stderr 留一行 `dsh: skipping profile bundle "dsh-study-buddy": Plugin … is incompatible with dsh …`；`plugin_manager list_bundles` 里本包 `error.code=incompatible-version`、`rows: []` → 预设整行与 18 个工具一起消失 |
+  | 0.1.7 ~ 0.1.x | 同上跳过，提示直接内联写在加载期 |
+
+  两种形态都**不是"插件自己报错"**，所以升级 DSH 后先跑 `pnpm run verify:contract`：
+  它用**平台自己的门禁**判这个范围，并带一张**离线**版本表断言（没装 DSH 的机器/CI 上也跑）。
+  用 `dsh plugin allow-version` 的 exact-version 豁免也能绕过，但有崩溃与丢数据的风险，
+  本仓库的做法是**提范围**，不授豁免。忘了提范围的表现是"插件被跳过、工具全没"，
+  而不是"插件报错"。
 - **DSH 内部 API 漂移怎么办**：本插件对 DSH 的依赖**全部收在 `src/host.ts`**（`HOST_CONTRACTS` 契约表 +
   特性探测/降级），源码与产物里**没有任何 `@deepseek-ai/*` 静态 import**。升级 DSH 后先跑
   `pnpm run verify:contract`：它会对着**运行中的 DSH** 逐点断言并指出"平台源码坐标 + 失效后果 + 改哪里"。

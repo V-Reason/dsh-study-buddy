@@ -6,13 +6,15 @@
   交付形态自 DSH 0.1.7-rc.1 起变了：目录式预设被平台删除（提交 d1e22a7e24 / #4569），
   「学习伙伴」改为随包发布的**声明式预设**（`package.json` 的 `dsh.bundle.patch` →
   `presets/study.patch.yml`）。这一步的失效形态很隐蔽：**预设整行消失、18 个工具全没，
-  但不报错**——所以本脚本把"看着改了其实没生效"的四个接缝都变成可执行检查：
+  但不报错**——所以本脚本把"看着改了其实没生效"的五个接缝都变成可执行检查：
 
     1. 插件产物：仓库 lib/index.js 的 SHA256 == <profile>\node_modules\dsh-study-buddy\lib\index.js
     2. 交付形态：已装包声明 dsh.bundle.patch → patch 文件存在且与仓库同哈希；
        profile 的 dsh.profile.bundles 含本包；patch 里 study 行**不得**含 vaultRoot
-    3. 退场形态：%DSH_HOME%\.agent-presets\study 必须已删除（没有读者的目录会误导排查）
-    4. vault 门禁：vaultRoot（环境变量 / <DSH_HOME>\study-buddy.json）与《笔记期望.md》
+    3. peer 门禁：已装副本声明的 DSH peer 范围必须与仓库一致（DSH 0.2.0 起，不兼容的 bundle
+       会被**整层跳过**，只在启动 stderr 留一行 `dsh: skipping profile bundle ...`）
+    4. 退场形态：%DSH_HOME%\.agent-presets\study 必须已删除（没有读者的目录会误导排查）
+    5. vault 门禁：vaultRoot（环境变量 / <DSH_HOME>\study-buddy.json）与《笔记期望.md》
 
   只读：不写任何文件、不复制、不装依赖。退出码 0 = 全绿，1 = 有 FAIL，2 = 参数/环境问题。
 
@@ -77,7 +79,7 @@ if (-not (Test-Path -LiteralPath $repoLib)) {
 
 # ── 2. 交付形态（声明式预设 + bundle 选中） ───────────────────────────────────
 Write-Host ''
-Write-Host '[2/4] 交付形态（DSH 0.1.7 起预设只能由 bundle patch 声明；漏了它预设会静默消失）'
+Write-Host '[2/4] 交付形态与 peer 门禁（DSH 0.1.7 起预设只能由 bundle patch 声明；0.2.0 起 peer 不兼容会让整层被跳过）'
 $patchPaths = @()
 if (-not (Test-Path -LiteralPath $installedManifestPath)) {
   Write-Bad "已安装包没有 package.json：$installedManifestPath"
@@ -98,6 +100,25 @@ if (-not (Test-Path -LiteralPath $installedManifestPath)) {
     } else {
       Write-Ok "dsh.bundle.patch 指向 $($patchPaths.Count) 个存在的文件：$($declared -join ' + ')"
     }
+  }
+}
+
+# peer 门禁：已装副本声明的 DSH peer 范围必须与仓库一致。
+# 为什么只比字符串：语义判定（"这个范围吃不吃得下本机 DSH"）用平台自己的门禁，
+# 交给 `pnpm run verify:contract`；这里管的是**安装副本落后**——DSH 按已装副本那个范围
+# 判兼容，范围没跟上就等于没修。0.2.0 起不兼容的 bundle 会被整层跳过（预设与 18 个工具
+# 一起消失），只在启动 stderr 留一行 `dsh: skipping profile bundle ...`。
+$repoManifestPath = Join-Path $RepoRoot 'package.json'
+if ((Test-Path -LiteralPath $repoManifestPath) -and (Test-Path -LiteralPath $installedManifestPath)) {
+  $repoPeer = (Get-Content -LiteralPath $repoManifestPath -Raw | ConvertFrom-Json).peerDependencies.'@deepseek-ai/dsh'
+  $instPeer = $manifest.peerDependencies.'@deepseek-ai/dsh'
+  if ($null -eq $repoPeer) {
+    Write-Bad "仓库 package.json 没有声明 peerDependencies['@deepseek-ai/dsh'] —— 兼容门禁没了，DSH 会按任意版本放行"
+  } elseif ($instPeer -ne $repoPeer) {
+    Write-Bad "已装副本的 DSH peer 范围与仓库不一致（仓库 `"$repoPeer`" / 已装 `"$instPeer`"）—— 安装副本落后，DSH 按它判兼容"
+    Write-Info "修复：Remove-Item -Recurse -Force '$installedDir'; cd '$profileDir'; pnpm install，或 dsh plugin --profile $Profile update dsh-study-buddy（注意 git 依赖必须先 push）"
+  } else {
+    Write-Ok "DSH peer 范围与仓库一致（$repoPeer）"
   }
 }
 
@@ -227,7 +248,7 @@ if (-not (Test-Path -LiteralPath $fallback)) {
 # ── 结论 ─────────────────────────────────────────────────────────────────────
 Write-Host ''
 if ($script:Fail -eq 0) {
-  Write-Host "✓ 部署四要素一致（$script:Warn 条警告）" -ForegroundColor Green
+  Write-Host "✓ 部署五要素一致（$script:Warn 条警告）" -ForegroundColor Green
   exit 0
 }
 if ($ReportOnly) {

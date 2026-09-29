@@ -187,9 +187,14 @@
                   thresholdRatio: 0.3
                   retainRatio: 0.15
                   maxTokens: 4096
+                  # modelPolicies[].model 必须是**目录里真实存在**的 model id，否则该策略静默不生效
+                  # （按精确 provider+model 匹配，不匹配就当没写）。id 表见平台
+                  # packages/llm/llm-deepseek/src/models.ts —— 0.1.7-rc.1 与 0.2.0-rc.1 都是
+                  # deepseek-flash / deepseek-v4-pro；曾误写 deepseek-v4-flash（两个版本都不存在，
+                  # 该条策略一直是死值）。改这里前先对着平台 HEAD 核一遍。
                   modelPolicies:
                     - provider: deepseek-official
-                      model: deepseek-v4-flash
+                      model: deepseek-flash
                       thresholdRatio: 0.3
                       retainRatio: 0.15
                       maxTokens: 4096
