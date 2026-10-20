@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
-import { scanEntryRows } from '../tools/verify-contract.mjs'
+import { LOOP_PROMPT_VARIABLES, scanEntryRows, scanPromptVariables } from '../tools/verify-contract.mjs'
 
 /**
  * 预设组合卫生：`presets/study.patch.yml` 必须能被当前 DSH 挂载。
@@ -118,6 +118,17 @@ describe('presets/study.patch.yml 声明卫生', () => {
     expect(persona?.name, 'persona 行的模块名').toBe('@deepseek-ai/dsh-persona')
     expect(persona?.configKeys, 'persona 行仍有已删除的 `text` 键（应改为 prefix）').not.toContain('text')
     expect(persona?.configKeys).toEqual(['prefix'])
+  })
+
+  // 0.2.1-rc.2（上游提交 79bd3d8d）删除了 loop 的 `cwd` 提示词变量，只注册 provider/model。
+  // persona 模板是 strict 插值：残留 {{cwd}} 会在首个模型请求前抛 unknown prompt variable。
+  test('persona 模板只引用 loop 注册的变量（{{cwd}} 已在 0.2.1 退场）', () => {
+    const variables = scanPromptVariables(text)
+    expect(variables, 'persona 应保留 loop 注册的模型事实').toContain('model')
+    expect(variables, '{{cwd}} 会在首个请求前让 prompt assembly 抛错').not.toContain('cwd')
+    for (const variable of variables) {
+      expect(LOOP_PROMPT_VARIABLES, `模板引用了 loop 未注册的变量 {{${variable}}}`).toContain(variable)
+    }
   })
 
   // 阶段 6：插件行 config 键收敛（删 mocDir/templateHints，加 expectFile/planTtlHours）

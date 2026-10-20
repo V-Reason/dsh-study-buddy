@@ -4,7 +4,7 @@
 >
 > 讲解快节奏、听懂才往下走；笔记不是摘要卡片，而是 vault 里一篇篇能独立复读的 `.md`——**写到哪个目录由你规划，写法由你 vault 根的《笔记期望.md》决定**。
 >
-> 版本基线：v1.2.0 ｜ [MIT](LICENSE) ｜ [快速开始](#快速开始) · [用户使用指南](docs/用户使用指南.md) · [文档地图](docs/README.md) · [更新记录](docs/更新记录.md)
+> 版本基线：v1.2.1 ｜ [MIT](LICENSE) ｜ [快速开始](#快速开始) · [用户使用指南](docs/用户使用指南.md) · [文档地图](docs/README.md) · [更新记录](docs/更新记录.md)
 
 ## 它替你解决什么
 
@@ -47,7 +47,8 @@ Copy-Item presets/study/assets/笔记期望.md "D:\你的vault绝对路径\笔�
 
 | DSH 版本 | 本插件 | 说明 |
 | :-- | :-- | :-- |
-| `>=0.1.7-rc.1 <0.3.0-0` | **v1.2.0+** | 现行形态：**接受 0.2.0-rc.1**，同时不把仍在 0.1.7-rc.x 上的用户挡在门外 |
+| `>=0.1.7-rc.1 <0.3.0-0` | **v1.2.1+** | 现行形态：接受 0.1.7-rc.x / 0.2.0-rc.1 / **0.2.1-rc.2**；persona 模板只引用 loop 注册的 `provider` / `model` |
+| 0.2.1-rc.2 | v1.2.0 | 预设仍写 `{{cwd}}`，而 0.2.1 的 loop 只注册 `provider` / `model` → 首个模型请求前报 `unknown prompt variable "{{cwd}}"`，预设不可用 → 升到 v1.2.1 |
 | 0.1.7-rc.1 / 0.1.7-rc.2 | v1.1.1 | 交付形态与注入来源都对，但 peer 范围 `^0.1.7-rc.1` 的上界是 `<0.2.0-0` → 在 **0.2.0-rc.1 上判不兼容**：整个 bundle 层被跳过，「学习伙伴」与 18 个工具一起消失 → 升到 v1.2.0 |
 | ≥ 0.1.7-rc.1 | v1.1.0 | 交付形态对，但开场门禁的来源用了退场的 `{kind:'plugin'}` 包装：**每个新会话的首条消息都会整轮失败**（`format v4 message requires a producer-owned source kind`）→ 升到 v1.1.1 |
 | ≤ 0.1.6 | v1.0.x | 目录式预设（`%DSH_HOME%\.agent-presets\study\`）；该目录**自 0.1.7 起平台已不再读取** |
@@ -77,6 +78,10 @@ Copy-Item presets/study/assets/笔记期望.md "D:\你的vault绝对路径\笔�
   用 `dsh plugin allow-version` 的 exact-version 豁免也能绕过，但有崩溃与丢数据的风险，
   本仓库的做法是**提范围**，不授豁免。忘了提范围的表现是"插件被跳过、工具全没"，
   而不是"插件报错"。
+- **提示词变量**：DSH 0.2.1-rc.2 起 loop 只注册 `provider` / `model`（`cwd` 已随
+  working-directory 迁移退场）。自定义 persona 模板不要再写 `{{cwd}}`——strict 插值会在
+  首个模型请求前抛 `unknown prompt variable`；目录事实看 working-directory 的
+  `Current working directory: …` 上下文。`tests/preset.spec.ts` 与 `verify:contract` 都会拦。
 - **DSH 内部 API 漂移怎么办**：本插件对 DSH 的依赖**全部收在 `src/host.ts`**（`HOST_CONTRACTS` 契约表 +
   特性探测/降级），源码与产物里**没有任何 `@deepseek-ai/*` 静态 import**。升级 DSH 后先跑
   `pnpm run verify:contract`：它会对着**运行中的 DSH** 逐点断言并指出"平台源码坐标 + 失效后果 + 改哪里"。

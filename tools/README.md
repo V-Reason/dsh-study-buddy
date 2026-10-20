@@ -26,13 +26,20 @@
    `loadProfileDirectory` 把整个 bundle 层塞进 `skippedBundles`，预设与 18 个工具一起消失。
    `pnpm run check` 全绿、平台契约探针全绿，只有 `pnpm run verify:contract` 的 peer 那条会点名。
    **而且它曾经只在装了 DSH 的机器上才看得见**——所以现在多了一条不依赖平台的离线版本表断言。
+5. **提示词变量退场**：2026-10-20（DSH 0.2.1-rc.2，提交 `79bd3d8d`）删除了 loop 的 `cwd`
+   提示词变量，只保留 `provider` / `model`；自定义 persona 模板仍写 `{{cwd}}` 时，
+   `dsh-system-prompt` 的 strict 插值在**首个模型请求前**抛
+   `unknown prompt variable "{{cwd}}" in section "deployment:persona-prefix"`。
+   目录事实改由 `dsh-working-directory` 的 required 上下文
+   `Current working directory: …` 提供；本仓库的模板变量白名单断言就是为这一类准备的。
 
 所以分工是：
 
 - `pnpm run test`（含 `tests/contract.spec.ts`）—— 管**仓库自己**：工具面、输出契约、宿主接线形状、
   声明 patch 的卫生（`tests/preset.spec.ts`）。零平台依赖，任何机器任何 CI 都能跑。
 - `pnpm run verify:contract` —— 管**仓库 ↔ 真实 DSH**：①（文件级）`dsh.bundle.patch` 存在、声明可解析、
-  `study` 行 config 键 ⊆ 插件认得的键且不含 `vaultRoot`、`src/` 与 `lib/` 无 `@deepseek-ai/*` 静态 import；
+  `study` 行 config 键 ⊆ 插件认得的键且不含 `vaultRoot`、persona 模板变量 ⊆ loop 变量
+  （`provider` / `model`；0.2.1 起 `cwd` 退场）、`src/` 与 `lib/` 无 `@deepseek-ai/*` 静态 import；
   ②（peer 范围，**两档**）**离线表**——声明的范围必须逐字等于复核值 `REVIEWED_DSH_PEER_RANGE`，
   并对一张钉死的版本表给出正确判定（不认的范围写法直接报错，不许静默通过；任何机器都跑）；
   **平台门禁**——装了 DSH 就用平台自己的 `evaluatePluginCompatibility` 判（权威判定）；
@@ -49,7 +56,7 @@
 
 ```powershell
 # 契约 + 交付形态：任何机器
-pnpm run verify:contract                 # 20 条常跑断言（含离线 peer 表）；解析到平台包时再加 6 条平台探针（逐条打印）
+pnpm run verify:contract                 # 21 条常跑断言（含离线 peer 表 + 模板变量白名单）；解析到平台包时再加 6 条平台探针（逐条打印）
 pnpm run verify:contract:self-test       # 额外跑 9 例负向对照：把断言改坏必须报错
 node tools/verify-contract.mjs --verbose # 打印每条断言与它对应的平台「文件:行号」
 node tools/verify-contract.mjs --platform T:\deepseek-harness\node_modules\.pnpm\node_modules

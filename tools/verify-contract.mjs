@@ -15,7 +15,9 @@
  *
  *   A. 交付形态（文件级）：package.json 的 `dsh.bundle.patch` 指向的声明文件存在、
  *      可解析、含 `preset-study`（`@deepseek-ai/dsh-agent-preset`）且其 `study` 行的
- *      config 键 ⊆ 插件认得的键、且**不含** vaultRoot（机器路径不进包）。
+ *      config 键 ⊆ 插件认得的键、且**不含** vaultRoot（机器路径不进包）；persona
+ *      模板只引用 loop 注册的 `provider` / `model`（0.2.1-rc.2 起 `cwd` 已退场，
+ *      strict 插值会在首个请求前抛 `unknown prompt variable`）。
  *   B. 平台契约（活符号）：产物导出的 `HOST_CONTRACTS` 逐点对**运行中的 DSH** 断言；
  *      外加"不得再假设已删 API"的负向断言（替身刻意不给 `settings`）。
  *      其中「注入消息的来源 kind」还有一条**额外**的活平台断言：把真实注入对象喂给
@@ -146,6 +148,34 @@ export function scanEntryRows(text) {
   return rows
 }
 
+/**
+ * loop 注册的提示词变量（**单一真相**：0.2.1-rc.2 的 `dsh-agent-loop`）。
+ *
+ * 上游提交 `79bd3d8d`（feat(session): centralize working directories and directory
+ * context）删除了 `ctx.systemPrompt.variable('cwd', …)`；loop 只保留 provider/model。
+ * 目录事实改由 `dsh-working-directory` 的 required 上下文
+ * `Current working directory: …` 提供。自定义 persona 模板若还写 `{{cwd}}`，
+ * `dsh-system-prompt` 的 strict 插值会在首个模型请求前抛
+ * `unknown prompt variable "{{cwd}}" in section "deployment:persona-prefix"`。
+ */
+export const LOOP_PROMPT_VARIABLES = ['provider', 'model']
+
+/**
+ * 扫描声明文件里**非注释行**的完整 `{{name}}` 引用。
+ *
+ * 注释只用于记录历史/迁移说明（例如“0.2.1 删除了 {{cwd}}”），不是模板；
+ * 跳过注释才能既保留说明、又不把说明误判成运行时引用。
+ * @param text - patch 文件全文
+ * @returns 按出现顺序排列的变量名（可重复）
+ */
+export function scanPromptVariables(text) {
+  const withoutComments = text
+    .split(/\r?\n/)
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n')
+  return [...withoutComments.matchAll(/\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}/g)].map((match) => match[1])
+}
+
 // ── 窄范围 semver（只服务离线 peer 断言 C2） ────────────────────────────────
 
 /**
@@ -162,9 +192,9 @@ export function scanEntryRows(text) {
  */
 export const REVIEWED_DSH_PEER_RANGE = '>=0.1.7-rc.1 <0.3.0-0'
 
-/** 复核过"必须接受"的运行版本（前 4 个是实际部署过的：0.1.7-rc.1/rc.2 → 0.2.0-rc.1） */
+/** 复核过"必须接受"的运行版本（实际部署过的：0.1.7-rc.1/rc.2 → 0.2.0-rc.1 → 0.2.1-rc.2） */
 export const DSH_PEER_ACCEPTS = [
-  '0.1.7-rc.1', '0.1.7-rc.2', '0.1.7', '0.2.0-rc.1', '0.2.0-rc.2', '0.2.0', '0.2.1',
+  '0.1.7-rc.1', '0.1.7-rc.2', '0.1.7', '0.2.0-rc.1', '0.2.0-rc.2', '0.2.0', '0.2.1-rc.2', '0.2.1',
 ]
 
 /** 复核过"必须拒绝"的运行版本：0.1.6 没有声明式预设；0.3 线未验证 */
@@ -348,6 +378,22 @@ async function checkDelivery(mod, log) {
       }
     }
     return { note: `${study.configKeys.length} 个键，无 vaultRoot` }
+  })
+
+  await check('persona 模板只引用 loop 注册的变量（0.2.1 起 `cwd` 已退场）', 'bundleDeclared', () => {
+    const variables = scanPromptVariables(readFileSync(DECLARATION, 'utf8'))
+    const unknown = [...new Set(variables.filter((name) => !LOOP_PROMPT_VARIABLES.includes(name)))]
+    if (unknown.length > 0) {
+      return {
+        ok: false,
+        message: `引用了 loop 未注册的变量：${unknown.join('、')}（允许：${LOOP_PROMPT_VARIABLES.join('、')}）`
+          + ' —— 0.2.1-rc.2 删除了 cwd；strict 插值会在首个模型请求前抛 unknown prompt variable',
+      }
+    }
+    if (!variables.includes('model')) {
+      return { ok: false, message: 'persona 模板不再引用 {{model}} —— 应保留 loop 注册的模型事实' }
+    }
+    return { note: `${[...new Set(variables)].join(', ')}` }
   })
 
   log('零内部耦合（第三方包不得静态 import @deepseek-ai/*）')

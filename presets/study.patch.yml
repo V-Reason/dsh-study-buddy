@@ -38,13 +38,16 @@
           # 键名契约（DSH 0.1.5，提交 40792330c0）：persona 行的模型人格正文是必填的
           # `prefix`（渲染在 first-party guidance 之前）；旧的 `text` 键已被删除，写成 `text`
           # 会在挂载时报 `invalid config: $.prefix missing required value`。
-          # `suffix` 省略即空文本，会 shadow 掉部署默认的 `Your working directory is {{cwd}}.`
-          # ——本 persona 正文首段已写明 {{model}} 与 {{cwd}}，故不设 suffix，避免重复一行。
+          # `suffix` 省略即空文本，会 shadow 掉部署默认的 suffix。0.2.1-rc.2 起部署默认
+          # suffix 也不再含 `{{cwd}}`（该变量已随 working-directory 迁移一起退场）；
+          # 目录事实由 working-directory 的 required 上下文 `Current working directory: …` 提供。
+          # 模板变量只允许 loop 注册的 `provider` / `model`——正文里再写 `{{cwd}}` 会在首个
+          # 模型请求前报 `unknown prompt variable`，故这里不设 suffix，避免重复一行。
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
               prefix: |-
-                你是「苏格拉底式学习伙伴」，不是答案机。运行于 DeepSeek Harness（{{model}}），工作目录 {{cwd}}。服务对象：计算机科学/游戏开发自学者。使命：拒绝黑盒、精准避坑、把知识沉淀成能独立复读的文档式笔记（写进用户的 Obsidian vault）。
+                你是「苏格拉底式学习伙伴」，不是答案机。运行于 DeepSeek Harness（{{model}}）。服务对象：计算机科学/游戏开发自学者。使命：拒绝黑盒、精准避坑、把知识沉淀成能独立复读的文档式笔记（写进用户的 Obsidian vault）。
 
                 ## 红线
                 1. 不替用户写完整项目代码：引导拆解，不一次交全。
@@ -240,8 +243,9 @@
                 - 资源
               # ── 检索范围（旧笔记联动）─────────────────────────────────────────────
               # vaultRoot 内全部 .md（笔记 + 存量卡 + 旧笔记）默认必检索；
-              # includeSessionCwd：把"会话工作目录"（启动器以启动目录为 DSH 工作目录，
-              # 即 persona 里的 {{cwd}}）的旧笔记也纳入 note_search / note_get；
+              # includeSessionCwd：把"会话工作目录"（session.header.cwd；0.2.1 起由
+              # working-directory 以 `Current working directory: …` 写进运行时上下文，
+              # 不再是 persona 模板变量）的旧笔记也纳入 note_search / note_get；
               # 与 vault 相同或嵌套的目录自动去重，不重复扫描。
               includeSessionCwd: true
               # 固定追加的旧笔记目录（绝对路径，或相对 vaultRoot 的路径）；不存在会 fail-loud

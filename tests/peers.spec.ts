@@ -56,6 +56,8 @@ describe('DSH peer 范围（离线判定）', () => {
     for (const version of DSH_PEER_ACCEPTS) {
       expect(satisfiesRange(version, REVIEWED_DSH_PEER_RANGE), `${version} 应被接受`).toBe(true)
     }
+    // 0.2.1-rc.2 是实际部署过、且本次 persona 修复验证过的运行时
+    expect(DSH_PEER_ACCEPTS, '0.2.1-rc.2 必须进入接受表').toContain('0.2.1-rc.2')
     for (const version of DSH_PEER_REJECTS) {
       expect(satisfiesRange(version, REVIEWED_DSH_PEER_RANGE), `${version} 应被拒绝`).toBe(false)
     }
