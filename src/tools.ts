@@ -462,16 +462,23 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'study_progress',
       description:
-        '读写学习进度（持久，跨会话有效）：资料/小节/未答追问/触及笔记。'
-        + '"接着讲"前 get；小节推进 set；归档（整理笔记）前检查 pendingQuestions。',
+        '读写持久学习进度：资料/小节/追问/笔记、计划引用、当前阶段、下一动作、完成判据和并行线。'
+        + 'get=完整状态；brief=紧凑计划入口；set=写字段；clear=清空。'
+        + 'brief 只在用户问“今天学什么/从哪继续”时使用，不主动提醒复习。',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', description: 'get/set/clear' },
+          action: { type: 'string', enum: ['get', 'set', 'clear', 'brief'], description: 'get/set/clear/brief' },
           material: { type: 'string', description: 'set：资料名' },
           section: { type: 'string', description: 'set：小节' },
           pendingQuestions: { type: 'array', items: { type: 'string' }, description: 'set：追问队列（整体替换）' },
           touchedIds: { type: 'array', items: { type: 'string' }, description: 'set：触及笔记 ID（整体替换）' },
+          planRef: { type: 'string', description: 'set：当前计划笔记的路径/标题/ID' },
+          phase: { type: 'string', description: 'set：当前主阶段' },
+          nextAction: { type: 'string', description: 'set：当前下一动作' },
+          doneWhen: { type: 'string', description: 'set：下一动作的完成判据' },
+          lastOutcome: { type: 'string', description: 'set：最近完成结果' },
+          parallelLines: { type: 'array', items: { type: 'string' }, description: 'set：简短并行进度' },
         },
         required: ['action'],
       },
@@ -481,17 +488,20 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         section: args.section ? String(args.section) : undefined,
         pendingQuestions: stringList(args.pendingQuestions),
         touchedCardIds: stringList(args.touchedIds),
+        planRef: args.planRef !== undefined ? String(args.planRef) : undefined,
+        phase: args.phase !== undefined ? String(args.phase) : undefined,
+        nextAction: args.nextAction !== undefined ? String(args.nextAction) : undefined,
+        doneWhen: args.doneWhen !== undefined ? String(args.doneWhen) : undefined,
+        lastOutcome: args.lastOutcome !== undefined ? String(args.lastOutcome) : undefined,
+        parallelLines: stringList(args.parallelLines),
       }),
     },
     {
       name: 'study_memory',
       description:
-        '读写跨会话记忆（vault .study/memory.json，持久有效，重启不丢）：键值笔记。'
-        + '新会话开场先 get（配合 study_progress(get) 给衔接提示）；用户偏好/约定存 prefs 键；'
-        + '告一段落或归档时 set lastSummary=本次小结。清空进度（study_progress clear）不影响记忆。'
-        + 'get 全量输出会对含"现学/正在学"等进度句的键给出过期提示——进度位置以 study_progress 为准（单一来源）。'
-        + '保留控制键 _autoPrefs（自迭代记忆开关，值 on/off，默认关闭）：set 切换、remove 回默认、不支持 append；'
-        + '开启后无需用户"请记住"，按 memory-auto 技能把持久偏好/约定自动写入 prefs.* 键（每类约定一个键、覆盖更新）。',
+        '读写跨会话记忆（.study/memory.json）：键值笔记。新会话先 get；偏好/约定存 prefs.*；'
+        + '告一段落 set lastSummary。清进度不影响记忆。'
+        + '控制键 _autoPrefs=on/off 只支持 set/remove，不支持 append。',
       parameters: {
         type: 'object',
         properties: {

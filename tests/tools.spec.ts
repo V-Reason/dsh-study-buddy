@@ -154,6 +154,18 @@ describe('buildToolDefs（19 个工具的 schema 契约）', () => {
     expect(props.touchedIds).toBeTruthy()
   })
 
+  test('study_progress：brief 与计划上下文字段', () => {
+    const def = defOf('study_progress')
+    const props = def.parameters.properties as Record<string, { enum?: string[] }>
+    expect(props.action.enum).toEqual(['get', 'set', 'clear', 'brief'])
+    expect(props.planRef).toBeTruthy()
+    expect(props.phase).toBeTruthy()
+    expect(props.nextAction).toBeTruthy()
+    expect(props.doneWhen).toBeTruthy()
+    expect(props.parallelLines).toBeTruthy()
+    expect(def.description).toContain('不主动提醒复习')
+  })
+
   test('study_mode：四动作、枚举与保守回退描述完整', () => {
     const def = defOf('study_mode')
     expect(def.parameters.required).toEqual(['action'])

@@ -47,6 +47,7 @@ import {
 } from './links.ts'
 import { indexNote, SearchIndex, snippetOf, type IndexedCard, type NoteKind, type SearchHit } from './search.ts'
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
+import { formatStudyBrief, normalizeBriefText, normalizeParallelLines } from './studyBrief.ts'
 import { buildToolDefs } from './tools.ts'
 import {
   normalizeTopicKey, readLearningState, touchLearningState, writeLearningState, type LearningState,
@@ -1247,9 +1248,15 @@ export class VaultStore {
     section?: string
     pendingQuestions?: string[]
     touchedCardIds?: string[]
+    planRef?: string
+    phase?: string
+    nextAction?: string
+    doneWhen?: string
+    lastOutcome?: string
+    parallelLines?: string[]
   }): Promise<string> {
-    if (!['get', 'set', 'clear'].includes(action)) {
-      throw new Error(`study_progress 未知 action "${action}"（可用 get/set/clear）`)
+    if (!['get', 'set', 'clear', 'brief'].includes(action)) {
+      throw new Error(`study_progress 未知 action "${action}"（可用 get/set/clear/brief）`)
     }
     const file = this.stateFile()
     await this.assertVault()
@@ -1259,14 +1266,28 @@ export class VaultStore {
     }
     const current = await readProgress(file)
     if (action === 'get') return fmtProgress(current)
+    if (action === 'brief') return formatStudyBrief(current)
     const next: ProgressState = { ...current }
     if (fields.material !== undefined) next.currentMaterial = String(fields.material).trim()
     if (fields.section !== undefined) next.currentSection = String(fields.section).trim()
     if (fields.pendingQuestions !== undefined) next.pendingQuestions = normalizeQueue(fields.pendingQuestions, 'pendingQuestions')
     if (fields.touchedCardIds !== undefined) next.touchedCardIds = normalizeQueue(fields.touchedCardIds, 'touchedCardIds')
+    if (fields.planRef !== undefined) {
+      next.planRef = normalizeBriefText(fields.planRef, 'planRef')
+    }
+    if (fields.phase !== undefined) next.phase = normalizeBriefText(fields.phase, 'phase')
+    if (fields.nextAction !== undefined) next.nextAction = normalizeBriefText(fields.nextAction, 'nextAction')
+    if (fields.doneWhen !== undefined) next.doneWhen = normalizeBriefText(fields.doneWhen, 'doneWhen')
+    if (fields.lastOutcome !== undefined) next.lastOutcome = normalizeBriefText(fields.lastOutcome, 'lastOutcome')
+    if (fields.parallelLines !== undefined) {
+      next.parallelLines = normalizeParallelLines(fields.parallelLines)
+    }
     if (
       fields.material === undefined && fields.section === undefined
       && fields.pendingQuestions === undefined && fields.touchedCardIds === undefined
+      && fields.planRef === undefined && fields.phase === undefined
+      && fields.nextAction === undefined && fields.doneWhen === undefined
+      && fields.lastOutcome === undefined && fields.parallelLines === undefined
     ) {
       // set 无任何字段：不产生无效写（不 bump updatedAt），直接返回当前状态
       return fmtProgress(current)
@@ -1532,7 +1553,15 @@ function fmtProgress(state: ProgressState): string {
   const pos = [state.currentMaterial || '（未开始）', state.currentSection || ''].filter(Boolean).join(' / ')
   const q = state.pendingQuestions?.length ? state.pendingQuestions.join('；') : '无'
   const c = state.touchedCardIds?.length ? state.touchedCardIds.join('、') : '无'
-  return `位置：${pos}\n追问：${q}\n卡片：${c}`
+  const lines = [`位置：${pos}`, `追问：${q}`, `卡片：${c}`]
+  if (state.planRef) lines.push(`计划：${state.planRef}`)
+  if (state.phase) lines.push(`阶段：${state.phase}`)
+  if (state.nextAction) lines.push(`下一步：${state.nextAction}`)
+  if (state.doneWhen) lines.push(`完成判据：${state.doneWhen}`)
+  if (state.lastOutcome) lines.push(`最近结果：${state.lastOutcome}`)
+  if (state.parallelLines?.length) lines.push(`并行进度：${state.parallelLines.join('；')}`)
+  if (state.updatedAt) lines.push(`更新时间：${state.updatedAt}`)
+  return lines.join('\n')
 }
 
 export function apply(ctx: HostContextLike | undefined, config?: StudyConfig): void {

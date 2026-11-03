@@ -41,6 +41,33 @@ describe('state', () => {
     expect(raw).toContain('"currentSection"')
   })
 
+  test('旧版 progress.json 缺少计划字段时仍可读取', async () => {
+    await writeFileDirect(file, JSON.stringify({
+      currentMaterial: 'Unity',
+      currentSection: 'W1',
+      updatedAt: '2026-10-28T00:00:00.000Z',
+    }))
+    await expect(readProgress(file)).resolves.toMatchObject({
+      currentMaterial: 'Unity',
+      currentSection: 'W1',
+    })
+  })
+
+  test('计划上下文可往返且不丢旧字段', async () => {
+    const state = {
+      currentMaterial: '求职主线',
+      currentSection: 'W1',
+      planRef: 'plan.md',
+      phase: 'B 3D 数学与流程',
+      nextAction: '四元数验证',
+      doneWhen: '闭卷解释万向锁',
+      lastOutcome: '相机投影完成',
+      parallelLines: ['算法：链表'],
+    }
+    await writeProgress(file, state)
+    expect(await readProgress(file)).toMatchObject(state)
+  })
+
   test('dirtyTypesAreDropped', async () => {
     await writeFileDirect(file, JSON.stringify({
       currentMaterial: 123,
