@@ -85,6 +85,7 @@ describe('文档卫生（链接 / 锚点 / 版本基线）', () => {
     const expected = `v${version}`
     const mustDeclare = [
       'README.md',
+      'README.en.md',
       'docs/README.md',
       'docs/用户使用指南.md',
       'docs/设计文档.md',
@@ -97,6 +98,8 @@ describe('文档卫生（链接 / 锚点 / 版本基线）', () => {
       const head = readFileSync(join(ROOT, rel), 'utf8').split(/\r?\n/).slice(0, 12).join('\n')
       expect(head, `${rel} 头部缺少 ${expected} 版本基线`).toContain(expected)
     }
+    expect(readFileSync(join(ROOT, 'README.md'), 'utf8')).toContain('[English](README.en.md)')
+    expect(readFileSync(join(ROOT, 'README.en.md'), 'utf8')).toContain('[简体中文](README.md)')
     // 两个 manifest 必须同版本（发布前的最后一刀）
     const plugin = JSON.parse(readFileSync(join(ROOT, 'dsh.plugin.json'), 'utf8')) as { version: string }
     expect(plugin.version).toBe(version)

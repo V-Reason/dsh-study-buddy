@@ -54,7 +54,9 @@ DSH 升级后排障先跑它们，判读口径见 [`tools/README.md`](../tools/R
 | **预设声明** | `presets/` | [`../presets/study.patch.yml`](../presets/study.patch.yml) | 「学习伙伴」的**声明式 preset**（persona + 12 个工具行 + `study` 插件行 config）——DSH 0.1.7 起目录式预设已删除，组合只在这里 | 增删工具行 / 改 persona / 改机器无关的默认配置（机器路径见 `DSH_STUDY_VAULT`） |
 | **默认模板** | `presets/` | [`../presets/study/assets/笔记期望.md`](../presets/study/assets/笔记期望.md) | 用户复制到 vault 根的默认内容（对话表达、自适应讲解与笔记文风的单一来源） | 想调整默认文风或模式窗口时 |
 
-根目录 [`README.md`](../README.md) 是**项目门面**：定位、快速开始、三条硬门禁、笔记样例、最小配置、隐私摘要、文档导航。
+根目录 [`README.md`](../README.md) 是**中文项目门面**，[`README.en.md`](../README.en.md) 提供结构一致、
+面向国际读者的英文概览。两份 README 只负责定位、快速开始、核心机制、隐私摘要与文档导航；
+安装细节、完整配置、兼容历史和排障仍以中文用户指南为单一来源。
 
 > **`refactor/` 的使用规则**：v1.0 的需求/选型/计划作为历史基线保留；当前 v1.4 轮次使用带主题名的新文件，
 > 避免覆盖历史。下一轮完成后按轮次整体移入 `archive/`。
