@@ -9,12 +9,16 @@
 export type StudyMode = 'quick' | 'full'
 export type StudyModeOverride = StudyMode | 'auto'
 export type ContactKind = 'lecture' | 'qa' | 'note-read' | 'note-write' | 'review'
+export type StudyIntent = 'direct' | 'refresh' | 'learn' | 'apply' | 'debug' | 'compare'
+export type StudyScope = 'single' | 'concept' | 'system'
 
 export interface StudyModeArgs {
   topic?: string
   mode?: StudyModeOverride
   kind?: ContactKind
   relatedNotes?: string[]
+  intent?: StudyIntent
+  scope?: StudyScope
 }
 
 export interface ModeInput {
@@ -22,12 +26,14 @@ export interface ModeInput {
   hasRelatedNote: boolean
   lastContactAt?: string
   windowDays?: number
+  intent?: StudyIntent
+  scope?: StudyScope
   now?: Date
 }
 
 export interface ModeDecision {
   mode: StudyMode
-  reason: 'override' | 'no-note' | 'no-contact' | 'recent' | 'stale'
+  reason: 'override' | 'direct' | 'intent' | 'no-note' | 'no-contact' | 'recent' | 'stale'
   ageDays: number | null
 }
 
@@ -41,6 +47,20 @@ const MODE_WINDOW_RE = /^\s*-\s*\[设置\]\s*快节奏复习窗口\s*[：:]\s*(\
 export function normalizeStudyMode(value: unknown): StudyModeOverride {
   const mode = String(value ?? '').trim().toLowerCase()
   return mode === 'quick' || mode === 'full' ? mode : 'auto'
+}
+
+export function normalizeStudyIntent(value: unknown): StudyIntent | undefined {
+  const intent = String(value ?? '').trim().toLowerCase()
+  return ['direct', 'refresh', 'learn', 'apply', 'debug', 'compare'].includes(intent)
+    ? intent as StudyIntent
+    : undefined
+}
+
+export function normalizeStudyScope(value: unknown): StudyScope | undefined {
+  const scope = String(value ?? '').trim().toLowerCase()
+  return ['single', 'concept', 'system'].includes(scope)
+    ? scope as StudyScope
+    : undefined
 }
 
 /** 从《笔记期望.md》读取可选的复习窗口，缺失或越界时使用 30 天。 */
@@ -64,7 +84,7 @@ function parseContactTime(value: string | undefined): number | null {
 /**
  * 选择讲解模式。
  *
- * 优先级：用户覆盖 > 相关笔记 > 实质接触记录 > 复习窗口。
+ * 优先级：用户覆盖 > 直答/学习意图 > 系统范围 > 笔记证据 > 复习窗口。
  * “30 天以内”包含第 30 天；从第 31 天起退回完整讲解。
  */
 export function resolveStudyMode(input: ModeInput): ModeDecision {
@@ -78,6 +98,11 @@ export function resolveStudyMode(input: ModeInput): ModeDecision {
   if (override === 'quick' || override === 'full') {
     return { mode: override, reason: 'override', ageDays }
   }
+  if (input.intent === 'direct') return { mode: 'quick', reason: 'direct', ageDays }
+  if (['learn', 'apply', 'debug', 'compare'].includes(input.intent ?? '')) {
+    return { mode: 'full', reason: 'intent', ageDays }
+  }
+  if (input.scope === 'system') return { mode: 'full', reason: 'intent', ageDays }
   if (!input.hasRelatedNote) return { mode: 'full', reason: 'no-note', ageDays }
   if (contact === null) return { mode: 'full', reason: 'no-contact', ageDays }
 
@@ -85,7 +110,10 @@ export function resolveStudyMode(input: ModeInput): ModeDecision {
   const windowDays = Number.isInteger(requestedWindow) && requestedWindow >= 1 && requestedWindow <= MAX_MODE_WINDOW_DAYS
     ? requestedWindow
     : DEFAULT_MODE_WINDOW_DAYS
-  return ageDays! <= windowDays
-    ? { mode: 'quick', reason: 'recent', ageDays }
-    : { mode: 'full', reason: 'stale', ageDays }
+  if (input.intent === 'refresh' || input.intent === undefined) {
+    return ageDays! <= windowDays
+      ? { mode: 'quick', reason: 'recent', ageDays }
+      : { mode: 'full', reason: 'stale', ageDays }
+  }
+  return { mode: 'full', reason: 'intent', ageDays }
 }

@@ -53,8 +53,9 @@ import {
   normalizeTopicKey, readLearningState, touchLearningState, writeLearningState, type LearningState,
 } from './learningState.ts'
 import {
-  DEFAULT_MODE_WINDOW_DAYS, normalizeStudyMode, parseModeWindowDays, resolveStudyMode,
-  type ContactKind, type ModeDecision, type StudyMode, type StudyModeOverride,
+  DEFAULT_MODE_WINDOW_DAYS, normalizeStudyIntent, normalizeStudyMode, normalizeStudyScope, parseModeWindowDays,
+  resolveStudyMode, type ContactKind, type ModeDecision, type StudyIntent, type StudyMode,
+  type StudyModeOverride, type StudyScope,
 } from './studyMode.ts'
 import {
   atomicWrite, canonicalRootKey, dedupeFiles, dedupeRoots, ensureDir, isFsRoot, MAX_WALK_FILES,
@@ -1376,6 +1377,8 @@ export class VaultStore {
 
   private modeReason(reason: ModeDecision['reason'], ageDays: number | null, windowDays: number): string {
     if (reason === 'override') return '用户指定'
+    if (reason === 'direct') return '当前是单点直答问题'
+    if (reason === 'intent') return '问题范围或学习意图需要完整讲解'
     if (reason === 'no-note') return '笔记库无相关主题'
     if (reason === 'no-contact') return '没有实质学习记录'
     if (reason === 'recent') return `最近 ${ageDays ?? 0} 天学习过`
@@ -1387,6 +1390,8 @@ export class VaultStore {
     mode?: StudyModeOverride
     kind?: ContactKind
     relatedNotes?: string[]
+    intent?: StudyIntent
+    scope?: StudyScope
   }, session?: { id?: string; cwd?: string }): Promise<string> {
     if (!['resolve', 'touch', 'set', 'status'].includes(action)) {
       throw new Error(`study_mode 未知 action "${action}"（可用 resolve/touch/set/status）`)
@@ -1460,6 +1465,8 @@ export class VaultStore {
       hasRelatedNote: related.length > 0,
       lastContactAt,
       windowDays,
+      intent: normalizeStudyIntent(fields.intent),
+      scope: normalizeStudyScope(fields.scope),
     })
     const changed = state.lastMode !== decision.mode
     state.lastTopic = topic
@@ -1470,6 +1477,10 @@ export class VaultStore {
       `依据：${this.modeReason(decision.reason, decision.ageDays, windowDays)}`,
       `复习窗口：${windowDays} 天`,
     ]
+    const intent = normalizeStudyIntent(fields.intent)
+    const scope = normalizeStudyScope(fields.scope)
+    if (intent) lines.push(`意图：${intent}`)
+    if (scope) lines.push(`范围：${scope}`)
     if (lastContactAt) lines.push(`上次接触：${lastContactAt}`)
     lines.push(`变化：${changed ? '是' : '否'}`)
     return lines.join('\n')

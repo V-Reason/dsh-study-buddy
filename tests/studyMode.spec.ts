@@ -73,6 +73,16 @@ describe('study mode policy', () => {
     })).toMatchObject({ mode: 'full', reason: 'stale' })
   })
 
+  test.each([
+    [{ hasRelatedNote: false, intent: 'direct', scope: 'single' }, 'quick', 'direct'],
+    [{ hasRelatedNote: true, lastContactAt: '2026-11-02T00:00:00.000Z', intent: 'learn' }, 'full', 'intent'],
+    [{ hasRelatedNote: true, lastContactAt: '2026-11-02T00:00:00.000Z', intent: 'compare', scope: 'system' }, 'full', 'intent'],
+    [{ hasRelatedNote: true, lastContactAt: '2026-11-02T00:00:00.000Z', intent: 'refresh' }, 'quick', 'recent'],
+    [{ hasRelatedNote: true, intent: 'refresh' }, 'full', 'no-contact'],
+  ] as const)('意图驱动模式 %#', (input, mode, reason) => {
+    expect(resolveStudyMode({ ...input, now: NOW })).toMatchObject({ mode, reason })
+  })
+
   test('归一化覆盖类型保持稳定', () => {
     const value: StudyModeOverride = normalizeStudyMode('full')
     expect(value).toBe('full')

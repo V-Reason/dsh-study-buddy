@@ -16,7 +16,7 @@
 import { VALID_STATUS, type BlockLinks } from './note.ts'
 import { RULES, ruleIds } from './lint.ts'
 import { sessionCwdOf, sessionIdOf, type ToolExecLike } from './host.ts'
-import type { StudyModeArgs } from './studyMode.ts'
+import { normalizeStudyIntent, normalizeStudyScope, type StudyModeArgs } from './studyMode.ts'
 import type { VaultStore } from './index.ts'
 
 /**
@@ -522,7 +522,9 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       description:
         '自适应讲解模式。resolve 依据 note_search 确认的相关笔记与接触足迹选快速/详细；'
         + 'touch 记录接触；set 切换本会话 auto/quick/full；status 查看。'
+        + 'intent/scope 让直答、回顾、学习、应用、排错和系统问题采用不同深度；'
         + '自动模式需相关笔记和 30 天内实质接触；证据不足或不确定一律详细。'
+        + '默认不向用户展示模式标签。'
         + '模式只影响讲解和答疑，不改变正式笔记；新会话恢复自动。',
       parameters: {
         type: 'object',
@@ -540,6 +542,14 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
             items: { type: 'string' },
             description: '确认相关的笔记 ID/标题/路径',
           },
+          intent: {
+            type: 'string',
+            enum: ['direct', 'refresh', 'learn', 'apply', 'debug', 'compare'],
+          },
+          scope: {
+            type: 'string',
+            enum: ['single', 'concept', 'system'],
+          },
         },
         required: ['action'],
       },
@@ -552,6 +562,8 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
           ? args.kind
           : undefined,
         relatedNotes: stringList(args.relatedNotes),
+        intent: normalizeStudyIntent(args.intent),
+        scope: normalizeStudyScope(args.scope),
       } satisfies StudyModeArgs, { id: sessionIdOf(exec), cwd: sessionCwdOf(exec) }),
     },
   ]
