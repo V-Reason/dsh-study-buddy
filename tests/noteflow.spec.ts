@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -341,6 +341,32 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     expect(await readFile(join(dir, ITEMS[0].path), 'utf8')).toContain('第一版正文。')
     // 恢复前的那一版也已存档，可来回
     expect(await s.noteHistory('高斯消元法')).toContain('历史存档（2 份')
+  })
+
+  test('BUG-002 append / definition dryRun 不落盘（五个 action 一致）', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const planId = await planAndConfirm(s)
+    await s.noteWrite({
+      planId, title: '高斯消元法', path: ITEMS[0].path, source: '《计算方法》',
+      content: '> 旧定位\n\n## 正文\n\n旧内容。',
+    })
+    const file = join(dir, ITEMS[0].path)
+    const assertDryRun = async (args: Parameters<VaultStore['noteUpdate']>[0]): Promise<void> => {
+      const before = await readFile(file, 'utf8')
+      const stamp = new Date('2020-01-02T03:04:05Z')
+      await utimes(file, stamp, stamp)
+      const beforeStat = await stat(file)
+      const out = await s.noteUpdate(args)
+      expect(out).toMatch(/^\[dryRun\]/)
+      expect(await readFile(file, 'utf8')).toBe(before)
+      expect((await stat(file)).mtimeMs).toBe(beforeStat.mtimeMs)
+    }
+    await assertDryRun({ ref: '高斯消元法', action: 'append', changes: '不应写入的补充', dryRun: true })
+    await assertDryRun({ ref: '高斯消元法', action: 'definition', summary: '不应写入的定位', dryRun: true })
+    await assertDryRun({ ref: '高斯消元法', action: 'replace', newContent: '## 新正文\n\n不应写入的替换', dryRun: true })
+    await assertDryRun({ ref: '高斯消元法', action: 'move', targetPath: `${ROOT}/直接法/不应移动.md`, dryRun: true })
+    await assertDryRun({ ref: '高斯消元法', action: 'metadata', status: '需更新', dryRun: true })
   })
 
   test('note_update metadata：先存档、正文逐字不变、未知键保留', async () => {

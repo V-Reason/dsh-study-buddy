@@ -1130,12 +1130,14 @@ export class VaultStore {
     }
     if (action === 'append') {
       const result = applyNoteUpdate(raw, card.id ?? args.ref, { action: 'append', changes: args.changes, section: args.section })
+      if (args.dryRun) return `[dryRun] 将追加到 ${card.rel}（${args.section ? `「${args.section}」` : '文末'}；未落盘）`
       await atomicWrite(card.path, result.text)
       this.invalidate()
       return `已更新：${card.rel}（补充${args.section ? `到「${args.section}」` : '到末尾'}）\n\n${result.text}`
     }
     if (action === 'definition') {
       const result = applyNoteUpdate(raw, card.id ?? args.ref, { action: 'definition', summary: args.summary })
+      if (args.dryRun) return `[dryRun] 将替换一句话定位：${card.rel}（未落盘）`
       await atomicWrite(card.path, result.text)
       this.invalidate()
       return `已更新：${card.rel}（仅替换一句话定位）\n\n${result.text}`
