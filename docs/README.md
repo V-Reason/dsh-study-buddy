@@ -20,7 +20,7 @@ docs/
 ├── 经验文档.md            现行·两轮过程方法论与踩坑
 ├── 更新记录.md            现行·逐版变更（README 首屏只留版本行）
 ├── refactor/            本轮重构的过程文档（交付后整体归档）
-├── check/               验证脚本
+├── check/               验证清单 + `reports/` 时间点实测报告
 └── archive/             历史快照（审查原件、早期设计稿、v0.9 台账）
 ```
 
@@ -44,9 +44,11 @@ DSH 升级后排障先跑它们，判读口径见 [`tools/README.md`](../tools/R
 | **验证** | `check/` | [`check/升级后验收清单.md`](check/升级后验收清单.md) | 升级 DSH/插件/预设后的验收清单（命令层 → 会话层 → 归档链路 → 定位顺序） | 部署形态或校验命令变化时 |
 | **验证** | `check/` | [`check/输出文风验收清单.md`](check/输出文风验收清单.md) | 自然正文排版、去除重复、快速/详细/自动模式的人工场景矩阵 | 输出文风或模式行为变化时 |
 | **验证** | `check/` | [`check/计划感知与智能学习验收清单.md`](check/计划感知与智能学习验收清单.md) | 计划入口、模式隐身、无提醒开场、可发现性审计与元数据修复的人工验收 | 本类行为变化时 |
-| **验证** | `check/` | [`check/验证报告-2026-09-15-学习伙伴预设实战检查.md`](check/验证报告-2026-09-15-学习伙伴预设实战检查.md) | v1.0.0 真机会话逐条跑 50 项的**实测结果**（含 P0 缺陷：`note_plan` 无确认入口）；时间点快照 | 不改写；修完另起一份新报告 |
-| **验证** | `check/` | [`check/验证报告-2026-09-15-归档链路修复复验.md`](check/验证报告-2026-09-15-归档链路修复复验.md) | 上份报告的 **P0/P1/P2 逐条修复状态 + 复验证据**（含新查出的 `generatePlanId` 补零死锁）；源码级与命令层复验，会话层待重跑 | 会话层复验完成后在同一份里回填结论 |
-| **归档** | `archive/` | [`archive/README.md`](archive/README.md) | 历史文档索引（审查报告原件、提案、早期需求稿、体检、复盘、体验报告） | 文档被取代/已完成/仅供溯源时 |
+| **验证** | `check/reports/` | [`check/reports/README.md`](check/reports/README.md) | 时间点实测报告的目录约定：只增不改、修复另起报告、入库前脱敏 | 报告组织规则变化时 |
+| **验证** | `check/reports/` | [`check/reports/验证报告-2026-09-15-学习伙伴预设实战检查.md`](check/reports/验证报告-2026-09-15-学习伙伴预设实战检查.md) | v1.0.0 真机会话逐条跑 50 项的**实测结果**（含 P0 缺陷：`note_plan` 无确认入口）；时间点快照 | 不改写；修完另起一份新报告 |
+| **验证** | `check/reports/` | [`check/reports/验证报告-2026-09-15-归档链路修复复验.md`](check/reports/验证报告-2026-09-15-归档链路修复复验.md) | 上份报告的 **P0/P1/P2 逐条修复状态 + 复验证据**（含新查出的 `generatePlanId` 补零死锁）；源码级与命令层复验 | 不改写；新结果另起报告 |
+| **验证** | `check/reports/` | [`check/reports/验证报告-2026-09-15-全功能清单会话层实测.md`](check/reports/验证报告-2026-09-15-全功能清单会话层实测.md) | v1.0.2 在真实 vault 中跑完 48 项的**会话层实测快照**；记录 `dryRun` P0 与 3 处行为偏差 | 不改写；修复结果进入后续报告 |
+| **归档** | `archive/` | [`archive/README.md`](archive/README.md) | 历史文档索引（审查报告原件、提案、早期需求稿、体检、复盘、七份体验报告） | 文档被取代/已完成/仅供溯源时 |
 | **归档** | `archive/` | [`archive/审查修复记录.md`](archive/审查修复记录.md) | v0.9 两轮审查的**结论 + 逐项修复状态 + 为什么不修**（历史台账，仅溯源） | 不再更新；新问题走需求/设计文档 |
 | **权威细则** | `presets/` | [`../presets/study/skills/*/SKILL.md`](../presets/study/skills/) | 7 个技能的执行口径（output-style / study-loop / note-format / file-reading / incremental-update / domain-adaptation / memory-auto） | 技能行为变化（与 persona 一起改） |
 | **预设声明** | `presets/` | [`../presets/study.patch.yml`](../presets/study.patch.yml) | 「学习伙伴」的**声明式 preset**（persona + 12 个工具行 + `study` 插件行 config）——DSH 0.1.7 起目录式预设已删除，组合只在这里 | 增删工具行 / 改 persona / 改机器无关的默认配置（机器路径见 `DSH_STUDY_VAULT`） |

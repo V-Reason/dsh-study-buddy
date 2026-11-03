@@ -54,11 +54,20 @@
 
 ### `experience-reports/` — 用户侧体验报告（原件）
 
-五次真实学习会话的体验报告（L16 / GAMES101 L20 / B17 表面着色器 / PBR 18-20 / GAMES101 L21-22 收尾）。
-全部**已闭环**：报告里提的建议都已落地（工具描述补充、`card_moc` 日期前缀剥离、定义长度分级、进度单一来源提示、`card_lint` 等）。
-保留作需求溯源与回归对照；未来若要复跑"体验报告 → 修复"链条，从这里取原始输入。
+七次真实学习会话的体验报告。它们全部保留为**时间点快照**，用于需求溯源和回归对照；
+报告中的旧路径、旧工具名与当时缺陷都按原语境保留，不作为当前使用说明。
 
-> 注：此前散落在 `docs/Experience Report/done/` 与 `docs/Experience Report/archive/`（含空格目录名）的报告已统一并入本目录。
+| 文档 | 主题 |
+| :-- | :-- |
+| `2026-09-01_study-partner-dsh-experience-report.md` | 早期学习伙伴闭环基线 |
+| `2026-09-01_study-partner-dsh-experience-report-l20-games101.md` | GAMES101 L20 |
+| `2026-09-01_study-partner-dsh-experience-report-b17-surface-shader.md` | B17 表面着色器 |
+| `2026-09-02_study-partner-dsh-experience-report-unity-shader-pbr-ch18-20.md` | PBR 18–20 |
+| `2026-09-03_study-partner-dsh-experience-report-games101-l21-22-finish.md` | GAMES101 L21–22 收尾 |
+| `2026-09-17_study-partner-dsh-experience-report-note-format-first-run.md` | 文档式笔记首次实战 |
+| `2026-09-30_study-partner-dsh-experience-report-luban-config-pipeline.md` | Luban 配表工作流 |
+
+> 注：旧 `docs/Experience Report/` 工作目录已退役；所有历史体验报告统一放在本目录。
 
 ## 归档后如何找当前口径
 

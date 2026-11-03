@@ -1,4 +1,47 @@
+# Dependencies and package-manager caches
 node_modules/
-lib/
-*.tsbuildinfo
 .pnpm-store/
+
+# Generated build metadata
+*.tsbuildinfo
+
+# Test and coverage output
+coverage/
+test-results/
+.vitest/
+
+# Environment files and local secrets
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local machine configuration and runtime state
+study-buddy.json
+.study/
+*.local
+
+# Logs and temporary files
+*.log
+*.tmp
+.tmp/
+tmp/
+
+# Editor and operating-system metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*~
+
+# Retired working directory: point-in-time reports belong under docs/check/reports
+docs/Experience Report/
+
+# `lib/` is intentionally tracked as the GitHub-install runtime artifact.
+# Do not ignore it unless package entrypoints and installation strategy change.
