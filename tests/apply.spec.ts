@@ -252,7 +252,7 @@ describe('apply（开场门禁接线）', () => {
     expect(entered.messages[1].source).toEqual({
       kind: 'plugin:dsh-study-buddy',
       form: 'notice',
-      summary: '开场门禁：先读记忆与进度',
+      summary: '开场门禁：先读记忆、进度与期望',
     })
     expect(entered.messages[1].id).not.toBe('user-1')
 
@@ -265,7 +265,7 @@ describe('apply（开场门禁接线）', () => {
     expect(enteredLegacy.messages[1].source).toEqual({
       kind: 'plugin:dsh-study-buddy',
       form: 'notice',
-      summary: '开场门禁：先读记忆与进度',
+      summary: '开场门禁：先读记忆、进度与期望',
     })
 
     // ② 恢复会话（已有 user/message，新平台形状）：原样返回

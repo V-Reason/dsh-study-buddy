@@ -1,11 +1,11 @@
 /**
- * 工具定义注册表（模型可见的 18 个 `note_*` / `study_*` 工具）。
+ * 工具定义注册表（模型可见的 19 个 `note_*` / `study_*` 工具）。
  *
  * 工具 schema 本身是"提示词资产"（描述即文档）：本文件与 VaultStore 业务逻辑分文件，
  * 各自演进更清晰；工具只做参数解析与委派，业务在 VaultStore。
  *
  * 2026-10 重构：`card_*` 整族退场（需求 R18），改为文档式笔记工具面；工具数取
- * 16~18 个中的上限——**一个工具一个动词**，列目录/看单篇/搜全库/看覆盖度各自独立，
+ * v1.3.0 增至 19 个（新增 study_mode）——列目录/看单篇/搜全库/看覆盖度各自独立，
  * 模型不必靠参数分支猜语义（需求方定稿："宁可多不要挤"）。
  *
  * 硬门禁（需求 F2/R25）落在 `note_write`：未读期望 / 未确认规划 / 越界路径一律拒绝，
@@ -169,23 +169,19 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_plan',
       description:
-        '文件夹规划：把"这次要写哪些块、各落到哪个目录"整理成提案，供用户拍板。**提案只在对话里，不落盘**。'
-        + 'action=create（默认）出提案：items 是待落块清单（title + path，path 为 vault 内相对路径含文件名），'
-        + 'rootPath 是规划根，之后 note_write 的路径必须落在它之下。'
-        + '**用户拍板后必须调 action=confirm 确认**（rootPath 传要确认的 planId）——未确认的规划会被 note_write 拒绝；'
-        + '确认后规划有效期从确认时刻起算（默认 24 小时），再用该 planId 逐个 note_write 落盘。'
-        + '结构或顺序要改就直接重新提案一次（拿到新的 planId）。'
-        + 'action=abandon 放弃规划（rootPath 传要放弃的 planId）。',
+        '文件夹规划：提案只在对话，不落盘。create 用 rootPath + items 出提案，路径须在规划根下。'
+        + '用户拍板后必须 action=confirm（rootPath=planId），否则会被 note_write 拒绝；'
+        + '有效期从确认时刻起算。abandon 放弃规划。',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['create', 'confirm', 'abandon'], description: 'create=提案（默认）；confirm=用户拍板后确认；abandon=放弃指定规划' },
-          rootPath: { type: 'string', description: 'create：规划根目录；confirm/abandon：要操作的 planId（形如 202610241430_ab12cd）' },
+          action: { type: 'string', enum: ['create', 'confirm', 'abandon'], description: '提案/确认/放弃' },
+          rootPath: { type: 'string', description: 'create=规划根；confirm/abandon=planId' },
           material: { type: 'string', description: '本次规划服务的资料名' },
           notes: { type: 'string', description: '给用户的补充说明（如"复用已有目录、只新增一个节"）' },
           items: {
             type: 'array',
-            description: '待落块清单（至少一项；同一规划内标题必须唯一）',
+            description: '待落块清单；标题唯一',
             items: {
               type: 'object',
               properties: {
@@ -222,24 +218,21 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_write',
       description:
-        '写入一个笔记块。硬门禁（会被拒绝并列修复步骤）：① 必须先 note_expect_get 读过《笔记期望.md》且之后没改过；'
-        + '② 必须带**已确认**的 planId（未确认的规划先调 note_plan(action=confirm) 确认）；'
-        + '③ path 必须在规划根之下、标题在规划清单里且未被写过。'
-        + '正文写法（结构/详略/公式/图表/互引）完全按《笔记期望.md》，**没有模板与必填小节，字数不设限**。'
-        + 'dryRun=true 只回显将写入的内容，不落盘。目标已存在时报错——改写用 note_update，避免覆盖。',
+        '写入一个笔记块。门禁：先 note_expect_get；带已确认 planId；路径在规划根内且标题未写过。'
+        + '正文按《笔记期望.md》，无模板、必填小节或字数限制。dryRun 只预览；已存在用 note_update。',
       parameters: {
         type: 'object',
         properties: {
-          planId: { type: 'string', description: 'note_plan 返回的规划 id（必须已用 note_plan(action=confirm) 确认）' },
+          planId: { type: 'string', description: '已确认的规划 id' },
           title: { type: 'string', description: '块标题（必须与规划里的某一项一致）' },
           path: { type: 'string', description: '落盘路径（vault 内相对路径，含 .md）' },
           source: { type: 'string', description: '资料名（课程/书/项目）' },
-          content: { type: 'string', description: '正文 Markdown：写法完全按《笔记期望.md》（结构/详略/公式/图表/互引），长度不设限' },
+          content: { type: 'string', description: '正文；按《笔记期望.md》，不设限' },
           sourceSection: { type: 'string', description: '来源章节（缺省用规划里的值）：《资料》第N章 章标题 / N.N节' },
           order: { type: 'number', description: '同目录阅读顺序（缺省用规划里的值）' },
           domain: { type: 'string', description: '领域键（可选；用于检索过滤与落盘快捷方式）' },
           status: { type: 'string', enum: [...VALID_STATUS], description: '草稿/已确认/需更新，默认 草稿' },
-          summary: { type: 'string', description: '一句话定位（可选，无长度限制；缺省时从正文首个引用块提取，此时不再另写一遍引用块）' },
+          summary: { type: 'string', description: '一句话定位，无长度限制；可自动提取' },
           tags: { type: 'array', items: { type: 'string' }, description: '额外领域标签' },
           links: {
             type: 'object',
@@ -517,26 +510,25 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'study_mode',
       description:
-        '自适应讲解模式：resolve 根据相关笔记与主题接触足迹选择快速/详细；'
-        + 'touch 记录实质学习接触；set 切换本会话 auto/quick/full；status 查看当前模式。'
-        + '自动模式需要相关笔记且最近 30 天内有实质接触；证据不足或主题不确定时一律详细。'
-        + '调用 resolve 前先用 note_search 找相关笔记，并只把确认相关的 ID/标题/路径放进 relatedNotes。'
-        + '模式只影响讲解和答疑，不改变正式笔记的完整性；手动覆盖只在本会话有效，新会话恢复自动。',
+        '自适应讲解模式。resolve 依据 note_search 确认的相关笔记与接触足迹选快速/详细；'
+        + 'touch 记录接触；set 切换本会话 auto/quick/full；status 查看。'
+        + '自动模式需相关笔记和 30 天内实质接触；证据不足或不确定一律详细。'
+        + '模式只影响讲解和答疑，不改变正式笔记；新会话恢复自动。',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['resolve', 'touch', 'set', 'status'], description: '模式判断/记录/切换/查看' },
-          topic: { type: 'string', description: '当前知识主题（resolve/touch 必填）' },
-          mode: { type: 'string', enum: ['auto', 'quick', 'full'], description: 'set 必填；touch 只接受 quick/full' },
+          action: { type: 'string', enum: ['resolve', 'touch', 'set', 'status'], description: '判断/记录/切换/查看' },
+          topic: { type: 'string', description: '知识主题；resolve/touch 必填' },
+          mode: { type: 'string', enum: ['auto', 'quick', 'full'], description: 'set；touch 仅 quick/full' },
           kind: {
             type: 'string',
             enum: ['lecture', 'qa', 'note-read', 'note-write', 'review'],
-            description: 'touch 的实质接触类型；搜索、列目录、读元数据不算',
+            description: '实质接触类型；搜索/列目录不算',
           },
           relatedNotes: {
             type: 'array',
             items: { type: 'string' },
-            description: '经 note_search 确认为相关的笔记 ID、标题或路径',
+            description: '确认相关的笔记 ID/标题/路径',
           },
         },
         required: ['action'],

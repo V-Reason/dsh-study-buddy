@@ -37,7 +37,7 @@ export declare const OPENER_SOURCE_KIND = "plugin:dsh-study-buddy";
  * 提醒消息在对话里的折叠一行文案（`ContextFormed` 的 `notice` 形态要求非空 `summary`；
  * 上限口径见 `dsh-llm` 的 `CONTEXT_SUMMARY_MAX_CHARS = 120`）。
  */
-export declare const OPENER_SOURCE_SUMMARY = "\u5F00\u573A\u95E8\u7981\uFF1A\u5148\u8BFB\u8BB0\u5FC6\u4E0E\u8FDB\u5EA6";
+export declare const OPENER_SOURCE_SUMMARY = "\u5F00\u573A\u95E8\u7981\uFF1A\u5148\u8BFB\u8BB0\u5FC6\u3001\u8FDB\u5EA6\u4E0E\u671F\u671B";
 /** 是否满足注入条件：会话首轮首步、且会话历史中还没有任何 user/message */
 export declare function shouldInjectOpener(turn: number, step: number, hasPriorUserMessage: boolean): boolean;
 /** 提醒消息的最小结构形状（与 dsh-llm createUserMessage 的运行时形状一致） */

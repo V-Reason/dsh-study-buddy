@@ -21,8 +21,8 @@
 # 落盘到用户 Obsidian vault，见插件行 config）。
 #
 # 学习闭环行为规范在 persona 正文；各阶段的完整细则在 preset 自带
-# skills/（study-loop / note-format / file-reading / incremental-update /
-# domain-adaptation / memory-auto），按需加载省 token。
+# skills/（output-style / study-loop / note-format / file-reading /
+# incremental-update / domain-adaptation / memory-auto），按需加载省 token。
 
 - insert:
     - id: preset-study

@@ -49,6 +49,11 @@ describe('buildToolDefs（19 个工具的 schema 契约）', () => {
     }
   })
 
+  test('19 个工具的 schema 固定开销不超过旧基线上浮 10%', () => {
+    const bytes = Buffer.byteLength(JSON.stringify(buildToolDefs(store)))
+    expect(bytes, `当前 ${(bytes / 1024).toFixed(1)} KB`).toBeLessThanOrEqual(14.7 * 1024 * 1.1)
+  })
+
   test('只读工具声明 isConcurrencySafe，写入工具不声明（避免并发写同一库）', () => {
     const readOnly = ['note_library', 'note_expect_get', 'note_list', 'note_get', 'note_search', 'note_overview', 'note_plan', 'note_history', 'note_lint']
     const write = ['note_write', 'note_update', 'note_toc', 'note_link', 'note_unlink', 'note_rename', 'note_restore', 'study_progress', 'study_memory', 'study_mode']

@@ -5,7 +5,7 @@
 .DESCRIPTION
   交付形态自 DSH 0.1.7-rc.1 起变了：目录式预设被平台删除（提交 d1e22a7e24 / #4569），
   「学习伙伴」改为随包发布的**声明式预设**（`package.json` 的 `dsh.bundle.patch` →
-  `presets/study.patch.yml`）。这一步的失效形态很隐蔽：**预设整行消失、18 个工具全没，
+  `presets/study.patch.yml`）。这一步的失效形态很隐蔽：**预设整行消失、19 个工具全没，
   但不报错**——所以本脚本把"看着改了其实没生效"的五个接缝都变成可执行检查：
 
     1. 插件产物：仓库 lib/index.js 的 SHA256 == <profile>\node_modules\dsh-study-buddy\lib\index.js
@@ -106,7 +106,7 @@ if (-not (Test-Path -LiteralPath $installedManifestPath)) {
 # peer 门禁：已装副本声明的 DSH peer 范围必须与仓库一致。
 # 为什么只比字符串：语义判定（"这个范围吃不吃得下本机 DSH"）用平台自己的门禁，
 # 交给 `pnpm run verify:contract`；这里管的是**安装副本落后**——DSH 按已装副本那个范围
-# 判兼容，范围没跟上就等于没修。0.2.0 起不兼容的 bundle 会被整层跳过（预设与 18 个工具
+# 判兼容，范围没跟上就等于没修。0.2.0 起不兼容的 bundle 会被整层跳过（预设与 19 个工具
 # 一起消失），只在启动 stderr 留一行 `dsh: skipping profile bundle ...`。
 $repoManifestPath = Join-Path $RepoRoot 'package.json'
 if ((Test-Path -LiteralPath $repoManifestPath) -and (Test-Path -LiteralPath $installedManifestPath)) {

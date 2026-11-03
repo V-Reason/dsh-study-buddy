@@ -15,7 +15,7 @@
    插件整行未激活，而 `pnpm run check`（typecheck + vitest）照样全绿——源码零 `@deepseek-ai/*`
    运行时导入，也没有任何断言真的去碰宿主。
 2. **交付形态被删**：2026-09-24（DSH 0.1.7-rc.1，提交 `d1e22a7e24 / #4569`）删除了**目录式预设**，
-   `$DSH_HOME/.agent-presets/<id>/` 再没有读者。症状是**预设整行从名单里消失、18 个工具全没，
+   `$DSH_HOME/.agent-presets/<id>/` 再没有读者。症状是**预设整行从名单里消失、19 个工具全没，
    却没有任何报错**——平台 API 全绿，插件根本没被装配。
 3. **字段语义升级**：2026-09-25（DSH 0.1.7 的 v4 会话格式）把消息来源从**包装**
    `{kind:'plugin', plugin:'x'}` 升级成**生产者自有 kind**，检查挂在 `codec.encodeEvent`（写盘路径）上。
@@ -23,7 +23,7 @@
    同一类"身份字段升级"挂在不同路径上后果完全不同（写盘 = 整轮失败 / 读盘 = 会话打不开 / 投影 = 只是渲染怪）。
 4. **门禁字段过期**：2026-09-29（DSH 0.2.0-rc.1）`peerDependencies["@deepseek-ai/dsh"]` 的上界
    `<0.2.0-0` 把 0.2.0-rc.1 判成不兼容，而这条判定住在**平台**里、判在**交付形态**上：
-   `loadProfileDirectory` 把整个 bundle 层塞进 `skippedBundles`，预设与 18 个工具一起消失。
+   `loadProfileDirectory` 把整个 bundle 层塞进 `skippedBundles`，预设与 19 个工具一起消失。
    `pnpm run check` 全绿、平台契约探针全绿，只有 `pnpm run verify:contract` 的 peer 那条会点名。
    **而且它曾经只在装了 DSH 的机器上才看得见**——所以现在多了一条不依赖平台的离线版本表断言。
 5. **提示词变量退场**：2026-10-20（DSH 0.2.1-rc.2，提交 `79bd3d8d`）删除了 loop 的 `cwd`
@@ -56,7 +56,7 @@
 
 ```powershell
 # 契约 + 交付形态：任何机器
-pnpm run verify:contract                 # 21 条常跑断言（含离线 peer 表 + 模板变量白名单）；解析到平台包时再加 6 条平台探针（逐条打印）
+pnpm run verify:contract                 # 21 条常跑断言（含离线 peer 表 + 模板变量白名单）；解析到平台包时再加 7 条平台探针（逐条打印）
 pnpm run verify:contract:self-test       # 额外跑 9 例负向对照：把断言改坏必须报错
 node tools/verify-contract.mjs --verbose # 打印每条断言与它对应的平台「文件:行号」
 node tools/verify-contract.mjs --platform T:\deepseek-harness\node_modules\.pnpm\node_modules

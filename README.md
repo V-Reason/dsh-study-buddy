@@ -2,13 +2,13 @@
 
 > 给 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeekHarness)（DSH）的**「学习伙伴」**：一个插件 + Agent 预设，陪你把一份资料**讲完、问透、写成自己的文档**。
 >
-> 讲解快节奏、听懂才往下走；笔记不是摘要卡片，而是 vault 里一篇篇能独立复读的 `.md`——**写到哪个目录由你规划，写法由你 vault 根的《笔记期望.md》决定**。
+> 讲解按熟悉度自动切换快速或详细；输出自然、克制、不重复。笔记不是摘要卡片，而是 vault 里一篇篇能独立复读的 `.md`——**写到哪个目录由你规划，写法由你 vault 根的《笔记期望.md》决定**。
 >
-> 版本基线：v1.2.1 ｜ [MIT](LICENSE) ｜ [快速开始](#快速开始) · [用户使用指南](docs/用户使用指南.md) · [文档地图](docs/README.md) · [更新记录](docs/更新记录.md)
+> 版本基线：v1.3.0 ｜ [MIT](LICENSE) ｜ [快速开始](#快速开始) · [用户使用指南](docs/用户使用指南.md) · [文档地图](docs/README.md) · [更新记录](docs/更新记录.md)
 
 ## 它替你解决什么
 
-- **读完就忘** → 四步闭环：读取资料 → 讲解 → 问答反诘 → 归档成文档
+- **读完就忘** → 四步闭环：读取资料 → 自适应讲解 → 对话答疑 → 归档成文档
 - **笔记像流水账** → 一个块 = 一个能独立阅读的知识单元，按 `资料 / 章 / 节 / 块` 成篇，每层有 `微目录.md` 当导航
 - **写法不合口味** → 写法只看你的《笔记期望.md》（受众、文风、详略、结构、公式图表都由它决定），改完立即生效
 - **AI 乱建文件** → 归档前先出**文件夹规划**给你拍板，落盘路径必须在你确认的范围内
@@ -38,7 +38,7 @@ Copy-Item presets/study/assets/笔记期望.md "D:\你的vault绝对路径\笔�
 ```
 
 只读自检三步（都不需要翻日志）：`plugin_manager list_bundles` → 本包在列；`plugin_manager list_plugins`
-→ `include:preset-study` 且 `fiberPhase: active`；新会话里 18 个 `note_*` / `study_*` 工具都在。
+→ `include:preset-study` 且 `fiberPhase: active`；新会话里 19 个 `note_*` / `study_*` 工具都在。
 
 > ⚠ **第 3 步不是可选项**：没有《笔记期望.md》时 `note_write` 会拒绝写入并给创建指引（有意为之——允许回退到内建写法会把"写法只看期望"变成两处口径）。
 > 升级插件后若 DSH 没加载到新代码：删掉 `<profileDir>\node_modules\dsh-study-buddy` 再 `pnpm install`（依赖不自动刷新）。逐步详解见 [用户指南 §3](docs/用户使用指南.md#3-安装与部署)，出问题看 [§11 排障](docs/用户使用指南.md#11-故障排查手册)。
@@ -47,7 +47,7 @@ Copy-Item presets/study/assets/笔记期望.md "D:\你的vault绝对路径\笔�
 
 | DSH 版本 | 本插件 | 说明 |
 | :-- | :-- | :-- |
-| `>=0.1.7-rc.1 <0.3.0-0` | **v1.2.1+** | 现行形态：接受 0.1.7-rc.x / 0.2.0-rc.1 / **0.2.1-rc.2**；persona 模板只引用 loop 注册的 `provider` / `model` |
+| `>=0.1.7-rc.1 <0.3.0-0` | **v1.3.0+** | 现行形态：自适应快速/详细讲解、自然正文优先、19 个工具；接受 0.1.7-rc.x / 0.2.0-rc.1 / 0.2.1-rc.2 |
 | 0.2.1-rc.2 | v1.2.0 | 预设仍写 `{{cwd}}`，而 0.2.1 的 loop 只注册 `provider` / `model` → 首个模型请求前报 `unknown prompt variable "{{cwd}}"`，预设不可用 → 升到 v1.2.1 |
 | 0.1.7-rc.1 / 0.1.7-rc.2 | v1.1.1 | 交付形态与注入来源都对，但 peer 范围 `^0.1.7-rc.1` 的上界是 `<0.2.0-0` → 在 **0.2.0-rc.1 上判不兼容**：整个 bundle 层被跳过，「学习伙伴」与 18 个工具一起消失 → 升到 v1.2.0 |
 | ≥ 0.1.7-rc.1 | v1.1.0 | 交付形态对，但开场门禁的来源用了退场的 `{kind:'plugin'}` 包装：**每个新会话的首条消息都会整轮失败**（`format v4 message requires a producer-owned source kind`）→ 升到 v1.1.1 |
@@ -70,7 +70,7 @@ Copy-Item presets/study/assets/笔记期望.md "D:\你的vault绝对路径\笔�
 
   | DSH 侧 | 表现 |
   | :-- | :-- |
-  | 0.2.0+ | **跳过整个 bundle 层**，启动 stderr 留一行 `dsh: skipping profile bundle "dsh-study-buddy": Plugin … is incompatible with dsh …`；`plugin_manager list_bundles` 里本包 `error.code=incompatible-version`、`rows: []` → 预设整行与 18 个工具一起消失 |
+  | 0.2.0+ | **跳过整个 bundle 层**，启动 stderr 留一行 `dsh: skipping profile bundle "dsh-study-buddy": Plugin … is incompatible with dsh …`；`plugin_manager list_bundles` 里本包 `error.code=incompatible-version`、`rows: []` → 预设整行与 19 个工具一起消失 |
   | 0.1.7 ~ 0.1.x | 同上跳过，提示直接内联写在加载期 |
 
   两种形态都**不是"插件自己报错"**，所以升级 DSH 后先跑 `pnpm run verify:contract`：
@@ -127,8 +127,9 @@ ID: 202610241430_ab12cd          # note_write 自动生成
 | 你说 | 它做 |
 | :-- | :-- |
 | 给文件路径 / "读取 X" | 只出读取报告（PDF/PPTX/DOCX 的内嵌图片自动逐张读），不自动开讲 |
-| "讲解 / 讲讲" | 一次一个原子点，每点结尾问"清晰？细化 / 跳过？" |
-| 提问 | 三明治回答：直击 ≤3 句 → 底层逻辑 → 反诘追问 |
+| "讲解 / 讲讲" | 自动判断快速或详细，讲一个完整知识单元；默认不出重复笔记预览 |
+| 提问 | 直接回答，再补机制、例子与边界；追问可选 |
+| "快速 / 详细 / 自动" | 切换本会话讲解模式；新会话恢复自动 |
 | "整理笔记 / 归档" | 十步归档：查未答追问 → 读期望 → 列目录 → **规划提案（你拍板）** → 逐块写入 → 微目录 → 覆盖度 → 更新进度 |
 | "接着讲" | 从上次断点继续（进度与记忆存在 vault 的 `.study/`） |
 | 改旧笔记 | 永远先给"旧 vs 新"对比，你确认才动；追加 / 整体替换 / 只改定位 / 挪目录 |
@@ -163,9 +164,9 @@ ID: 202610241430_ab12cd          # note_write 自动生成
 
 | 想知道 | 看这里 |
 | :-- | :-- |
-| 怎么装、怎么用、18 个工具、排障 | [用户使用指南](docs/用户使用指南.md) |
+| 怎么装、怎么用、19 个工具、排障 | [用户使用指南](docs/用户使用指南.md) |
 | 全部文档地图 +"改代码要同步哪些文档" | [docs/README.md](docs/README.md) |
-| 性能与成本（固定开销 **14.7 KB / 18 个工具**） | [用户指南 §12](docs/用户使用指南.md#12-性能与成本) |
+| 性能与成本（19 工具固定开销预算 ≤16.2 KB） | [用户指南 §12](docs/用户使用指南.md#12-性能与成本) |
 | 为什么这样设计 / 怎么实现 | [设计文档](docs/设计文档.md) · [技术文档](docs/技术文档.md) |
 | 本轮重构的来龙去脉 | [需求分析](docs/refactor/需求分析.md) → [架构选型](docs/refactor/架构选型.md) → [重构计划](docs/refactor/重构计划.md) |
 | 逐版变更 / 踩过的坑与技巧 | [更新记录](docs/更新记录.md) · [经验文档](docs/经验文档.md) |

@@ -44,7 +44,7 @@ export const HOST_CONTRACTS: readonly HostContract[] = [
     key: 'toolsRegister',
     ref: 'packages/core/tools/src/index.ts:1062',
     what: 'ctx.tools.register(def) → disposer；def 必须带 output { schema, render }',
-    breaks: 'apply() 里注册工具时同步抛错 → 整行未激活（18 个工具全没）',
+    breaks: 'apply() 里注册工具时同步抛错 → 整行未激活（19 个工具全没）',
   },
   {
     key: 'systemPromptSection',

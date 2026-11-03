@@ -15,6 +15,7 @@ import { type BlockLinks, type LinkKind } from './note.ts';
 import { type StudyConfig } from './config.ts';
 import { type HostContextLike } from './host.ts';
 import { type NoteKind } from './search.ts';
+import { type ContactKind, type StudyModeOverride } from './studyMode.ts';
 import { type VaultLayout } from './vault.ts';
 export type { ToolDef, ToolExecLike } from './tools.ts';
 export { buildToolDefs } from './tools.ts';
@@ -30,6 +31,10 @@ export declare class VaultStore {
     private sig;
     private lastScanMs;
     private lastScanCwd;
+    /** 主题足迹写入串行化：同一挂载内的并发 touch 不发生丢失更新 */
+    private learningQueue;
+    /** 会话级模式状态只在内存中；新会话天然恢复 auto */
+    private readonly modeSessions;
     /** 上一次索引/扫描跳过的项（读取失败、安全阀截断等），在工具返回文本回显（BIZ-7） */
     private skipped;
     private extraRoots;
@@ -244,6 +249,24 @@ export declare class VaultStore {
         section?: string;
         pendingQuestions?: string[];
         touchedCardIds?: string[];
+    }): Promise<string>;
+    private learningFile;
+    private modeSession;
+    private relatedModeNotes;
+    /** 旧笔记无新足迹时，以 ID 时间和文件修改时间的较新值兜底。 */
+    private latestLegacyContact;
+    private modeWindowDays;
+    private mutateLearning;
+    private modeLabel;
+    private modeReason;
+    studyMode(action: string, fields: {
+        topic?: string;
+        mode?: StudyModeOverride;
+        kind?: ContactKind;
+        relatedNotes?: string[];
+    }, session?: {
+        id?: string;
+        cwd?: string;
     }): Promise<string>;
     /** `study_memory get`：单键或全量（含进度句过期提示） */
     private memoryGet;

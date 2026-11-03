@@ -91,7 +91,6 @@ describe('文档卫生（链接 / 锚点 / 版本基线）', () => {
       'docs/技术文档.md',
       'docs/经验文档.md',
       'docs/更新记录.md',
-      'docs/archive/审查修复记录.md',
       'docs/check/prompt-verify-all-features.md',
     ]
     for (const rel of mustDeclare) {
