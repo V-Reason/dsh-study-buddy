@@ -285,7 +285,7 @@ export function planRename(input: RenamePlanInput): RenamePlan {
   if (oldBase === expected || sanitizeFilename(oldBase) === expected) {
     return { renameFile: true, oldBase, newBase, reason: '文件名与旧标题一致，同步改名为新标题' }
   }
-  return { renameFile: false, oldBase, newBase, reason: `文件名「${oldBase}」与旧标题「${input.oldTitle}」不一致（历史遗留），保留文件名，只改标题与入链` }
+  return { renameFile: false, oldBase, newBase, reason: `文件名「${oldBase}」与旧标题「${input.oldTitle}」不一致（历史遗留），保留文件名，只改标题（入链不变）` }
 }
 
 /** 渲染改名报告（工具返回用） */

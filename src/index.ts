@@ -577,74 +577,83 @@ export class VaultStore {
     if (clash && clash.id !== card.id) throw new Error(`已存在同名卡片 "${title}"（${clash.fullRel}），请换标题`)
     const plan = planRename({ fileName: card.fileName, oldTitle, newTitle: title })
     const rewritten = replaceNoteTitle(raw, title)
-    const selfRewrite = rewriteLinkLines(parseFrontmatter(rewritten).body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
-    const selfText = `${rewritten.slice(0, rewritten.length - parseFrontmatter(rewritten).body.length)}${selfRewrite.text}`
+    const rewrittenBody = parseFrontmatter(rewritten).body
+    // 入链标签由 note_link 统一用**文件名**（labelOf）：只改标题、文件名不变时，
+    // 入链必须原样保留；只有文件名实际变化才按 oldBase → newBase 改写。
+    const selfRewrite = plan.renameFile
+      ? rewriteLinkLines(rewrittenBody, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
+      : { text: rewrittenBody, changed: 0, samples: [] as string[] }
+    const selfText = `${rewritten.slice(0, rewritten.length - rewrittenBody.length)}${selfRewrite.text}`
     // 断链检测对象是**本卡改写后的正文**（BIZ-10：旧实现检测的是别人文件）
-    const broken: BrokenLinkHit[] = detectBrokenLinks(selfRewrite.text, { oldTitle, oldId: card.id ?? undefined, newTitle: title })
+    const broken: BrokenLinkHit[] = plan.renameFile
+      ? detectBrokenLinks(selfRewrite.text, { oldTitle, oldId: card.id ?? undefined, newTitle: title })
+      : []
     const changed: RenameChange[] = [{ rel: card.fullRel, kind: '本卡标题', changed: 1, samples: [`${oldTitle} → ${title}`] }]
     if (selfRewrite.changed > 0) {
       changed.push({ rel: card.fullRel, kind: '本卡关联卡片', changed: selfRewrite.changed, samples: selfRewrite.samples })
     }
     const writes: Array<{ path: string; text: string }> = []
-    const needles = [oldTitle, plan.oldBase, card.id].filter(Boolean) as string[]
-    for (const other of index.all()) {
-      if (canonicalRootKey(other.path) === canonicalRootKey(card.path)) continue
-      // 预筛说明：A4 之后索引不再持有正文，无法再用"正文不含待改字面量就跳过"。
-      // 改为**不预筛**（索引里仍有的元数据不足以判断 wikilink 的目标名）——改名的
-      // 正确性优先于省几次读盘，且只有真的改动了（freshChanged > 0）才会进写入计划。
-      let otherBody = ''
-      try {
-        otherBody = parseFrontmatter(await fsp.readFile(other.path, 'utf8')).body
-      } catch (error) {
-        this.skipped.push({ path: other.path, reason: `文件读取失败（${(error as NodeJS.ErrnoException).code ?? '未知错误'}）` })
-        continue
+    if (plan.renameFile) {
+      const needles = [oldTitle, plan.oldBase, card.id].filter(Boolean) as string[]
+      for (const other of index.all()) {
+        if (canonicalRootKey(other.path) === canonicalRootKey(card.path)) continue
+        // 预筛说明：A4 之后索引不再持有正文，无法再用"正文不含待改字面量就跳过"。
+        // 改为**不预筛**（索引里仍有的元数据不足以判断 wikilink 的目标名）——改名的
+        // 正确性优先于省几次读盘，且只有真的改动了（freshChanged > 0）才会进写入计划。
+        let otherBody = ''
+        try {
+          otherBody = parseFrontmatter(await fsp.readFile(other.path, 'utf8')).body
+        } catch (error) {
+          this.skipped.push({ path: other.path, reason: `文件读取失败（${(error as NodeJS.ErrnoException).code ?? '未知错误'}）` })
+          continue
+        }
+        void needles
+        const linkRewrite = rewriteLinkLines(otherBody, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
+        let nextBody = linkRewrite.text
+        let changedCount = linkRewrite.changed
+        const samples = [...linkRewrite.samples]
+        if (other.id !== null) {
+          const wiki = rewriteWikilinks(nextBody, plan.oldBase, plan.newBase)
+          nextBody = wiki.text
+          changedCount += wiki.changed
+          samples.push(...wiki.samples)
+        }
+        // 断链检测对该文件**总是**执行（BIZ-10）：裸标题入链不会被 rewriteCardLinks 改写，
+        // 但正是"改名后仍指向旧标题"的断链，必须在报告里出现
+        const brokenHere = detectBrokenLinks(nextBody, { oldTitle, oldId: card.id ?? undefined, newTitle: title, checkFormat: false })
+        if (!other.writable) {
+          // 只读根：报告但不读盘、不写入（EXT-5 / PERF-5）
+          if (changedCount > 0) changed.push({ rel: other.fullRel, kind: `只读根(${other.root}) 未写入`, changed: changedCount, samples })
+          broken.push(...brokenHere)
+          continue
+        }
+        // 读盘兜底：索引正文可能落后于磁盘，写入前重算一次
+        let content = ''
+        try {
+          content = await fsp.readFile(other.path, 'utf8')
+        } catch (error) {
+          // 必须 push（而不是替换）：跳过清单属于上面那次 ensureIndex 产出的索引代，
+          // 这里是"同一代索引里又一次读盘失败"，清空会丢掉扫描阶段已上报的跳过项（BIZ-7）
+          this.skipped.push({ path: other.path, reason: `文件读取失败（${(error as NodeJS.ErrnoException).code ?? '未知错误'}）` })
+          continue
+        }
+        const parsed = parseFrontmatter(content)
+        const fresh = rewriteLinkLines(parsed.body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
+        let freshBody = fresh.text
+        let freshChanged = fresh.changed
+        const freshSamples = [...fresh.samples]
+        if (other.id !== null) {
+          const wiki = rewriteWikilinks(freshBody, plan.oldBase, plan.newBase)
+          freshBody = wiki.text
+          freshChanged += wiki.changed
+          freshSamples.push(...wiki.samples)
+        }
+        broken.push(...detectBrokenLinks(freshBody, { oldTitle, oldId: card.id ?? undefined, newTitle: title, checkFormat: false }))
+        if (freshChanged === 0) continue
+        const fileHead = content.slice(0, content.length - parsed.body.length)
+        writes.push({ path: other.path, text: `${fileHead}${freshBody}` })
+        changed.push({ rel: other.fullRel, kind: other.id !== null ? '笔记入链' : '旧笔记入链', changed: freshChanged, samples: freshSamples })
       }
-      void needles
-      const linkRewrite = rewriteLinkLines(otherBody, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
-      let nextBody = linkRewrite.text
-      let changedCount = linkRewrite.changed
-      const samples = [...linkRewrite.samples]
-      if (other.id !== null) {
-        const wiki = rewriteWikilinks(nextBody, plan.oldBase, plan.newBase)
-        nextBody = wiki.text
-        changedCount += wiki.changed
-        samples.push(...wiki.samples)
-      }
-      // 断链检测对该文件**总是**执行（BIZ-10）：裸标题入链不会被 rewriteCardLinks 改写，
-      // 但正是"改名后仍指向旧标题"的断链，必须在报告里出现
-      const brokenHere = detectBrokenLinks(nextBody, { oldTitle, oldId: card.id ?? undefined, newTitle: title, checkFormat: false })
-      if (!other.writable) {
-        // 只读根：报告但不读盘、不写入（EXT-5 / PERF-5）
-        if (changedCount > 0) changed.push({ rel: other.fullRel, kind: `只读根(${other.root}) 未写入`, changed: changedCount, samples })
-        broken.push(...brokenHere)
-        continue
-      }
-      // 读盘兜底：索引正文可能落后于磁盘，写入前重算一次
-      let content = ''
-      try {
-        content = await fsp.readFile(other.path, 'utf8')
-      } catch (error) {
-        // 必须 push（而不是替换）：跳过清单属于上面那次 ensureIndex 产出的索引代，
-        // 这里是"同一代索引里又一次读盘失败"，清空会丢掉扫描阶段已上报的跳过项（BIZ-7）
-        this.skipped.push({ path: other.path, reason: `文件读取失败（${(error as NodeJS.ErrnoException).code ?? '未知错误'}）` })
-        continue
-      }
-      const parsed = parseFrontmatter(content)
-      const fresh = rewriteLinkLines(parsed.body, { oldTitle, newTitle: title, targetId: card.id ?? undefined })
-      let freshBody = fresh.text
-      let freshChanged = fresh.changed
-      const freshSamples = [...fresh.samples]
-      if (other.id !== null) {
-        const wiki = rewriteWikilinks(freshBody, plan.oldBase, plan.newBase)
-        freshBody = wiki.text
-        freshChanged += wiki.changed
-        freshSamples.push(...wiki.samples)
-      }
-      broken.push(...detectBrokenLinks(freshBody, { oldTitle, oldId: card.id ?? undefined, newTitle: title, checkFormat: false }))
-      if (freshChanged === 0) continue
-      const fileHead = content.slice(0, content.length - parsed.body.length)
-      writes.push({ path: other.path, text: `${fileHead}${freshBody}` })
-      changed.push({ rel: other.fullRel, kind: other.id !== null ? '笔记入链' : '旧笔记入链', changed: freshChanged, samples: freshSamples })
     }
     // ── 全部冲突校验前置（BIZ-2）：任何写入之前完成 ──
     let targetPath: string | null = null

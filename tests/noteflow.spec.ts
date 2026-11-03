@@ -63,8 +63,12 @@ async function exists(rel: string): Promise<boolean> {
  * 于是"用户点不出一个已确认的规划"与 `pnpm run check` 全绿同时成立
  * （2026-09-15 真机检查报告的 P0）。现在确认只经 `note_plan(action=confirm)`。
  */
-async function planAndConfirm(s: VaultStore): Promise<string> {
-  const proposal = await s.notePlan({ rootPath: ROOT, items: ITEMS, material: '《计算方法》' })
+async function planAndConfirm(
+  s: VaultStore,
+  items: Array<{ title: string; path: string; sourceSection?: string; order?: number }> = ITEMS,
+  rootPath = ROOT,
+): Promise<string> {
+  const proposal = await s.notePlan({ rootPath, items, material: '《计算方法》' })
   const planId = /planId：(\d{11,12}_[0-9a-f]{6})/.exec(proposal)?.[1] as string
   await s.notePlan({ action: 'confirm', rootPath: planId })
   return planId
@@ -456,6 +460,57 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     const removed = await s.noteLink('高斯消元法', '列主元消元', 'next', true)
     expect(removed).toContain('已移除关联')
     expect(await readFile(join(dir, ITEMS[0].path), 'utf8')).not.toContain('列主元消元')
+  })
+
+  test('BUG-005 标题≠文件名时 rename 不改入链，note_unlink 可删除', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const items = [
+      { title: '链路验证：甲', path: `${ROOT}/链路验证-甲.md` },
+      { title: '链路验证：乙', path: `${ROOT}/链路验证-乙.md` },
+    ]
+    const planId = await planAndConfirm(s, items)
+    await s.noteWrite({ planId, title: items[0].title, path: items[0].path, source: '验证', content: '> 甲\n\n正文。' })
+    await s.noteWrite({ planId, title: items[1].title, path: items[1].path, source: '验证', content: '> 乙\n\n正文。' })
+    await s.noteLink(items[1].title, items[0].title, 'next')
+    const fromFile = join(dir, items[1].path)
+    const toFile = join(dir, items[0].path)
+    expect(await readFile(fromFile, 'utf8')).toContain('- 后续：[[链路验证-甲]]')
+
+    const out = await s.rename(items[0].title, '链路验证：甲（改名）')
+    expect(out).toContain('文件名：不变')
+    expect(await readFile(toFile, 'utf8')).toContain('标题: 链路验证：甲（改名）')
+    const linked = await readFile(fromFile, 'utf8')
+    expect(linked).toContain('- 后续：[[链路验证-甲]]')
+    expect(linked).not.toContain('[[链路验证 甲（改名）]]')
+    expect(linked).not.toContain('[[链路验证：甲（改名）]]')
+
+    expect(await s.noteLink('链路验证：甲（改名）', '链路验证：乙', 'next', true)).toContain('已移除关联')
+    expect(await readFile(fromFile, 'utf8')).not.toContain('链路验证-甲')
+    expect(await readFile(toFile, 'utf8')).not.toContain('链路验证-乙')
+  })
+
+  test('BUG-005 标题=文件名时 rename 同步文件名与入链', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const items = [
+      { title: '链路验证-丙', path: `${ROOT}/链路验证-丙.md` },
+      { title: '链路验证-丁', path: `${ROOT}/链路验证-丁.md` },
+    ]
+    const planId = await planAndConfirm(s, items)
+    await s.noteWrite({ planId, title: items[0].title, path: items[0].path, source: '验证', content: '> 丙\n\n正文。' })
+    await s.noteWrite({ planId, title: items[1].title, path: items[1].path, source: '验证', content: '> 丁\n\n正文。' })
+    await s.noteLink(items[1].title, items[0].title, 'next')
+
+    const out = await s.rename(items[0].title, '链路验证-戊')
+    expect(out).toContain('链路验证-丙.md → 链路验证-戊.md')
+    expect(await exists(items[0].path)).toBe(false)
+    expect(await exists(`${ROOT}/链路验证-戊.md`)).toBe(true)
+    const linked = await readFile(join(dir, items[1].path), 'utf8')
+    expect(linked).toContain('- 后续：[[链路验证-戊]]')
+    expect(linked).not.toContain('[[链路验证-丙]]')
+    expect(await s.noteLink('链路验证-戊', items[1].title, 'next', true)).toContain('已移除关联')
+    expect(await readFile(join(dir, items[1].path), 'utf8')).not.toContain('链路验证-戊')
   })
 
   test('note_lint：会话残留与期望检查项都能报出（无分值）', async () => {
