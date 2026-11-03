@@ -20,14 +20,14 @@ afterEach(async () => {
 })
 
 /**
- * 工具名集合（阶段 4b 定稿）：18 个——`note_*` 16 个 + `study_*` 2 个。
- * 一个工具一个动词，工具数取需求方定稿区间（16~18）的上限。
+ * 工具名集合：19 个——`note_*` 16 个 + `study_*` 3 个。
+ * study_mode 负责自适应讲解与主题接触足迹。
  */
 const NOTE_TOOLS = [
   'note_library', 'note_expect_get', 'note_list', 'note_get', 'note_search', 'note_overview',
   'note_plan', 'note_write', 'note_update', 'note_toc', 'note_link', 'note_unlink',
   'note_rename', 'note_history', 'note_restore', 'note_lint',
-  'study_progress', 'study_memory',
+  'study_progress', 'study_memory', 'study_mode',
 ]
 
 interface FakeCtx {
@@ -64,7 +64,7 @@ function fakeCtx(register?: (def: { name: string }) => () => void): FakeCtx {
 }
 
 describe('apply（fail-loud 与 vaultRoot==cwd 回归）', () => {
-  test('vaultRoot 等于工作目录时注册全部 18 个工具（launcher 以 vault 为 cwd 的部署回归）', () => {
+  test('vaultRoot 等于工作目录时注册全部 19 个工具（launcher 以 vault 为 cwd 的部署回归）', () => {
     const prev = process.cwd()
     try {
       process.chdir(dir)
@@ -98,7 +98,7 @@ describe('apply（fail-loud 与 vaultRoot==cwd 回归）', () => {
    * 包内零绝对路径的部署形态：机器相关路径由环境变量 / 用户级 JSON 给，
    * 预设声明里只有机器无关的默认值（DSH 0.1.7 起声明随包发布，不能带作者本机路径）。
    */
-  test('环境变量 DSH_STUDY_VAULT 顶替行 config，apply 照常注册 18 个工具', () => {
+  test('环境变量 DSH_STUDY_VAULT 顶替行 config，apply 照常注册 19 个工具', () => {
     const fake = fakeCtx()
     vi.stubEnv('DSH_STUDY_VAULT', dir)
     expect(() => apply(fake.ctx, undefined)).not.toThrow()
@@ -321,7 +321,7 @@ describe('apply（配置键漂移告警，fail-quiet 而不 fail-loud）', () =>
     vi.restoreAllMocks()
   })
 
-  test('含已退场键时：工具照常注册 18 个，并点名该键', () => {
+  test('含已退场键时：工具照常注册 19 个，并点名该键', () => {
     const seen = errorSpy()
     const fake = fakeCtx()
     expect(() => apply(fake.ctx, { vaultRoot: dir, mocDir: '目录' } as never)).not.toThrow()

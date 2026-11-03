@@ -78,6 +78,12 @@ export const HOST_CONTRACTS: readonly HostContract[] = [
     what: 'payload.agent.session.header.cwd → string | undefined',
     breaks: 'includeSessionCwd 失效：会话工作目录的旧笔记不进检索',
   },
+  {
+    key: 'sessionHeaderId',
+    ref: 'packages/core/agent/src/runtime-types.ts:168',
+    what: 'payload.agent.session.header.id → SessionId | string | undefined',
+    breaks: 'study_mode 无法区分并发会话；退回 cwd 兜底后，同目录两个会话会共享手动模式',
+  },
 ]
 
 /** 预步监听器形状（`agent/pre-step` 是 waterfall：拿到下游决策后可改写） */
@@ -97,7 +103,7 @@ export interface HostContextLike {
 
 /** 工具执行的宿主上下文（`execute(args, exec)` 的第二个参数） */
 export interface ToolExecLike {
-  agent?: { session?: { header?: { cwd?: string } } }
+  agent?: { session?: { header?: { id?: string; cwd?: string } } }
 }
 
 /** 会话形状：新平台 `snapshotEvents()`、旧平台 `events` 数组（两者都在探测范围内） */
@@ -188,6 +194,15 @@ export function resolveHost(ctx: HostContextLike | undefined): HostCapabilities 
 export function sessionCwdOf(exec?: ToolExecLike): string | undefined {
   const cwd = exec?.agent?.session?.header?.cwd
   return cwd && String(cwd).trim() ? String(cwd) : undefined
+}
+
+/**
+ * 调用方会话 ID（`study_mode` 的会话级覆盖键）。
+ * 宿主版本若缺 ID，调用方仍需退到 cwd，保证核心功能可用。
+ */
+export function sessionIdOf(exec?: ToolExecLike): string | undefined {
+  const id = exec?.agent?.session?.header?.id
+  return id && String(id).trim() ? String(id) : undefined
 }
 
 /**

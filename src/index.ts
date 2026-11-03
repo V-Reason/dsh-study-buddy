@@ -49,6 +49,13 @@ import { indexNote, SearchIndex, snippetOf, type IndexedCard, type NoteKind, typ
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
 import { buildToolDefs } from './tools.ts'
 import {
+  normalizeTopicKey, readLearningState, touchLearningState, writeLearningState, type LearningState,
+} from './learningState.ts'
+import {
+  DEFAULT_MODE_WINDOW_DAYS, normalizeStudyMode, parseModeWindowDays, resolveStudyMode,
+  type ContactKind, type ModeDecision, type StudyMode, type StudyModeOverride,
+} from './studyMode.ts'
+import {
   atomicWrite, canonicalRootKey, dedupeFiles, dedupeRoots, ensureDir, isFsRoot, MAX_WALK_FILES,
   readNoteSource, resolveSearchRoots, skipSetFor, walkRoots, withinRoot,
   type SearchRoot, type VaultLayout,
@@ -67,6 +74,7 @@ export const inject = ['tools']
 /** 进度队列长度上限（BIZ-11f：无上限会长成 progress.json 里的巨型数组） */
 const MAX_PROGRESS_ITEMS = 50
 const MAX_PROGRESS_ITEM_CHARS = 200
+const MAX_MODE_SESSIONS = 256
 
 /** 引用解析：按路径/文件名取唯一候选；多个候选报歧义（提示根限定路径） */
 function byUniqueRef(index: SearchIndex, ref: string): IndexedCard | undefined {
@@ -180,6 +188,15 @@ export class VaultStore {
   private sig: string | null = null
   private lastScanMs = 0
   private lastScanCwd = ''
+  /** 主题足迹写入串行化：同一挂载内的并发 touch 不发生丢失更新 */
+  private learningQueue: Promise<void> = Promise.resolve()
+  /** 会话级模式状态只在内存中；新会话天然恢复 auto */
+  private readonly modeSessions = new Map<string, {
+    override: StudyModeOverride
+    lastTopic?: string
+    lastMode?: StudyMode
+    lastReason?: ModeDecision['reason']
+  }>()
   /** 上一次索引/扫描跳过的项（读取失败、安全阀截断等），在工具返回文本回显（BIZ-7） */
   private skipped: Array<{ path: string; reason: string }> = []
   private extraRoots: SearchRoot[] = []
@@ -1256,6 +1273,185 @@ export class VaultStore {
     }
     await writeProgress(file, next)
     return fmtProgress(next)
+  }
+
+  private learningFile(): string {
+    const p = join(this.layout.vaultRoot, this.layout.stateDir, 'learning.json')
+    if (!withinRoot(this.layout.vaultRoot, p)) throw new Error('学习足迹文件路径越界')
+    return p
+  }
+
+  private modeSession(session?: { id?: string; cwd?: string }): {
+    override: StudyModeOverride
+    lastTopic?: string
+    lastMode?: StudyMode
+    lastReason?: ModeDecision['reason']
+  } {
+    const key = String(session?.id ?? '').trim() || String(session?.cwd ?? '').trim() || 'default'
+    const existing = this.modeSessions.get(key)
+    if (existing) return existing
+    if (this.modeSessions.size >= MAX_MODE_SESSIONS) {
+      const oldest = this.modeSessions.keys().next().value
+      if (oldest !== undefined) this.modeSessions.delete(oldest)
+    }
+    const created = { override: 'auto' as StudyModeOverride }
+    this.modeSessions.set(key, created)
+    return created
+  }
+
+  private async relatedModeNotes(refs: string[] | undefined, sessionCwd?: string): Promise<IndexedCard[]> {
+    const wanted = [...new Set((refs ?? []).map((ref) => String(ref).trim()).filter(Boolean))]
+    if (wanted.length === 0) return []
+    const index = await this.ensureIndex(sessionCwd)
+    const cards: IndexedCard[] = []
+    for (const ref of wanted) {
+      const card = index.byId(ref) ?? index.byTitle(ref) ?? byUniqueRef(index, ref)
+      if (!card) throw new Error(`study_mode 找不到相关笔记 "${ref}"（请先 note_search，再传确认相关的结果）`)
+      cards.push(card)
+    }
+    return cards
+  }
+
+  /** 旧笔记无新足迹时，以 ID 时间和文件修改时间的较新值兜底。 */
+  private async latestLegacyContact(cards: IndexedCard[]): Promise<string | undefined> {
+    let latest = 0
+    for (const card of cards) {
+      const match = card.id ? /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})_/.exec(card.id) : null
+      if (match) {
+        const fromId = new Date(
+          Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5]),
+        ).getTime()
+        if (Number.isFinite(fromId)) latest = Math.max(latest, fromId)
+      }
+      try {
+        latest = Math.max(latest, (await fsp.stat(card.path)).mtimeMs)
+      } catch {
+        // 索引中的文件可能在扫描后被删；其余证据仍可用于保守判断。
+      }
+    }
+    return latest > 0 ? new Date(latest).toISOString() : undefined
+  }
+
+  private async modeWindowDays(): Promise<number> {
+    try {
+      return parseModeWindowDays(await fsp.readFile(this.expectPath(), 'utf8'))
+    } catch {
+      return DEFAULT_MODE_WINDOW_DAYS
+    }
+  }
+
+  private async mutateLearning<T>(operation: (state: LearningState) => Promise<T>): Promise<T> {
+    const run = this.learningQueue.then(async () => {
+      const state = await readLearningState(this.learningFile())
+      return operation(state)
+    })
+    this.learningQueue = run.then(() => undefined, () => undefined)
+    return run
+  }
+
+  private modeLabel(mode: StudyMode): string {
+    return mode === 'quick' ? '快速' : '详细'
+  }
+
+  private modeReason(reason: ModeDecision['reason'], ageDays: number | null, windowDays: number): string {
+    if (reason === 'override') return '用户指定'
+    if (reason === 'no-note') return '笔记库无相关主题'
+    if (reason === 'no-contact') return '没有实质学习记录'
+    if (reason === 'recent') return `最近 ${ageDays ?? 0} 天学习过`
+    return `已超过 ${windowDays} 天未学习（最近 ${ageDays ?? '?'} 天前）`
+  }
+
+  async studyMode(action: string, fields: {
+    topic?: string
+    mode?: StudyModeOverride
+    kind?: ContactKind
+    relatedNotes?: string[]
+  }, session?: { id?: string; cwd?: string }): Promise<string> {
+    if (!['resolve', 'touch', 'set', 'status'].includes(action)) {
+      throw new Error(`study_mode 未知 action "${action}"（可用 resolve/touch/set/status）`)
+    }
+    await this.assertVault()
+    const state = this.modeSession(session)
+
+    if (action === 'set') {
+      const raw = String(fields.mode ?? '')
+      if (raw !== 'auto' && raw !== 'quick' && raw !== 'full') {
+        throw new Error(`study_mode set 需要 mode=auto/quick/full（收到 "${raw}"）`)
+      }
+      state.override = raw
+      if (raw === 'auto') {
+        return '已切换当前会话模式：自动（下个知识主题按笔记与接触足迹判断）。'
+      }
+      return `已切换当前会话模式：${this.modeLabel(raw)}（本会话持续生效；新会话恢复自动）。`
+    }
+
+    if (action === 'status') {
+      const current = state.override === 'auto'
+        ? '当前会话：自动'
+        : `当前会话：${this.modeLabel(state.override)}（用户指定）`
+      const lines = [current]
+      if (state.lastTopic && state.lastMode) {
+        lines.push(`最近判断：${this.modeLabel(state.lastMode)}（${state.lastReason ?? '已记录'}）`)
+        lines.push(`最近主题：${state.lastTopic}`)
+      } else {
+        lines.push('最近判断：尚未解析知识主题')
+      }
+      const topic = String(fields.topic ?? '').trim()
+      if (topic) lines.push('', await this.studyMode('resolve', { ...fields, topic }, session))
+      return lines.join('\n')
+    }
+
+    const topic = String(fields.topic ?? '').trim()
+    if (!topic) throw new Error(`study_mode ${action} 需要 topic（当前知识主题）`)
+    normalizeTopicKey(topic)
+
+    if (action === 'touch') {
+      const mode = normalizeStudyMode(fields.mode)
+      if (mode === 'auto') throw new Error('study_mode touch 需要 mode=quick/full')
+      if (!fields.kind || !['lecture', 'qa', 'note-read', 'note-write', 'review'].includes(fields.kind)) {
+        throw new Error('study_mode touch 需要 kind=lecture/qa/note-read/note-write/review')
+      }
+      await this.mutateLearning(async (learning) => {
+        const next = touchLearningState(learning, {
+          topic,
+          kind: fields.kind!,
+          mode,
+          relatedNotes: fields.relatedNotes,
+        })
+        await writeLearningState(this.learningFile(), next)
+        return undefined
+      })
+      state.lastTopic = topic
+      state.lastMode = mode
+      state.lastReason = 'recent'
+      const key = normalizeTopicKey(topic)
+      return `已记录接触：${topic}（${fields.kind}，${this.modeLabel(mode)}；主题键 ${key}）。`
+    }
+
+    await this.learningQueue
+    const related = await this.relatedModeNotes(fields.relatedNotes, session?.cwd)
+    const learning = await readLearningState(this.learningFile())
+    const footprint = learning.topics[normalizeTopicKey(topic)]
+    const lastContactAt = footprint?.lastContactAt ?? await this.latestLegacyContact(related)
+    const windowDays = await this.modeWindowDays()
+    const decision = resolveStudyMode({
+      override: state.override,
+      hasRelatedNote: related.length > 0,
+      lastContactAt,
+      windowDays,
+    })
+    const changed = state.lastMode !== decision.mode
+    state.lastTopic = topic
+    state.lastMode = decision.mode
+    state.lastReason = decision.reason
+    const lines = [
+      `模式：${this.modeLabel(decision.mode)}`,
+      `依据：${this.modeReason(decision.reason, decision.ageDays, windowDays)}`,
+      `复习窗口：${windowDays} 天`,
+    ]
+    if (lastContactAt) lines.push(`上次接触：${lastContactAt}`)
+    lines.push(`变化：${changed ? '是' : '否'}`)
+    return lines.join('\n')
   }
 
   /** `study_memory get`：单键或全量（含进度句过期提示） */

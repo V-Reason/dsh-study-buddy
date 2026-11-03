@@ -13,7 +13,7 @@ const store = new VaultStore({
 })
 
 /**
- * 阶段 4b：18 个工具的名字集合与 schema 契约。
+ * 工具面：19 个工具的名字集合与 schema 契约。
  *
  * 这一层是"文档化契约"的守卫：工具描述本身就是提示词资产，schema 漂移
  * （少一个必填项、枚举写错、描述与注册表脱节）在运行期没有任何信号。
@@ -22,7 +22,7 @@ const TOOL_NAMES = [
   'note_library', 'note_expect_get', 'note_list', 'note_get', 'note_search', 'note_overview',
   'note_plan', 'note_write', 'note_update', 'note_toc', 'note_link', 'note_unlink',
   'note_rename', 'note_history', 'note_restore', 'note_lint',
-  'study_progress', 'study_memory',
+  'study_progress', 'study_memory', 'study_mode',
 ]
 
 function defOf(name: string) {
@@ -31,10 +31,10 @@ function defOf(name: string) {
   return def
 }
 
-describe('buildToolDefs（18 个工具的 schema 契约）', () => {
-  test('注册 18 个工具，名字集合正确，card_* 整族退场', () => {
+describe('buildToolDefs（19 个工具的 schema 契约）', () => {
+  test('注册 19 个工具，名字集合正确，card_* 整族退场', () => {
     const names = buildToolDefs(store).map((d) => d.name)
-    expect(names).toHaveLength(18)
+    expect(names).toHaveLength(19)
     expect(names.sort()).toEqual([...TOOL_NAMES].sort())
     for (const gone of ['card_search', 'card_create', 'card_update', 'card_link', 'card_moc', 'card_id', 'card_history', 'card_rename', 'card_lint', 'card_get']) {
       expect(names, `${gone} 应已退场（需求 R18）`).not.toContain(gone)
@@ -51,7 +51,7 @@ describe('buildToolDefs（18 个工具的 schema 契约）', () => {
 
   test('只读工具声明 isConcurrencySafe，写入工具不声明（避免并发写同一库）', () => {
     const readOnly = ['note_library', 'note_expect_get', 'note_list', 'note_get', 'note_search', 'note_overview', 'note_plan', 'note_history', 'note_lint']
-    const write = ['note_write', 'note_update', 'note_toc', 'note_link', 'note_unlink', 'note_rename', 'note_restore', 'study_progress', 'study_memory']
+    const write = ['note_write', 'note_update', 'note_toc', 'note_link', 'note_unlink', 'note_rename', 'note_restore', 'study_progress', 'study_memory', 'study_mode']
     for (const name of readOnly) expect(defOf(name).isConcurrencySafe?.(), name).toBe(true)
     for (const name of write) expect(defOf(name).isConcurrencySafe, name).toBeUndefined()
   })
@@ -147,6 +147,62 @@ describe('buildToolDefs（18 个工具的 schema 契约）', () => {
     // touchedIds 是笔记语义下的参数名（旧名 touchedCardIds）
     const props = defOf('study_progress').parameters.properties as Record<string, unknown>
     expect(props.touchedIds).toBeTruthy()
+  })
+
+  test('study_mode：四动作、枚举与保守回退描述完整', () => {
+    const def = defOf('study_mode')
+    expect(def.parameters.required).toEqual(['action'])
+    const props = def.parameters.properties as Record<string, {
+      enum?: string[]
+      items?: { type?: string }
+      description?: string
+    }>
+    expect(props.action.enum).toEqual(['resolve', 'touch', 'set', 'status'])
+    expect(props.mode.enum).toEqual(['auto', 'quick', 'full'])
+    expect(props.kind.enum).toEqual(['lecture', 'qa', 'note-read', 'note-write', 'review'])
+    expect(props.relatedNotes.items?.type).toBe('string')
+    expect(def.description).toContain('note_search')
+    expect(def.description).toContain('30 天')
+    expect(def.description).toContain('不确定')
+    expect(def.description).toContain('只影响讲解和答疑')
+    expect(defOf('study_mode').isConcurrencySafe).toBeUndefined()
+  })
+
+  test('study_mode：模式覆盖按会话隔离，足迹驱动自动判断', async () => {
+    const vault = await mkdtemp(join(tmpdir(), 'study-buddy-mode-vault-'))
+    try {
+      await writeFile(join(vault, 'pbr.md'), [
+        '---',
+        'ID: 202611030900_ab12cd',
+        '标题: PBR',
+        '来源: 图形学',
+        '状态: 已确认',
+        '来源章节: 《图形学》第1章 / 1.1节',
+        '简介: 基于物理的渲染。',
+        '---',
+        '',
+        '# PBR',
+      ].join('\n'), 'utf8')
+      const local = new VaultStore({ vaultRoot: vault, stateDir: '.study', fallbackDir: '未分类' })
+      const mode = buildToolDefs(local).find((def) => def.name === 'study_mode')!
+      const sessionA = { agent: { session: { header: { id: 'session-a', cwd: vault } } } }
+      const sessionB = { agent: { session: { header: { id: 'session-b', cwd: vault } } } }
+
+      expect(await mode.execute({ action: 'resolve', topic: 'PBR' }, sessionA)).toContain('模式：详细')
+      expect(await mode.execute({ action: 'resolve', topic: 'PBR', relatedNotes: ['pbr.md'] }, sessionA))
+        .toContain('模式：快速')
+      await mode.execute({ action: 'touch', topic: 'PBR', kind: 'lecture', mode: 'full', relatedNotes: ['pbr.md'] }, sessionA)
+      expect(await mode.execute({ action: 'resolve', topic: 'PBR', relatedNotes: ['pbr.md'] }, sessionA))
+        .toContain('模式：快速')
+
+      await mode.execute({ action: 'set', mode: 'full' }, sessionA)
+      expect(await mode.execute({ action: 'status' }, sessionA)).toContain('当前会话：详细')
+      expect(await mode.execute({ action: 'status' }, sessionB)).toContain('当前会话：自动')
+      await mode.execute({ action: 'set', mode: 'auto' }, sessionA)
+      expect(await mode.execute({ action: 'status' }, sessionA)).toContain('当前会话：自动')
+    } finally {
+      await rm(vault, { recursive: true, force: true })
+    }
   })
 
   test('note_update / note_history 透传会话 cwd（引用解析不再"找不到笔记"）', async () => {

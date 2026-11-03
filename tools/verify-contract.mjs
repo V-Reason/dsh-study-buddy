@@ -640,7 +640,7 @@ async function probePlatform(log) {
       }
       return { note: 'Session.prototype.snapshotEvents ✓' }
     })
-    await check('Session 实例可读 header.cwd', 'sessionHeaderCwd', () => {
+    await check('Session 实例可读 header.id / header.cwd', 'sessionHeaderCwd', () => {
       // header 是构造期必填字段：用最小合法 header 真造一个 Session，
       // 验证 `payload.agent.session.header.cwd` 这条读取路径没变形状。
       const ctor = session.Session ?? session.default
@@ -653,8 +653,25 @@ async function probePlatform(log) {
         cwd: 'T:\\probe',
       })
       const cwd = instance?.header?.cwd
+      const id = instance?.header?.id
       if (cwd !== 'T:\\probe') return { ok: false, message: `session.header.cwd 读到 ${JSON.stringify(cwd)}` }
-      return { note: 'session.header.cwd ✓' }
+      if (String(id ?? '') !== String(sessionId)) return { ok: false, message: `session.header.id 读到 ${JSON.stringify(id)}` }
+      return { note: 'session.header.id / cwd ✓' }
+    })
+    await check('Session 实例 header.id 可用于会话级模式覆盖', 'sessionHeaderId', () => {
+      const ctor = session.Session ?? session.default
+      const sessionId = session.SessionId?.('contract-mode-probe') ?? 'contract-mode-probe'
+      const instance = ctor.create(sessionId, [], {
+        version: session.SESSION_FORMAT_VERSION,
+        id: sessionId,
+        createdAt: Date.now(),
+        isSeeded: false,
+        cwd: 'T:\\probe',
+      })
+      if (String(instance?.header?.id ?? '') !== String(sessionId)) {
+        return { ok: false, message: `session.header.id 读到 ${JSON.stringify(instance?.header?.id)}` }
+      }
+      return { note: 'session.header.id ✓' }
     })
   }
 
@@ -763,9 +780,9 @@ export async function runChecks(
 
   await check('宿主契约表完整（每个点都有 ref/what/breaks，供失败回显）', 'hostContracts', () => {
     const contracts = mod.HOST_CONTRACTS ?? []
-    if (contracts.length < 6) return { ok: false, message: `HOST_CONTRACTS 只有 ${contracts.length} 条（应覆盖 6 个接触点）` }
+    if (contracts.length < 7) return { ok: false, message: `HOST_CONTRACTS 只有 ${contracts.length} 条（应覆盖 7 个接触点）` }
     const keys = contracts.map((item) => item.key)
-    const missing = ['toolsRegister', 'systemPromptSection', 'preStep', 'messageSourceKind', 'sessionSnapshotEvents', 'sessionHeaderCwd']
+    const missing = ['toolsRegister', 'systemPromptSection', 'preStep', 'messageSourceKind', 'sessionSnapshotEvents', 'sessionHeaderCwd', 'sessionHeaderId']
       .filter((key) => !keys.includes(key))
     if (missing.length > 0) return { ok: false, message: `契约表缺 ${missing.join('、')}` }
     for (const item of contracts) {
@@ -783,9 +800,10 @@ export async function runChecks(
       'note_library', 'note_expect_get', 'note_list', 'note_get', 'note_search', 'note_overview',
       'note_plan', 'note_write', 'note_update', 'note_toc', 'note_link', 'note_unlink',
       'note_rename', 'note_history', 'note_restore', 'note_lint', 'study_progress', 'study_memory',
+      'study_mode',
     ]
 
-    log('工具面（18 个 note_* / study_*）')
+    log('工具面（19 个 note_* / study_*）')
     await check('工具数量与名字与仓库约定一致', 'toolsRegister', () => {
       const defs = mod.buildToolDefs({})
       const names = defs.map((def) => def.name)
@@ -822,7 +840,7 @@ export async function runChecks(
           return { ok: false, message: `${def.name}: render 返回 ${JSON.stringify(rendered)}（应 [{type:'text',text}]）` }
         }
       }
-      return { note: '18 个工具全部符合' }
+      return { note: '19 个工具全部符合' }
     })
 
     await check('工具定义可无损 JSON 序列化（注册表会快照参数与输出）', 'toolsRegister', () => {
@@ -833,7 +851,7 @@ export async function runChecks(
     })
 
     log('宿主接线（apply → 注册 / 系统提示段 / 预步监听）')
-    await check('apply 注册 18 个工具且 effect 卸载后全部注销', 'toolsRegister', () => {
+    await check('apply 注册 19 个工具且 effect 卸载后全部注销', 'toolsRegister', () => {
       const fake = fakeContext()
       mod.apply(fake.ctx, { vaultRoot: tempVault })
       if (fake.registered.size !== expected.length) {
@@ -841,12 +859,12 @@ export async function runChecks(
       }
       for (const callback of fake.effects) callback()()
       if (fake.registered.size !== 0) return { ok: false, message: 'effect 执行后仍有残留注册（生命周期不可逆）' }
-      return { note: '注册 18 / 注销 18' }
+      return { note: '注册 19 / 注销 19' }
     })
 
     // 负向断言（迁移指南铁律 3）：替身刻意**不提供** settings —— DSH 0.1.7-rc.1 删掉了
     // `ctx.settings.register`，任何"只有 settings 在才工作"的写法会整行未激活。
-    await check('负向：假 ctx 不给 settings（0.1.7 已删 register），apply 仍注册 18 个工具', 'toolsRegister', () => {
+    await check('负向：假 ctx 不给 settings（0.1.7 已删 register），apply 仍注册 19 个工具', 'toolsRegister', () => {
       const fake = fakeContext()
       if (typeof fake.ctx.get('settings') !== 'undefined') return { ok: false, message: '替身意外提供了 settings' }
       mod.apply(fake.ctx, { vaultRoot: tempVault })

@@ -8,6 +8,14 @@
 
 export type StudyMode = 'quick' | 'full'
 export type StudyModeOverride = StudyMode | 'auto'
+export type ContactKind = 'lecture' | 'qa' | 'note-read' | 'note-write' | 'review'
+
+export interface StudyModeArgs {
+  topic?: string
+  mode?: StudyModeOverride
+  kind?: ContactKind
+  relatedNotes?: string[]
+}
 
 export interface ModeInput {
   override?: StudyModeOverride

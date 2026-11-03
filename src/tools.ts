@@ -15,14 +15,15 @@
 
 import { VALID_STATUS, type BlockLinks } from './note.ts'
 import { RULES, ruleIds } from './lint.ts'
-import { sessionCwdOf, type ToolExecLike } from './host.ts'
+import { sessionCwdOf, sessionIdOf, type ToolExecLike } from './host.ts'
+import type { StudyModeArgs } from './studyMode.ts'
 import type { VaultStore } from './index.ts'
 
 /**
  * 宿主形状与读取函数都在 host.ts（本插件唯一的宿主接触面）；这里 re-export 是为了
  * 保持 `ToolExecLike` / `sessionCwdOf` 这两个既有公开出口不漂移（index.ts 继续转发）。
  */
-export { sessionCwdOf, type ToolExecLike }
+export { sessionCwdOf, sessionIdOf, type ToolExecLike }
 
 export interface ToolDef {
   name: string
@@ -512,6 +513,44 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         key: args.key !== undefined && args.key !== null ? String(args.key) : undefined,
         value: args.value !== undefined && args.value !== null ? String(args.value) : undefined,
       }),
+    },
+    {
+      name: 'study_mode',
+      description:
+        '自适应讲解模式：resolve 根据相关笔记与主题接触足迹选择快速/详细；'
+        + 'touch 记录实质学习接触；set 切换本会话 auto/quick/full；status 查看当前模式。'
+        + '自动模式需要相关笔记且最近 30 天内有实质接触；证据不足或主题不确定时一律详细。'
+        + '调用 resolve 前先用 note_search 找相关笔记，并只把确认相关的 ID/标题/路径放进 relatedNotes。'
+        + '模式只影响讲解和答疑，不改变正式笔记的完整性；手动覆盖只在本会话有效，新会话恢复自动。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['resolve', 'touch', 'set', 'status'], description: '模式判断/记录/切换/查看' },
+          topic: { type: 'string', description: '当前知识主题（resolve/touch 必填）' },
+          mode: { type: 'string', enum: ['auto', 'quick', 'full'], description: 'set 必填；touch 只接受 quick/full' },
+          kind: {
+            type: 'string',
+            enum: ['lecture', 'qa', 'note-read', 'note-write', 'review'],
+            description: 'touch 的实质接触类型；搜索、列目录、读元数据不算',
+          },
+          relatedNotes: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '经 note_search 确认为相关的笔记 ID、标题或路径',
+          },
+        },
+        required: ['action'],
+      },
+      output,
+      execute: (args, exec) => store.studyMode(String(args.action ?? 'status'), {
+        topic: args.topic ? String(args.topic) : undefined,
+        mode: args.mode === 'auto' || args.mode === 'quick' || args.mode === 'full' ? args.mode : undefined,
+        kind: args.kind === 'lecture' || args.kind === 'qa' || args.kind === 'note-read'
+          || args.kind === 'note-write' || args.kind === 'review'
+          ? args.kind
+          : undefined,
+        relatedNotes: stringList(args.relatedNotes),
+      } satisfies StudyModeArgs, { id: sessionIdOf(exec), cwd: sessionCwdOf(exec) }),
     },
   ]
 }

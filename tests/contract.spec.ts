@@ -23,6 +23,7 @@ const TOOLS = [
   'note_library', 'note_expect_get', 'note_list', 'note_get', 'note_search', 'note_overview',
   'note_plan', 'note_write', 'note_update', 'note_toc', 'note_link', 'note_unlink',
   'note_rename', 'note_history', 'note_restore', 'note_lint', 'study_progress', 'study_memory',
+  'study_mode',
 ] as const
 
 /** 宿主 `tools.register` 认识的字段（`ToolDefinition`，多写的字段会被静默忽略） */
@@ -112,7 +113,7 @@ describe('apply 接线契约', () => {
     }
   }
 
-  test('注册 18 个工具，effect 卸载后零残留（生命周期可逆）', () => {
+  test('注册 19 个工具，effect 卸载后零残留（生命周期可逆）', () => {
     const fake = harness()
     apply(fake.ctx as never, { vaultRoot: vault })
     expect([...fake.registered.keys()].sort()).toEqual([...TOOLS].sort())
