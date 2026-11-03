@@ -11,6 +11,10 @@ description: 文档式笔记规范（2026-10 重构）：块的定义与拆分�
 
 正式笔记不受对话的快速/详细模式影响。对话模式只决定本轮讲解深度，笔记始终要完整、可独立阅读。
 
+## 可发现性维护
+
+用户明确说“笔记体检”时调用 `note_library(action=audit, path=…)`；全库必须由用户明确同意后传 `path='.'`。修复前列出目标文件与字段，确认后只改元数据、微目录和明确 wikilink。元数据修复使用 `note_update(action=metadata)`，正文逐字不变。
+
 **三条硬门禁（工具会拒绝，别试探）**
 
 1. **未读期望不写**：归档前必须 `note_expect_get`；用户中途改了期望 → 签名变化 → 必须重读。
@@ -67,6 +71,7 @@ description: 文档式笔记规范（2026-10 重构）：块的定义与拆分�
 | 推翻 / 大改 | `note_update(replace)` | **旧正文先存入 `.study/archive/`**，正文只留新版 |
 | 只改一句话定位 | `note_update(definition)` | 字段级微调，不算知识更新 |
 | 挪目录 | `note_update(move)` | 迁到 targetPath（同改名要重跑 `note_toc`） |
+| 只修元数据 | `note_update(metadata)` | 只改来源章节/状态；正文逐字不变，原文先存档 |
 | 回退 | `note_history(list/read)` → `note_restore` | 恢复前当前版本也会先存档，可来回 |
 
 **决定权在用户**：先说清"旧 vs 新"，用户确认后再动手。

@@ -121,6 +121,29 @@ describe('study preset skills', () => {
     expect(body).toContain('study_mode')
   })
 
+  test('计划入口、模式隐身与不打扰开场', () => {
+    const loop = listSkills().find(({ dir }) => dir === 'study-loop')!.skill.body
+    const style = listSkills().find(({ dir }) => dir === 'output-style')!.skill.body
+    expect(loop).toContain('study_progress(action=brief)')
+    expect(loop).toContain('静默读取')
+    expect(loop).toContain('完整知识单元结束后')
+    expect(loop).toContain('不主动询问是否继续')
+    expect(style).toContain('默认不展示模式标签')
+    expect(style).toContain('不做主动复习提醒')
+    expect(loop).not.toContain('首行提示断点')
+    expect(loop).not.toContain('问是否接着讲')
+  })
+
+  test('笔记体检只在明确请求时执行，并锁定正文不变', () => {
+    const loop = listSkills().find(({ dir }) => dir === 'study-loop')!.skill.body
+    const format = listSkills().find(({ dir }) => dir === 'note-format')!.skill.body
+    expect(loop).toContain('笔记体检')
+    expect(format).toContain('note_library(action=audit')
+    expect(format).toContain("path='.'")
+    expect(format).toContain('确认后只改元数据')
+    expect(format).toContain('正文逐字不变')
+  })
+
   test('讲解技能不再强制固定行数、三明治或自动预览', () => {
     const body = listSkills().find(({ dir }) => dir === 'study-loop')!.skill.body
     expect(body).toContain('study_mode')
@@ -264,6 +287,11 @@ describe('study preset skills', () => {
     expect(yaml).toContain('note_plan')
     // persona 也要写明"拍板后还要 confirm"这一步，否则模型会跳过确认直接落盘
     expect(yaml).toContain('note_plan(action=confirm')
+    expect(yaml).toContain('静默读取')
+    expect(yaml).toContain('study_progress(action=brief)')
+    expect(yaml).toContain('默认不向用户展示模式标签')
+    expect(yaml).toContain('不主动提醒复习')
+    expect(yaml).not.toContain('首行一句衔接提示')
     // 整段重复自查：同一行出现两次以上即视为重复段落
     const seen = new Map<string, number>()
     for (const line of yaml.split(/\r?\n/)) {
