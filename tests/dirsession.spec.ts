@@ -1,7 +1,8 @@
+import { promises as fsp } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import {
   DirIndex, EXPECT_FILE, MAX_NEST_HINT, TOC_FILE, assertDirPath, buildDirIndex, compareOrder,
   depthOf, dirOfRel, dirPathFor, expectPathFor, isTocRel, listDir, nestHint, normRel, parentDir,
@@ -245,13 +246,32 @@ describe('store 门禁状态（.study/session.json）', () => {
     expect(state.activePlanId).toBe('plan-9')
   })
 
-  test('signatureOf 对不存在文件返回 null，三要素随内容变化', async () => {
+  test('signatureOf 对不存在文件返回 null，正文哈希随内容变化', async () => {
     const p = join(dir, 'x.md')
     expect(await signatureOf(p)).toBeNull()
     await writeFile(p, 'a', 'utf8')
     const first = await signatureOf(p)
-    expect(first).toMatch(/^\d+(\.\d+)?\|\d+(\.\d+)?\|1$/)
+    expect(first).toMatch(/^sha1:[0-9a-f]{40}$/)
     await writeFile(p, 'abc', 'utf8')
+    expect(await signatureOf(p)).not.toBe(first)
+  })
+
+  test('BUG-001 期望签名不受 ctime 刷新影响，只随正文变化', async () => {
+    const p = join(dir, 'expect.md')
+    await writeFile(p, '同一份期望正文', 'utf8')
+    const first = await signatureOf(p)
+    // 模拟权限/复制/改名只刷新 ctime：mtime 与 size 不变，旧实现会因此失效
+    const statSpy = vi.spyOn(fsp, 'stat').mockResolvedValue({
+      mtimeMs: 1,
+      ctimeMs: 2,
+      size: 1,
+    } as never)
+    try {
+      expect(await signatureOf(p)).toBe(first)
+    } finally {
+      statSpy.mockRestore()
+    }
+    await writeFile(p, '期望正文真的改了', 'utf8')
     expect(await signatureOf(p)).not.toBe(first)
   })
 

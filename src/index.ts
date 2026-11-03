@@ -838,7 +838,9 @@ export class VaultStore {
         ? `⚠ 笔记期望文件不存在：${this.expectFileName()}（应在 vault 根）——请先把 presets/study/assets/笔记期望.md 复制到 vault 根并改成你的写法，否则无法写入`
         : session.expect?.signature === signature
           ? `- 笔记期望：已读（${this.expectFileName()}）`
-          : `⚠ 笔记期望尚未读取（或已更新）：请调用 note_expect_get 读取后再写入`,
+          : session.expect
+            ? `⚠ 笔记期望已更新：请重新调用 note_expect_get 读取后再写入`
+            : `⚠ 笔记期望尚未读取：请调用 note_expect_get 读取后再写入`,
       session.activePlanId ? `- 待消费规划：${session.activePlanId}` : '- 待消费规划：无',
       this.noteSkips(),
     ]

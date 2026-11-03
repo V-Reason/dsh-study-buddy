@@ -1,11 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { VaultStore } from '../src/index.ts'
 import { parseFrontmatter } from '../src/frontmatter.ts'
 import { buildPlanRecord, isPlanExpired, planFileFor, readPlan, writePlan } from '../src/planstore.ts'
-import { readSession, sessionFileFor } from '../src/store.ts'
+import { readSession, sessionFileFor, writeSession } from '../src/store.ts'
 
 /**
  * 阶段 4b 端到端：**硬门禁在真实写入路径上的行为**。
@@ -82,6 +82,24 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     const missing = await s.noteLibrary('check')
     expect(missing).toContain('笔记期望文件不存在')
     expect(missing).toContain('复制到 vault 根')
+  })
+
+  test('BUG-001 note_library 仅元数据变化仍为已读，正文变化提示已更新', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const expectFile = join(dir, '笔记期望.md')
+    // 只改时间戳（模拟 ACL/复制/改名刷新 ctime）：正文逐字未变
+    const stamp = new Date('2020-01-02T03:04:05Z')
+    await utimes(expectFile, stamp, stamp)
+    expect(await s.noteLibrary('check')).toContain('- 笔记期望：已读')
+    // 真正改正文后才要求重读
+    await writeFile(expectFile, `${EXPECT_TEXT}\n\n## 追加条款\n多写例子。\n`, 'utf8')
+    const changed = await s.noteLibrary('check')
+    expect(changed).toContain('笔记期望已更新')
+    expect(changed).not.toContain('笔记期望尚未读取')
+    // 旧格式（三段式）签名同样不能静默放行
+    await writeSession(sessionFileFor(dir), { expect: { signature: '1|2|3', rel: '笔记期望.md' } })
+    expect(await s.noteLibrary('check')).toContain('笔记期望已更新')
   })
 
   test('硬门禁①：未读期望 → note_write 拒绝且磁盘零改动', async () => {
