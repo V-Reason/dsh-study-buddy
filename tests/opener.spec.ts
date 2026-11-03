@@ -118,7 +118,7 @@ describe('opener 开场门禁纯逻辑', () => {
     expect(MANDATE).toContain('note_expect_get')
     expect(MANDATE).toContain('静默装载')
     expect(MANDATE).toContain('普通技术问题直接回答')
-    expect(MANDATE).toContain('不主动询问是否接着讲')
+    expect(MANDATE).toContain('不主动索要继续确认')
     expect(REMINDER).toContain('study_memory(get)')
     expect(REMINDER).toContain('study_progress(get)')
     expect(REMINDER).toContain('note_expect_get')

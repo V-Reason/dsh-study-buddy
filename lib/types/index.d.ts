@@ -15,7 +15,7 @@ import { type BlockLinks, type LinkKind } from './note.ts';
 import { type StudyConfig } from './config.ts';
 import { type HostContextLike } from './host.ts';
 import { type NoteKind } from './search.ts';
-import { type ContactKind, type StudyModeOverride } from './studyMode.ts';
+import { type ContactKind, type StudyIntent, type StudyModeOverride, type StudyScope } from './studyMode.ts';
 import { type VaultLayout } from './vault.ts';
 export type { ToolDef, ToolExecLike } from './tools.ts';
 export { buildToolDefs } from './tools.ts';
@@ -148,8 +148,11 @@ export declare class VaultStore {
     private expectSignature;
     /** 组装门禁输入（三连校验共用） */
     private gateInput;
-    /** `note_library`：库状态与期望文件自检（硬门禁的第一环） */
-    noteLibrary(action: string): Promise<string>;
+    /** `note_library`：库状态自检，或按明确目录审计可发现性 */
+    noteLibrary(action: string, opts?: {
+        path?: string;
+        limit?: number;
+    }): Promise<string>;
     /** `note_expect_get`：读期望全文并**标记已读**（门禁开门动作） */
     noteExpectGet(): Promise<string>;
     /**
@@ -217,6 +220,7 @@ export declare class VaultStore {
         summary?: string;
         targetPath?: string;
         sourceSection?: string;
+        status?: string;
         dryRun?: boolean;
     }, call?: {
         sessionCwd?: string;
@@ -249,6 +253,12 @@ export declare class VaultStore {
         section?: string;
         pendingQuestions?: string[];
         touchedCardIds?: string[];
+        planRef?: string;
+        phase?: string;
+        nextAction?: string;
+        doneWhen?: string;
+        lastOutcome?: string;
+        parallelLines?: string[];
     }): Promise<string>;
     private learningFile;
     private modeSession;
@@ -264,6 +274,8 @@ export declare class VaultStore {
         mode?: StudyModeOverride;
         kind?: ContactKind;
         relatedNotes?: string[];
+        intent?: StudyIntent;
+        scope?: StudyScope;
     }, session?: {
         id?: string;
         cwd?: string;

@@ -1,7 +1,7 @@
 {
   "name": "dsh-study-buddy",
-  "description": "DSH 通用学习 Agent「学习伙伴」：自适应快速/详细讲解与文档式笔记插件——Obsidian vault 多根检索、规划门禁、微目录、覆盖度与跨会话记忆",
-  "version": "1.3.0",
+  "description": "DSH 通用学习 Agent「学习伙伴」：计划感知、意图驱动讲解与文档式笔记插件——Obsidian vault 多根检索、可发现性体检、规划门禁与跨会话记忆",
+  "version": "1.4.0",
   "entry": {
     "name": "dsh-study-buddy",
     "inject": ["tools"]
