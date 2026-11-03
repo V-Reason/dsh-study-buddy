@@ -71,9 +71,9 @@ export declare function applyMetadataUpdate(raw: string, patch: MetadataUpdate):
  * frontmatter → 一句话定位（裸 `>` 引用块，可选）→ 正文 → 关联小节。
  * 不加尾部标签；键序由 `renderFrontmatter` 固定。
  *
- * **引用块不重复写两遍**：只有显式传了 `summary` 才前置引用块；缺省时 `简介`
- * 从正文首个引用块提取（`extractDefinition`），那一段本身就是正文的一行定位，
- * 再前置一遍就会让同一句话连着出现两次（2026-09-15 真机检查实测 4 篇全中）。
+ * **引用块不重复写两遍**：正文首个引用块优先；只有正文没有定位且显式传了
+ * `summary` 时才前置引用块。否则同一句话会连着出现两次（2026-09-15 真机检查
+ * 实测 4 篇全中；2026-11-03 的 replace 缺陷同源）。
  */
 export declare function renderNote(doc: BlockDoc): string;
 export type UpdateAction = 'append' | 'replace' | 'definition';
@@ -97,6 +97,11 @@ export interface UpdateResult {
  * 找不到该小节时**新建小节**（比静默追加到末尾更符合"补充到对应位置"的意图）。
  */
 export declare function appendToSection(body: string, section: string, changes: string): string;
+/**
+ * replace 时继承旧正文的「关联」小节：newContent 没有关联小节时把旧小节逐字追加到末尾；
+ * newContent 自带关联小节时以新内容为准。关联只存在正文里，不并入就会静默丢链。
+ */
+export declare function preserveLinksSection(oldBody: string, newContent: string): string;
 /**
  * 增量更新。**不再有"版本更新/勘误"块**（需求 R23）：旧内容由调用方先写进
  * `.study/archive/`，正文只保留最新版。

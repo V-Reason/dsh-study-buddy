@@ -61,3 +61,9 @@ export declare function renderFrontmatter(meta: CardMeta): string;
 export declare function extractDefinition(body: string): string | null;
 /** 正文首个一级标题；没有则 null */
 export declare function firstHeading(body: string): string | null;
+/**
+ * 同步既有简介键：优先改 `简介`，没有该键时改旧别名 `定义`。
+ * 两者都不存在时**原样返回**（不擅自新增键——正文首引用块仍是回退来源）。
+ * 保留其余 frontmatter 行、键序与换行风格。
+ */
+export declare function replaceFrontmatterSummary(raw: string, summary: string): string;

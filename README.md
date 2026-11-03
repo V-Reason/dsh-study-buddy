@@ -6,7 +6,7 @@
 >
 > `dsh-study-buddy` 是 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeekHarness)（DSH）的「学习伙伴」插件与 Agent 预设。它陪你完成读取资料、自适应讲解、对话答疑和归档笔记，并把内容写成 Obsidian vault 里普通、可检索的 Markdown 文档。
 
-当前版本：**v1.4.0** · [MIT](LICENSE) · 支持 DSH `>=0.1.7-rc.1 <0.3.0-0`
+当前版本：**v1.4.1** · [MIT](LICENSE) · 支持 DSH `>=0.1.7-rc.1 <0.3.0-0`
 
 ## 为什么值得用
 

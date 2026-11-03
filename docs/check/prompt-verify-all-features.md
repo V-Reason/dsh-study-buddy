@@ -1,6 +1,6 @@
 # 学习伙伴模式·全功能验证（开场提示词）
 
-> 版本基线：v1.4.0 ｜ 对应插件：dsh-study-buddy **19 个工具** + 「学习伙伴」预设
+> 版本基线：v1.4.1 ｜ 对应插件：dsh-study-buddy **19 个工具** + 「学习伙伴」预设
 >
 > 用法：把下面整段复制为「学习伙伴」预设**新会话的第一条消息**。
 > 第 0–6 部分由 Agent 连续自动执行；第 7 部分是**需要你配合**的交互项。
@@ -57,6 +57,7 @@
 ## 4 · 更新与存档（note_update / note_history / note_restore）
 
 25. `note_update({ ref, action: 'append', changes: … })`：核对内容追加进正文、**旧内容保留**、**没有产生"版本更新"小节**。
+25b. 先对同一篇跑 `append(dryRun: true)` 与 `definition(dryRun: true)`：核对返回以 `[dryRun]` 开头，文件内容与 mtime 不变；再按 25 正式追加。
 26. `note_update({ ref, action: 'append', section: …, changes: … })`：核对追加进指定小节而不是文末。
 27. `note_update({ ref, action: 'replace', newContent: … })`：核对返回含**存档路径**，正文只留新版，且正文里**没有 `<details>` 历史块**。
 28. `note_history({ ref })`：核对列出存档（时间/原因/原路径）。
@@ -69,9 +70,11 @@
 32. 再 `note_link` 同一对：核对返回"无改动"（不重复添加）。
 33. `note_unlink`：核对两侧关联行都被移除（小节空了连标题一起删）。
 34. `note_rename({ ref, title: '【验证】高斯消元法（改名）', dryRun: true })`：核对预演报告（文件名变更 + 入链改动清单 + 断链检测）。
-35. 正式 `note_rename`：核对 frontmatter 标题、文件名、库内 wikilink 全部同步。参数名是 `title`（不是 `newTitle`）。
+35. 正式 `note_rename`（标题与文件名一致）：核对 frontmatter 标题、文件名、库内 wikilink 全部同步。参数名是 `title`（不是 `newTitle`）。
+35b. 对标题与文件名不一致的笔记只改标题：核对文件名不变、入链仍是 `[[旧文件名]]`，随后 `note_unlink` 两侧都能删除。
 36. `note_lint({ ref })`：核对报告为**问题清单 + 严重级**，且**不出现"总分"**；对含本机路径或未标语言代码块的笔记应能报出。
 36b. 写一篇正文以 `> 一句话定位` 开头的笔记（不传 `summary`）：核对 frontmatter 的 `简介` 有值，且**那句引用块在文件里只出现一次**（不在正文里重复一遍）。
+36c. 对上述笔记跑 `definition` 改定位，再跑 `replace` 且新正文自带首引用块：核对 frontmatter `简介` 与正文首引用块指向同一句，不出现两行旧/新定义。
 37. `note_lint({ scope: 'vault' })`：核对批量汇总含"有问题的文档 N 篇"、规则命中、问题最多的文档；**无均分**（也不出现"平均"字样）。
 38. `note_lint({ ref, rule: 'session-residue' })`：核对单规则视图；再对一条被 `lint.rulesOff` 关掉的规则查询，应返回"未启用或不适用于此类文档"。
 

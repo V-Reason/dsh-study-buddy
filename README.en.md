@@ -6,7 +6,7 @@
 >
 > `dsh-study-buddy` is a study companion plugin and agent preset for [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeekHarness) (DSH). It guides you from source material through adaptive explanations and follow-up questions to durable Markdown notes in an Obsidian vault.
 
-Current version: **v1.4.0** · [MIT](LICENSE) · DSH `>=0.1.7-rc.1 <0.3.0-0`
+Current version: **v1.4.1** · [MIT](LICENSE) · DSH `>=0.1.7-rc.1 <0.3.0-0`
 
 ## Why use it
 
