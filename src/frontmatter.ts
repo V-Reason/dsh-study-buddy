@@ -125,3 +125,24 @@ export function firstHeading(body: string): string | null {
   const m = /^#\s+(.+)$/m.exec(body)
   return m ? m[1].trim() : null
 }
+
+/**
+ * 同步既有简介键：优先改 `简介`，没有该键时改旧别名 `定义`。
+ * 两者都不存在时**原样返回**（不擅自新增键——正文首引用块仍是回退来源）。
+ * 保留其余 frontmatter 行、键序与换行风格。
+ */
+export function replaceFrontmatterSummary(raw: string, summary: string): string {
+  const value = inlineText(summary)
+  if (!value) return raw
+  const parsed = parseFrontmatter(raw)
+  if (!parsed.meta) return raw
+  const head = raw.slice(0, raw.length - parsed.body.length)
+  const summaryRe = /^简介\s*[:：].*$/m
+  const aliasRe = /^定义\s*[:：].*$/m
+  const next = summaryRe.test(head)
+    ? head.replace(summaryRe, `简介: ${value}`)
+    : aliasRe.test(head)
+      ? head.replace(aliasRe, `定义: ${value}`)
+      : head
+  return `${next}${parsed.body}`
+}

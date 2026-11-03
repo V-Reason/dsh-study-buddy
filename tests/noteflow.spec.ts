@@ -369,6 +369,26 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     await assertDryRun({ ref: '高斯消元法', action: 'metadata', status: '需更新', dryRun: true })
   })
 
+  test('BUG-003 definition 同步 frontmatter 简介，note_search 摘要一致', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const planId = await planAndConfirm(s)
+    await s.noteWrite({
+      planId, title: '高斯消元法', path: ITEMS[0].path, source: '《计算方法》',
+      summary: '旧定位', content: '## 直接法\n\n正文。',
+    })
+    const out = await s.noteUpdate({ ref: '高斯消元法', action: 'definition', summary: '新定位' })
+    expect(out).toContain('简介: 新定位')
+    expect(out).not.toContain('简介: 旧定位')
+    const text = await readFile(join(dir, ITEMS[0].path), 'utf8')
+    expect(text).toContain('简介: 新定位')
+    expect(text).toContain('> 新定位')
+    expect(text).not.toContain('> 旧定位')
+    const hits = await s.search('新定位')
+    expect(hits).toContain('- 简介：新定位')
+    expect(hits).toContain('- 片段：> 新定位')
+  })
+
   test('note_update metadata：先存档、正文逐字不变、未知键保留', async () => {
     const s = store()
     await s.noteExpectGet()

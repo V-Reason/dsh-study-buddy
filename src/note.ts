@@ -16,7 +16,7 @@
 
 import { randomBytes } from 'node:crypto'
 import { inlineText, matchesTitle, splitSections } from './notemodel.ts'
-import { extractDefinition, parseFrontmatter, renderFrontmatter, type CardMeta } from './frontmatter.ts'
+import { extractDefinition, parseFrontmatter, renderFrontmatter, replaceFrontmatterSummary, type CardMeta } from './frontmatter.ts'
 import { normalizeSourceSectionText } from './sourceSection.ts'
 
 export const VALID_STATUS = ['草稿', '已确认', '需更新'] as const
@@ -282,7 +282,9 @@ export function applyUpdate(raw: string, id: string, payload: UpdatePayload): Up
     const result = validateSummary(summary)
     if (result.errors.length > 0) throw new Error(`definition 校验失败：${result.errors.join('；')}`)
     warnings.push(...result.warnings)
-    return { text: `${fm}${replaceSummaryLine(parsed.body, summary, '定义')}`, warnings }
+    // 正文首引用块与 frontmatter 简介是同一句话的两个投影：一起改，别让检索读到旧值
+    const nextFm = replaceFrontmatterSummary(fm, summary)
+    return { text: `${nextFm}${replaceSummaryLine(parsed.body, summary, '定义')}`, warnings }
   }
 
   if (payload.action === 'replace') {
