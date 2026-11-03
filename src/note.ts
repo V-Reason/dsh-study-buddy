@@ -119,6 +119,44 @@ export function validateBlock(input: BlockInput): ValidateResult {
   return { errors, warnings }
 }
 
+export interface MetadataUpdate {
+  sourceSection?: string
+  status?: string
+}
+
+/**
+ * 只更新 frontmatter 中的明确字段，保留键顺序、未知键、换行风格和正文字节。
+ */
+export function applyMetadataUpdate(raw: string, patch: MetadataUpdate): string {
+  if (patch.sourceSection === undefined && patch.status === undefined) {
+    throw new Error('metadata 至少一个字段（sourceSection/status）')
+  }
+  const match = /^---(\r?\n)([\s\S]*?)\r?\n---(?=\r?\n|$)/.exec(String(raw ?? ''))
+  if (!match) throw new Error('笔记没有 frontmatter，无法执行 metadata 修复')
+  const eol = match[1]
+  const lines = match[2].split(/\r?\n/)
+  const updates: Array<[string, string]> = []
+  if (patch.sourceSection !== undefined) {
+    const value = String(patch.sourceSection).trim()
+    if (!value) throw new Error('sourceSection 不能为空')
+    if (NEWLINE_RE.test(value)) throw new Error('sourceSection 不能包含换行')
+    updates.push(['来源章节', normalizeSourceSectionText(value)])
+  }
+  if (patch.status !== undefined) {
+    const value = String(patch.status).trim()
+    if (!VALID_STATUS.includes(value as (typeof VALID_STATUS)[number])) {
+      throw new Error(`状态（status）必须是 ${VALID_STATUS.join('/')} 之一，收到 "${patch.status}"`)
+    }
+    updates.push(['状态', value])
+  }
+  for (const [key, value] of updates) {
+    const idx = lines.findIndex((line) => line.startsWith(`${key}:`) || line.startsWith(`${key}：`))
+    if (idx === -1) lines.push(`${key}: ${value}`)
+    else lines[idx] = `${key}: ${value}`
+  }
+  return `---${eol}${lines.join(eol)}${eol}---${raw.slice(match[0].length)}`
+}
+
 /** 关联小节渲染：`- 前置：[[目标]]`（与 `note_link` 的落盘格式同源） */
 function linksSection(links?: BlockLinks): string {
   if (!links) return ''

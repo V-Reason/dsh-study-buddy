@@ -270,17 +270,18 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       name: 'note_update',
       description:
         '更新笔记：append 补充；replace 整体替换，旧正文先存入 .study/archive/，绝不丢；'
-        + 'move 迁目录；definition 改一句话定位。dryRun 可预演。',
+        + 'move 迁目录；definition 改一句话定位；metadata 只改来源章节/状态，正文逐字不变。dryRun 可预演。',
       parameters: {
         type: 'object',
         properties: {
           ref: { type: 'string', description: '笔记 ID / 标题 / 路径 / 文件名' },
-          action: { type: 'string', enum: ['append', 'replace', 'move', 'definition'], description: 'append/replace/move/definition' },
+          action: { type: 'string', enum: ['append', 'replace', 'move', 'definition', 'metadata'], description: '更新动作' },
           changes: { type: 'string', description: 'append：要补充的 Markdown' },
           section: { type: 'string', description: 'append：追加到哪个 `### 小节`（缺省=文末）' },
           newContent: { type: 'string', description: 'replace：新正文 Markdown' },
           summary: { type: 'string', description: 'definition/replace：新的一句话定位' },
-          sourceSection: { type: 'string', description: 'replace：修正来源章节' },
+          sourceSection: { type: 'string', description: 'replace/metadata：来源章节' },
+          status: { type: 'string', enum: [...VALID_STATUS], description: 'metadata：新状态' },
           targetPath: { type: 'string', description: 'move：新的 vault 内相对路径（含 .md）' },
           dryRun: { type: 'boolean', description: '只预演，不落盘' },
         },
@@ -295,6 +296,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         newContent: args.newContent ? String(args.newContent) : undefined,
         summary: args.summary ? String(args.summary) : undefined,
         sourceSection: args.sourceSection ? String(args.sourceSection) : undefined,
+        status: args.status ? String(args.status) : undefined,
         targetPath: args.targetPath ? String(args.targetPath) : undefined,
         dryRun: args.dryRun === true,
       }, { sessionCwd: sessionCwdOf(exec) }),

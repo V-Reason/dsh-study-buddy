@@ -91,14 +91,15 @@ describe('buildToolDefs（19 个工具的 schema 契约）', () => {
     expect(def.description).toContain('有效期从确认时刻起算')
   })
 
-  test('note_update：ref + action 必填，四动作枚举完整', () => {
+  test('note_update：ref + action 必填，五动作枚举完整', () => {
     const def = defOf('note_update')
     expect(def.parameters.required).toEqual(['ref', 'action'])
     const props = def.parameters.properties as Record<string, { enum?: string[] }>
-    expect(props.action?.enum).toEqual(['append', 'replace', 'move', 'definition'])
+    expect(props.action?.enum).toEqual(['append', 'replace', 'move', 'definition', 'metadata'])
     // 先存档后写正文这条不变量写进用户可见描述
     expect(def.description).toContain('.study/archive')
     expect(def.description).toContain('绝不丢')
+    expect(def.description).toContain('正文逐字不变')
   })
 
   test('note_link / note_unlink：kind 枚举为 prev/next/sibling（不再是 conflict）', () => {

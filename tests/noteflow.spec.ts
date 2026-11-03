@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { VaultStore } from '../src/index.ts'
+import { parseFrontmatter } from '../src/frontmatter.ts'
 import { buildPlanRecord, isPlanExpired, planFileFor, readPlan, writePlan } from '../src/planstore.ts'
 import { readSession, sessionFileFor } from '../src/store.ts'
 
@@ -322,6 +323,31 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     expect(await readFile(join(dir, ITEMS[0].path), 'utf8')).toContain('第一版正文。')
     // 恢复前的那一版也已存档，可来回
     expect(await s.noteHistory('高斯消元法')).toContain('历史存档（2 份')
+  })
+
+  test('note_update metadata：先存档、正文逐字不变、未知键保留', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const planId = await planAndConfirm(s)
+    await s.noteWrite({
+      planId, title: '高斯消元法', path: ITEMS[0].path, source: '《计算方法》',
+      content: '## 直接法\n\n正文保持不动。',
+    })
+    const file = join(dir, ITEMS[0].path)
+    const before = await readFile(file, 'utf8')
+    const updated = await s.noteUpdate({
+      ref: '高斯消元法',
+      action: 'metadata',
+      sourceSection: '《计算方法》第 2 章 线性方程组 ／ 2.1 节',
+      status: '需更新',
+    })
+    const after = await readFile(file, 'utf8')
+
+    expect(updated).toContain('正文逐字不变')
+    expect(parseFrontmatter(after).body).toBe(parseFrontmatter(before).body)
+    expect(after).toContain('来源章节: 《计算方法》第2章 线性方程组 / 2.1节')
+    expect(after).toContain('状态: 需更新')
+    expect(await s.noteHistory('高斯消元法')).toContain('metadata 修复')
   })
 
   test('note_link / note_unlink：两侧都写 wikilink，重复关联不重复添加', async () => {

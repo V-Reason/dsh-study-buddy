@@ -15,7 +15,7 @@ import { promises as fsp } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 /** 笔记契约的唯一来源（阶段 6 起 card.ts / history.ts / moc.ts 已删除） */
 import {
-  LINK_LABELS, applyUpdate as applyNoteUpdate, generateId, inverseKind, renderNote, validateBlock,
+  LINK_LABELS, applyMetadataUpdate, applyUpdate as applyNoteUpdate, generateId, inverseKind, renderNote, validateBlock,
   type BlockInput, type BlockLinks, type LinkKind,
 } from './note.ts'
 import { addLink, removeLink } from './links.ts'
@@ -1089,14 +1089,43 @@ export class VaultStore {
     summary?: string
     targetPath?: string
     sourceSection?: string
+    status?: string
     dryRun?: boolean
   }, call?: { sessionCwd?: string }): Promise<string> {
     const action = String(args.action ?? '')
-    if (!['append', 'replace', 'move', 'definition'].includes(action)) {
-      throw new Error(`note_update 未知 action "${action}"（可用 append / replace / move / definition）`)
+    if (!['append', 'replace', 'move', 'definition', 'metadata'].includes(action)) {
+      throw new Error(`note_update 未知 action "${action}"（可用 append / replace / move / definition / metadata）`)
     }
     const { card, raw } = await this.resolveCard(args.ref, call?.sessionCwd)
     this.assertWritable(card)
+    if (action === 'metadata') {
+      const fields = [
+        args.sourceSection !== undefined ? `来源章节=${args.sourceSection}` : '',
+        args.status !== undefined ? `状态=${args.status}` : '',
+      ].filter(Boolean)
+      if (fields.length === 0) throw new Error('metadata 至少提供 sourceSection 或 status')
+      const next = applyMetadataUpdate(raw, {
+        sourceSection: args.sourceSection,
+        status: args.status,
+      })
+      if (parseFrontmatter(next).body !== parseFrontmatter(raw).body) {
+        throw new Error('metadata 修复必须保持正文逐字不变，已拒绝写入')
+      }
+      if (args.dryRun) return `[dryRun] 将更新元数据：${card.rel}（${fields.join('，')}；正文不变）`
+      const entry = await archiveThenWrite({
+        vaultRoot: this.layout.vaultRoot,
+        stateDir: this.layout.stateDir,
+        fromId: card.id ?? 'legacy',
+        oldRel: card.rel,
+        title: card.title,
+        reason: 'metadata 修复',
+        oldContent: raw,
+        write: async () => { await atomicWrite(card.path, next) },
+      })
+      this.invalidate()
+      return `已更新元数据：${card.rel}（${fields.join('，')}；正文逐字不变）`
+        + `\n原文已存档：${this.layout.stateDir}/archive/${card.id ?? 'legacy'}/${entry.id}.md`
+    }
     if (action === 'append') {
       const result = applyNoteUpdate(raw, card.id ?? args.ref, { action: 'append', changes: args.changes, section: args.section })
       await atomicWrite(card.path, result.text)

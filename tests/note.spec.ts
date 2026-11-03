@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'vitest'
 import {
-  LINKS_SECTION, LINK_LABELS, VALID_STATUS, appendToSection, applyUpdate, findLinksSectionStart,
-  generateId, inverseKind, parseLinkLine, renderNote, todayLocal, validateBlock, validateSummary, wikilinkOf,
+  LINKS_SECTION, LINK_LABELS, VALID_STATUS, appendToSection, applyMetadataUpdate, applyUpdate,
+  findLinksSectionStart, generateId, inverseKind, parseLinkLine, renderNote, todayLocal, validateBlock,
+  validateSummary, wikilinkOf,
 } from '../src/note.ts'
 import { addLink, linkTargetOf, listLinks, parseLinkTarget, removeLink } from '../src/links.ts'
 import { normalizeSourceSection, normalizeSourceSectionText } from '../src/sourceSection.ts'
+import { parseFrontmatter } from '../src/frontmatter.ts'
 
 /**
  * 阶段 3 用例：笔记块契约（note / links / sourceSection）。
@@ -178,6 +180,38 @@ describe('note 更新动作（append / replace / definition）', () => {
   test('未知动作报错且列出可用值', () => {
     // @ts-expect-error 故意传非法动作，验证 fail-loud
     expect(() => applyUpdate(RAW, 'x', { action: 'sideways' })).toThrow('可用：append / replace / definition')
+  })
+
+  test('metadata 只改 frontmatter，正文逐字不变且保留未知键', () => {
+    const raw = [
+      '---',
+      'ID: 202611030900_ab12cd',
+      '标题: PBR',
+      '来源: 图形学',
+      '状态: 草稿',
+      '自定义键: 保留我',
+      '---',
+      '',
+      '# PBR',
+      '',
+      '正文 [[BRDF]]',
+      '',
+    ].join('\r\n')
+    const next = applyMetadataUpdate(raw, {
+      sourceSection: '《图形学》第 1 章 光照 ／ 1.1 节',
+      status: '已确认',
+    })
+    expect(parseFrontmatter(next).body).toBe(parseFrontmatter(raw).body)
+    expect(next).toContain('自定义键: 保留我')
+    expect(next).toContain('来源章节: 《图形学》第1章 光照 / 1.1节')
+    expect(next).toContain('状态: 已确认')
+    expect(next).toContain('\r\n')
+  })
+
+  test('metadata 拒绝无 frontmatter、非法状态与空补丁', () => {
+    expect(() => applyMetadataUpdate('# 旧笔记', { status: '已确认' })).toThrow('没有 frontmatter')
+    expect(() => applyMetadataUpdate('---\nID: x\n---\n正文', { status: '完成' })).toThrow('状态')
+    expect(() => applyMetadataUpdate('---\nID: x\n---\n正文', {})).toThrow('至少一个字段')
   })
 })
 
