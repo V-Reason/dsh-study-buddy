@@ -76,9 +76,9 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_expect_get',
       description:
-        '读取 vault 根的《笔记期望.md》全文，并**标记为已读**——这是写入笔记的前置条件之一。'
-        + '期望文件是笔记写法的唯一来源（结构/详略/文风/公式图表/领域侧重），代码里没有内建模板。'
-        + '用户改了期望后签名会变，必须重新读取才能继续写入（热配置立即生效）。',
+        '读取 vault 根的《笔记期望.md》全文，并**标记为已读**——这是新会话建立输出文风和写入笔记的前置条件。'
+        + '期望文件是用户可配置文风的唯一来源（对话表达/自适应讲解/笔记结构/详略/公式图表/领域侧重）。'
+        + '用户改了期望后必须重新读取；缺失时期望对话使用内置默认，正式笔记写入仍被门禁拒绝。',
       parameters: { type: 'object', properties: {} },
       output,
       isConcurrencySafe: READ_ONLY,

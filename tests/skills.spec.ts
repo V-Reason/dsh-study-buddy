@@ -102,11 +102,34 @@ describe('study preset skills', () => {
     expect(unique.size).toBe(names.length)
   })
 
-  test('技能集合恰为 6 个既有技能', () => {
+  test('技能集合恰为 7 个既有技能', () => {
     const names = listSkills().map(({ skill }) => skill.name).sort()
     expect(names).toEqual(
-      ['note-format', 'domain-adaptation', 'file-reading', 'incremental-update', 'memory-auto', 'study-loop'].sort(),
+      ['note-format', 'domain-adaptation', 'file-reading', 'incremental-update', 'memory-auto', 'study-loop', 'output-style'].sort(),
     )
+  })
+
+  test('output-style 固化自然正文优先、克制的结构使用与自适应模式', () => {
+    const body = listSkills().find(({ dir }) => dir === 'output-style')!.skill.body
+    expect(body).toContain('自然正文优先')
+    expect(body).toContain('列表')
+    expect(body).toContain('二维')
+    expect(body).toContain('同一结论')
+    expect(body).toContain('默认不出笔记预览')
+    expect(body).toContain('模式只影响讲解和答疑')
+    expect(body).toContain('不确定')
+    expect(body).toContain('study_mode')
+  })
+
+  test('讲解技能不再强制固定行数、三明治或自动预览', () => {
+    const body = listSkills().find(({ dir }) => dir === 'study-loop')!.skill.body
+    expect(body).toContain('study_mode')
+    expect(body).toContain('一个完整知识单元')
+    expect(body).toContain('默认不生成笔记预览')
+    expect(body).not.toContain('≤15 行')
+    expect(body).not.toContain('问答 3~6 行')
+    expect(body).not.toContain('讲完即出')
+    expect(body).not.toContain('三明治')
   })
 
   test('memory-auto 技能含自迭代要点', () => {

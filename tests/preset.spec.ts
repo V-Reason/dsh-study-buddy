@@ -174,9 +174,20 @@ describe('presets/study.patch.yml 声明卫生', () => {
     for (const gone of ['card_create', 'card_update', 'card_link', 'card_moc', 'card_lint', 'card_history', 'card_rename', 'card_search', 'card_get', 'card_id']) {
       expect(text, `persona/config 仍提到已退场的 ${gone}`).not.toContain(gone)
     }
-    for (const tool of ['note_write', 'note_plan', 'note_expect_get', 'note_toc', 'note_overview']) {
+    for (const tool of ['note_write', 'note_plan', 'note_expect_get', 'note_toc', 'note_overview', 'study_mode']) {
       expect(text, `persona 应写明 ${tool}`).toContain(tool)
     }
+  })
+
+  test('persona 采用自然正文优先，不再强制固定行数、三明治和自动预览', () => {
+    expect(text).toContain('冷静技术搭档')
+    expect(text).toContain('自然正文优先')
+    expect(text).toContain('默认不出笔记预览')
+    expect(text).toContain('study_mode')
+    expect(text).not.toContain('≤15 行')
+    expect(text).not.toContain('问答 3~6 行')
+    expect(text).not.toContain('讲完即出"笔记预览"')
+    expect(text).not.toContain('三明治 =')
   })
 
   test('技能资产从已安装包解析（不再锚定预设目录）', () => {
@@ -199,5 +210,8 @@ describe('presets/study.patch.yml 声明卫生', () => {
     expect(template).not.toContain('≤60 字')
     // 期望文件本身就是"唯一写法来源"，模板要写清这一点
     expect(template).toContain('唯一来源')
+    expect(template).toContain('## 对话表达')
+    expect(template).toContain('## 自适应讲解')
+    expect(template).toContain('- [设置] 快节奏复习窗口：30 天')
   })
 })
