@@ -513,6 +513,31 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     expect(await readFile(join(dir, items[1].path), 'utf8')).not.toContain('链路验证-戊')
   })
 
+  test('BUG-006 replace 保留既有 关联 小节', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const planId = await planAndConfirm(s)
+    await s.noteWrite({ planId, title: '高斯消元法', path: ITEMS[0].path, source: '《计算方法》', content: '> 甲\n\n正文。' })
+    await s.noteWrite({ planId, title: '列主元消元', path: ITEMS[1].path, source: '《计算方法》', content: '> 乙\n\n正文。' })
+    await s.noteLink('高斯消元法', '列主元消元', 'next')
+    const aFile = join(dir, ITEMS[0].path)
+    const bFile = join(dir, ITEMS[1].path)
+    expect(await readFile(aFile, 'utf8')).toContain('- 后续：[[列主元消元]]')
+
+    await s.noteUpdate({
+      ref: '高斯消元法', action: 'replace', newContent: '## 新正文\n\n重写后的内容。',
+    })
+    const afterA = await readFile(aFile, 'utf8')
+    expect(afterA).toContain('### 关联')
+    expect(afterA).toContain('- 后续：[[列主元消元]]')
+    expect(afterA).toContain('重写后的内容。')
+    expect(await readFile(bFile, 'utf8')).toContain('- 前置：[[高斯消元法]]')
+
+    expect(await s.noteLink('高斯消元法', '列主元消元', 'next', true)).toContain('已移除关联')
+    expect(await readFile(aFile, 'utf8')).not.toContain('- 后续：[[列主元消元]]')
+    expect(await readFile(bFile, 'utf8')).not.toContain('- 前置：[[高斯消元法]]')
+  })
+
   test('note_lint：会话残留与期望检查项都能报出（无分值）', async () => {
     const s = store()
     await s.noteExpectGet()

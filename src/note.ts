@@ -15,7 +15,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { inlineText, matchesTitle, splitSections } from './notemodel.ts'
+import { findSection, inlineText, matchesTitle, splitSections } from './notemodel.ts'
 import { extractDefinition, parseFrontmatter, renderFrontmatter, replaceFrontmatterSummary, type CardMeta } from './frontmatter.ts'
 import { normalizeSourceSectionText } from './sourceSection.ts'
 
@@ -244,6 +244,20 @@ export function appendToSection(body: string, section: string, changes: string):
   return parts.join('\n\n')
 }
 
+/**
+ * replace 时继承旧正文的「关联」小节：newContent 没有关联小节时把旧小节逐字追加到末尾；
+ * newContent 自带关联小节时以新内容为准。关联只存在正文里，不并入就会静默丢链。
+ */
+export function preserveLinksSection(oldBody: string, newContent: string): string {
+  const fresh = String(newContent ?? '').trimEnd()
+  if (!fresh) return fresh
+  const oldSection = findSection(splitSections(String(oldBody ?? '')).sections, LINKS_SECTION)
+  if (!oldSection) return fresh
+  if (findSection(splitSections(fresh).sections, LINKS_SECTION)) return fresh
+  const inherited = String(oldBody ?? '').slice(oldSection.start, oldSection.end).trimEnd()
+  return inherited ? `${fresh}\n\n${inherited}` : fresh
+}
+
 function replaceSummaryLine(body: string, summary: string, kind: '简介' | '定义'): string {
   const trimmed = body.trimStart()
   if (!trimmed.startsWith('>')) {
@@ -295,7 +309,8 @@ export function applyUpdate(raw: string, id: string, payload: UpdatePayload): Up
     warnings.push(...result.warnings)
     // 保留旧 frontmatter 里未被新内容覆盖的 来源章节
     const sourceSection = payload.block.sourceSection ?? parsed.meta?.sourceSection
-    const rendered = renderNote({ ...payload.block, sourceSection, id }).trimEnd()
+    const content = preserveLinksSection(parsed.body, payload.block.content)
+    const rendered = renderNote({ ...payload.block, content, sourceSection, id }).trimEnd()
     return { text: `${rendered}\n`, warnings }
   }
 

@@ -15,7 +15,8 @@ import { promises as fsp } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 /** 笔记契约的唯一来源（阶段 6 起 card.ts / history.ts / moc.ts 已删除） */
 import {
-  LINK_LABELS, applyMetadataUpdate, applyUpdate as applyNoteUpdate, generateId, inverseKind, renderNote, validateBlock,
+  LINK_LABELS, applyMetadataUpdate, applyUpdate as applyNoteUpdate, generateId, inverseKind, preserveLinksSection,
+  renderNote, validateBlock,
   type BlockInput, type BlockLinks, type LinkKind,
 } from './note.ts'
 import { addLink, removeLink } from './links.ts'
@@ -1184,6 +1185,8 @@ export class VaultStore {
     }
     const result = validateBlock(blockInput)
     if (result.errors.length > 0) throw new Error(`替换内容校验失败：${result.errors.join('；')}`)
+    // 校验按用户传入的 newContent 做（空正文必须拒绝），通过后再继承旧「关联」小节
+    blockInput.content = preserveLinksSection(oldParsed.body, args.newContent)
     const entry = await archiveThenWrite({
       vaultRoot: this.layout.vaultRoot,
       stateDir: this.layout.stateDir,
