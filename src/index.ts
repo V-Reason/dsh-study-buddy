@@ -21,7 +21,7 @@ import {
 import { addLink, removeLink } from './links.ts'
 import { resolveLayout, type LayoutResolution, type StudyConfig } from './config.ts'
 import {
-  EXPECT_FILE, TOC_FILE, DirIndex, dirOfRel, dirPathFor, expectPathFor, listDir, nestHint, normRel,
+  EXPECT_FILE, TOC_FILE, DirIndex, dirOfRel, dirPathFor, expectPathFor, isTocRel, listDir, nestHint, normRel,
 } from './dirs.ts'
 import { checkWrite, formatPlanProposal, type GateInput } from './gate.ts'
 import { HOST_CONTRACTS, resolveHost, type HostContextLike } from './host.ts'
@@ -32,6 +32,9 @@ import { archiveBody, archiveThenWrite, listArchives, readArchive } from './arch
 import { markExpectRead, readSession, sessionFileFor, signatureOf, writeSession, type SessionState } from './store.ts'
 import { formatOverview, summarizeOverview } from './overview.ts'
 import { parseFrontmatter } from './frontmatter.ts'
+import {
+  auditDiscoverability, formatDiscoverability, type DiscoverabilityNote,
+} from './discoverability.ts'
 import { formatBatch, formatReport, lintNote, parseExpectRules, ruleTitle, summarizeLint, type ExpectRule, type LintReport } from './lint.ts'
 import {
   AUTO_PREFS_KEY, checkMemoryValue, findProgressSentences, formatAutoPrefs, formatMemory,
@@ -776,10 +779,47 @@ export class VaultStore {
     }
   }
 
-  /** `note_library`：库状态与期望文件自检（硬门禁的第一环） */
-  async noteLibrary(action: string): Promise<string> {
-    if (action !== 'check') throw new Error(`note_library 未知 action "${action}"（当前只支持 check）`)
+  /** `note_library`：库状态自检，或按明确目录审计可发现性 */
+  async noteLibrary(action: string, opts: { path?: string; limit?: number } = {}): Promise<string> {
+    if (!['check', 'audit'].includes(action)) {
+      throw new Error(`note_library 未知 action "${action}"（可用 check/audit）`)
+    }
     await this.assertVault()
+    if (action === 'audit') {
+      if (opts.path === undefined) {
+        throw new Error(`请指定体检目录；全库体检传 path='.'`)
+      }
+      const scope = normRel(opts.path)
+      const scopePath = dirPathFor(this.layout.vaultRoot, scope)
+      const scopeStat = await fsp.stat(scopePath).catch(() => null)
+      if (!scopeStat?.isDirectory()) throw new Error(`体检目录不存在：${opts.path}`)
+      const limit = Number(opts.limit ?? 10)
+      if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+        throw new Error('note_library audit 的 limit 必须是 1~50 的整数')
+      }
+      const index = await this.ensureIndex()
+      const cards = index.all().filter((card) => card.writable)
+      const notes: DiscoverabilityNote[] = []
+      for (const card of cards) {
+        try {
+          const body = parseFrontmatter(await fsp.readFile(card.path, 'utf8')).body
+          notes.push({
+            rel: card.rel,
+            title: card.title,
+            kind: card.kind,
+            sourceSection: card.sourceSection,
+            body,
+          })
+        } catch (error) {
+          this.skipped.push({
+            path: card.path,
+            reason: `审计读取失败（${(error as NodeJS.ErrnoException).code ?? '未知错误'}）`,
+          })
+        }
+      }
+      const tocDirs = notes.filter((note) => isTocRel(note.rel)).map((note) => dirOfRel(note.rel))
+      return `${formatDiscoverability(auditDiscoverability(notes, tocDirs, { path: scope }), limit)}${this.noteSkips()}`
+    }
     const signature = await this.expectSignature()
     const session = await this.sessionState()
     const index = await this.ensureIndex()

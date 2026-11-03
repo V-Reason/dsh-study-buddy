@@ -60,25 +60,30 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_library',
       description:
-        '笔记库自检：vault 是否可写、《笔记期望.md》是否存在并已读、块/存量卡/旧笔记各多少、有无待消费规划。'
-        + '会话开始处理笔记前先调用一次；写入被拒时也用它定位原因。',
+        '笔记库自检：期望状态、各类笔记数量与待消费规划；写入被拒时用它定位原因。'
+        + 'action=audit 时按 path 审计缺来源章节、缺微目录、孤立、断链、歧义链接和重复标题；'
+        + '全库必须显式 path="."，只报告不自动修改。',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['check'], description: 'check=输出库状态与门禁状态' },
+          action: { type: 'string', enum: ['check', 'audit'], description: 'check=库状态；audit=可发现性体检' },
+          path: { type: 'string', description: 'audit：vault 内目录；全库传 "."' },
+          limit: { type: 'number', description: 'audit：明细条数，默认 10，上限 50' },
         },
         required: ['action'],
       },
       output,
       isConcurrencySafe: READ_ONLY,
-      execute: (args) => store.noteLibrary(String(args.action ?? 'check')),
+      execute: (args) => store.noteLibrary(String(args.action ?? 'check'), {
+        path: args.path !== undefined ? String(args.path) : undefined,
+        limit: Number.isFinite(Number(args.limit)) ? Number(args.limit) : undefined,
+      }),
     },
     {
       name: 'note_expect_get',
       description:
-        '读取 vault 根的《笔记期望.md》全文，并**标记为已读**——这是新会话建立输出文风和写入笔记的前置条件。'
-        + '期望文件是用户可配置文风的唯一来源（对话表达/自适应讲解/笔记结构/详略/公式图表/领域侧重）。'
-        + '用户改了期望后必须重新读取；缺失时期望对话使用内置默认，正式笔记写入仍被门禁拒绝。',
+        '读取并标记已读 vault 根《笔记期望.md》；它是对话文风与笔记写法的唯一来源。'
+        + '缺失时对话用内置文风，正式写入仍拒绝；改期望后必须重读。',
       parameters: { type: 'object', properties: {} },
       output,
       isConcurrencySafe: READ_ONLY,
@@ -89,8 +94,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_list',
       description:
-        '逐层导航笔记库：列出某目录下的子目录与笔记（标题·类型·来源章节·简介），并标出没有微目录的目录。'
-        + 'path 省略即列 vault 根；depth=2 时连下一层笔记一起列。目录层级是「资料 / 章 / 节 / 块」（项目类笔记可少一层）。',
+        '逐层导航笔记库，列出子目录、笔记元数据并标记缺微目录；path 省略=根，depth 控制展开层数。',
       parameters: {
         type: 'object',
         properties: {
@@ -120,9 +124,8 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_search',
       description:
-        '关键词全库检索（vault + 配置的 searchRoots + 会话工作目录旧笔记）；召回由插件做，语义判断由你完成。'
-        + '命中返回标题/ID/类型（块·存量卡·旧笔记）/路径/领域/状态/来源/来源章节/简介/片段。'
-        + '摄入新资料前查重叠、引用旧笔记前定位、判断是否增量更新时用。检索词用核心术语，不要整句。',
+        '关键词检索 vault、searchRoots 与工作目录：返回标题/ID/类型/路径/元数据/片段。'
+        + '插件负责召回，你负责语义判断；用核心术语，不要整句。',
       parameters: {
         type: 'object',
         properties: {
@@ -148,8 +151,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_overview',
       description:
-        '主题/整库总览：列出块清单，并按 `来源章节` 聚合出「资料 → 章 → 节」的覆盖情况与缺口（含"未归类"）。'
-        + '回答"这个主题记全了没有"用它。缺口只依据笔记里真实出现的章节号统计，不会替你虚构资料目录。',
+        '主题/整库块清单，并按 `来源章节` 聚合覆盖与缺口；未归类显式列出，不虚构章节。',
       parameters: {
         type: 'object',
         properties: {
@@ -218,8 +220,8 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_write',
       description:
-        '写入一个笔记块。门禁：先 note_expect_get；带已确认 planId；路径在规划根内且标题未写过。'
-        + '正文按《笔记期望.md》，无模板、必填小节或字数限制。dryRun 只预览；已存在用 note_update。',
+        '写入笔记块。门禁：先 note_expect_get，并带已确认 planId；路径须在规划根内且标题未写过。'
+        + '正文按《笔记期望.md》，无模板、必填小节或字数限制。dryRun 只预览。',
       parameters: {
         type: 'object',
         properties: {
@@ -267,10 +269,8 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_update',
       description:
-        '更新已有笔记：action=append 把补充内容追加到正文（可指定 section，缺省追加到末尾，旧内容天然保留）；'
-        + 'action=replace 整体替换正文——**旧正文会先存入 .study/archive/，绝不丢**（先存档后写正文）；'
-        + 'action=move 把笔记移到新目录（targetPath）；action=definition 只替换一句话定位（字段级微调，不算知识更新）。'
-        + 'dryRun=true 预演 replace/move。',
+        '更新笔记：append 补充；replace 整体替换，旧正文先存入 .study/archive/，绝不丢；'
+        + 'move 迁目录；definition 改一句话定位。dryRun 可预演。',
       parameters: {
         type: 'object',
         properties: {
@@ -302,10 +302,8 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_toc',
       description:
-        '生成/刷新某主题目录的「微目录.md」：按阅读顺序（顺序键→标题）列出该目录的块，带来源章节与一句话简介。'
-        + '**每个主题目录都应有微目录**（note_write 会在缺失时提醒）。'
-        + '只重写 `<!-- note_toc:begin -->` 与 `<!-- note_toc:end -->` 之间的生成段，你手写的导读段落原样保留；'
-        + '增删改名笔记后重跑一次即可保持一致。dryRun=true 只看将写入什么。',
+        '生成/刷新主题目录的「微目录.md」并保留手写导读；只重写生成段。'
+        + '增删改名后重跑；dryRun 只预览。',
       parameters: {
         type: 'object',
         properties: {
@@ -326,9 +324,8 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_link',
       description:
-        '建立双向关联（落盘为 Obsidian wikilink，写在两侧的「### 关联」小节）：'
-        + 'kind=prev（from 是 to 的前置）/ next（后续）/ sibling（同主题兄弟，两侧同向）。'
-        + '已存在的关联不重复添加；旧笔记（无 ID）默认不写，需 config.linkIntoNotes。先校验两侧再写，不留单向入链。',
+        '建立双向 Obsidian wikilink 关联（prev/next/sibling），先校验两侧再写；'
+        + '重复不添加，旧笔记默认不写。',
       parameters: {
         type: 'object',
         properties: {
@@ -372,8 +369,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_rename',
       description:
-        '改标题并同步四件事：frontmatter 标题 → 文件名（仅当文件名=旧标题清洗结果）→ 全库 wikilink 入链 → 断链检测。'
-        + '目标标题/文件名冲突时**不做任何写入**；dryRun=true 先预演。只写 vault 内文件，旧笔记（无 ID）拒绝。',
+        '改标题并同步 frontmatter、文件名、全库 wikilink 与断链检测；冲突零写入，dryRun 可预演。',
       parameters: {
         type: 'object',
         properties: {
@@ -392,8 +388,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_history',
       description:
-        '查看某篇笔记的历史存档（`.study/archive/<ID>/`）：action=list 列出存档（时间/原因/原路径）；'
-        + 'action=read 配合 archiveId 看某份存档全文。存档在笔记被 replace 或被恢复时自动产生，正文里不留历史块。',
+        '查看 `.study/archive/` 历史：list 列存档，read 配合 archiveId 读全文。',
       parameters: {
         type: 'object',
         properties: {
@@ -413,8 +408,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'note_restore',
       description:
-        '把某篇笔记恢复成一份历史存档（缺省恢复最新那份）。恢复前**当前正文会先存入存档**，所以可反复来回；'
-        + 'dryRun=true 先看将恢复成什么。用户说"回退/恢复旧版本/改坏了"时用。',
+        '把笔记恢复为历史存档；恢复前当前正文先存档，可来回，dryRun 可预演。',
       parameters: {
         type: 'object',
         properties: {
@@ -436,9 +430,8 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       name: 'note_lint',
       description:
         `笔记质量体检：按 ${RULES.length} 条规则列出问题与建议——${RULES.map((r) => r.title).join('、')}。`
-        + '规则只覆盖"数据卫生"（会话残留含白名单：L0/L1/L2 球谐带、讲义引用、代码块与折叠块内不扫），'
-        + '不再有模板/字数类检查；报告给问题清单与严重级，不给分数。'
-        + 'ref 给单篇；scope="vault" 批量体检有 ID 的笔记，scope="all" 含旧笔记。',
+        + '覆盖数据卫生与期望检查；只给问题清单和严重级，不给分数。'
+        + 'ref=单篇；scope=vault/all 批量。',
       parameters: {
         type: 'object',
         properties: {
@@ -520,12 +513,9 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
     {
       name: 'study_mode',
       description:
-        '自适应讲解模式。resolve 依据 note_search 确认的相关笔记与接触足迹选快速/详细；'
-        + 'touch 记录接触；set 切换本会话 auto/quick/full；status 查看。'
-        + 'intent/scope 让直答、回顾、学习、应用、排错和系统问题采用不同深度；'
-        + '自动模式需相关笔记和 30 天内实质接触；证据不足或不确定一律详细。'
-        + '默认不向用户展示模式标签。'
-        + '模式只影响讲解和答疑，不改变正式笔记；新会话恢复自动。',
+        '自适应讲解模式：resolve=判断，touch=记录，set=会话覆盖，status=查看。'
+        + '依据 note_search 证据、intent/scope 与 30 天接触窗口；不确定时详细。'
+        + '默认不向用户展示模式标签；只影响讲解和答疑，不改变正式笔记。',
       parameters: {
         type: 'object',
         properties: {

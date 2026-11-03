@@ -141,7 +141,9 @@ describe('buildToolDefs（19 个工具的 schema 契约）', () => {
   test('note_library / note_expect_get：门禁前两环的形状', () => {
     expect(defOf('note_library').parameters.required).toEqual(['action'])
     const props = defOf('note_library').parameters.properties as Record<string, { enum?: string[] }>
-    expect(props.action?.enum).toEqual(['check'])
+    expect(props.action?.enum).toEqual(['check', 'audit'])
+    expect(props.path).toBeTruthy()
+    expect(props.limit).toBeTruthy()
     expect(defOf('note_expect_get').parameters.properties).toEqual({})
     expect(defOf('note_expect_get').description).toContain('已读')
   })
