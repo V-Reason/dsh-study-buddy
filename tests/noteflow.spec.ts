@@ -389,6 +389,29 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     expect(hits).toContain('- 片段：> 新定位')
   })
 
+  test('BUG-004 replace 以 newContent 首引用块为简介，不重复旧简介', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const planId = await planAndConfirm(s)
+    await s.noteWrite({
+      planId, title: '高斯消元法', path: ITEMS[0].path, source: '《计算方法》',
+      content: '> 旧定位\n\n## 小节\n\n旧正文。',
+    })
+    const out = await s.noteUpdate({
+      ref: '高斯消元法', action: 'replace', newContent: '> 新定位\n\n## 小节\n\n新正文。',
+    })
+    expect(out).toContain('简介: 新定位')
+    expect(out).not.toContain('简介: 旧定位')
+    const text = await readFile(join(dir, ITEMS[0].path), 'utf8')
+    expect(text).toContain('简介: 新定位')
+    expect(text).not.toContain('简介: 旧定位')
+    expect(text.match(/^> 新定位$/gm)).toHaveLength(1)
+    expect(text).not.toContain('> 旧定位')
+    expect(text).toContain('新正文。')
+    const hits = await s.search('新定位')
+    expect(hits).toContain('- 简介：新定位')
+  })
+
   test('note_update metadata：先存档、正文逐字不变、未知键保留', async () => {
     const s = store()
     await s.noteExpectGet()

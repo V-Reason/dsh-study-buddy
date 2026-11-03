@@ -1161,6 +1161,7 @@ export class VaultStore {
     if (args.dryRun) {
       return `[dryRun] 将替换：${card.rel}（旧正文会先存档到 ${this.layout.stateDir}/archive/${card.id ?? 'legacy'}/）`
     }
+    const oldParsed = parseFrontmatter(raw)
     const blockInput: BlockInput = {
       title: card.title,
       source: card.source ?? '',
@@ -1169,7 +1170,8 @@ export class VaultStore {
       status: card.status ?? undefined,
       sourceSection: args.sourceSection ?? card.sourceSection ?? undefined,
       order: card.order ?? undefined,
-      summary: args.summary ?? card.definition ?? undefined,
+      // 旧简介以刚读到的磁盘正文为准（索引里的 card.definition 可能落后）
+      summary: args.summary ?? oldParsed.meta?.summary ?? undefined,
     }
     const result = validateBlock(blockInput)
     if (result.errors.length > 0) throw new Error(`替换内容校验失败：${result.errors.join('；')}`)
