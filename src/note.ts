@@ -37,7 +37,7 @@ export interface BlockInput {
   title: string
   /** 资料名（课程/书/项目名） */
   source: string
-  /** 正文 Markdown（尽细尽全，不设上下限） */
+  /** 正文 Markdown（保信息、删噪声；篇幅由技术信息决定） */
   content: string
   /** 领域键（可选；用于检索过滤与 domainFolders 快捷落盘） */
   domain?: string
@@ -47,7 +47,7 @@ export interface BlockInput {
   sourceSection?: string
   /** 微目录排序键 */
   order?: number
-  /** 一句话定位（可选，无长度限制；缺省时从正文首个引用块提取，**不另写一遍引用块**） */
+  /** 一句话定位（可选，无长度限制；缺省时从正文首个引用块提取。正文以 H1 开头时只写 frontmatter） */
   summary?: string
   /** 额外领域标签（如 线性代数） */
   tags?: string[]
@@ -170,12 +170,12 @@ function linksSection(links?: BlockLinks): string {
 
 /**
  * 渲染整篇笔记：
- * frontmatter → 一句话定位（裸 `>` 引用块，可选）→ 正文 → 关联小节。
+ * frontmatter → 正文 → 关联小节。
  * 不加尾部标签；键序由 `renderFrontmatter` 固定。
  *
  * **引用块不重复写两遍**：正文首个引用块优先；只有正文没有定位且显式传了
- * `summary` 时才前置引用块。否则同一句话会连着出现两次（2026-09-15 真机检查
- * 实测 4 篇全中；2026-11-03 的 replace 缺陷同源）。
+ * `summary`、同时正文不以 H1 开头时才前置引用块。正文以 H1 开头时，H1 必须是
+ * 页面第一个正文元素，简介只留在 frontmatter。旧笔记形态继续兼容。
  */
 export function renderNote(doc: BlockDoc): string {
   const tags = [...new Set([doc.domain, ...(doc.tags ?? [])].filter((t): t is string => Boolean(t)))]
@@ -192,7 +192,8 @@ export function renderNote(doc: BlockDoc): string {
     order: doc.order,
     summary: summary || undefined,
   }
-  const lead = explicitSummary && !contentSummary ? `> ${inlineText(explicitSummary)}\n\n` : ''
+  const startsWithH1 = /^\s*#\s+/.test(doc.content)
+  const lead = explicitSummary && !contentSummary && !startsWithH1 ? `> ${inlineText(explicitSummary)}\n\n` : ''
   const body = `${lead}${doc.content.trim()}\n${linksSection(doc.links)}`
   return `${renderFrontmatter(meta).trimEnd()}\n\n${body}`
 }
@@ -275,7 +276,7 @@ function replaceSummaryLine(body: string, summary: string, kind: '简介' | '定
  *
  * - `append`：补充内容（可指定小节），旧内容天然保留；
  * - `replace`：整体替换（旧正文已存档），返回新渲染的全文；
- * - `definition`：字段级微调，只替换正文首个引用块，不算知识更新。
+ * - `definition`：字段级微调；旧笔记替换正文首个引用块，H1 文档只改 frontmatter。
  */
 export function applyUpdate(raw: string, id: string, payload: UpdatePayload): UpdateResult {
   const warnings: string[] = []
@@ -297,9 +298,12 @@ export function applyUpdate(raw: string, id: string, payload: UpdatePayload): Up
     const result = validateSummary(summary)
     if (result.errors.length > 0) throw new Error(`definition 校验失败：${result.errors.join('；')}`)
     warnings.push(...result.warnings)
-    // 正文首引用块与 frontmatter 简介是同一句话的两个投影：一起改，别让检索读到旧值
+    // 旧笔记的正文首引用块与 frontmatter 简介一起改；H1 文档的简介只存在 frontmatter
     const nextFm = replaceFrontmatterSummary(fm, summary)
-    return { text: `${nextFm}${replaceSummaryLine(parsed.body, summary, '定义')}`, warnings }
+    const body = /^\s*#\s+/.test(parsed.body)
+      ? parsed.body
+      : replaceSummaryLine(parsed.body, summary, '定义')
+    return { text: `${nextFm}${body}`, warnings }
   }
 
   if (payload.action === 'replace') {

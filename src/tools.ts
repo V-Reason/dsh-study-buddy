@@ -234,7 +234,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
           order: { type: 'number', description: '同目录阅读顺序（缺省用规划里的值）' },
           domain: { type: 'string', description: '领域键（可选；用于检索过滤与落盘快捷方式）' },
           status: { type: 'string', enum: [...VALID_STATUS], description: '草稿/已确认/需更新，默认 草稿' },
-          summary: { type: 'string', description: '一句话定位，无长度限制；可自动提取' },
+          summary: { type: 'string', description: '一句话定位，无长度限制；H1 文档只写 frontmatter' },
           tags: { type: 'array', items: { type: 'string' }, description: '额外领域标签' },
           links: {
             type: 'object',
@@ -279,7 +279,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
           changes: { type: 'string', description: 'append：要补充的 Markdown' },
           section: { type: 'string', description: 'append：追加到哪个 `### 小节`（缺省=文末）' },
           newContent: { type: 'string', description: 'replace：新正文 Markdown' },
-          summary: { type: 'string', description: 'definition/replace：新的一句话定位' },
+          summary: { type: 'string', description: 'definition/replace：新的一句话定位；H1 文档只改 frontmatter' },
           sourceSection: { type: 'string', description: 'replace/metadata：来源章节' },
           status: { type: 'string', enum: [...VALID_STATUS], description: 'metadata：新状态' },
           targetPath: { type: 'string', description: 'move：新的 vault 内相对路径（含 .md）' },

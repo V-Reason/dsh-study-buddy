@@ -109,11 +109,21 @@ describe('study preset skills', () => {
     )
   })
 
-  test('output-style 固化自然正文优先、克制的结构使用与自适应模式', () => {
+  test('output-style 固化自然正文、按关系选图、克制的结构使用与自适应模式', () => {
     const body = listSkills().find(({ dir }) => dir === 'output-style')!.skill.body
     expect(body).toContain('自然正文优先')
+    expect(body).toContain('比喻只用于降低理解成本')
     expect(body).toContain('列表')
     expect(body).toContain('二维')
+    expect(body).toContain('flowchart')
+    expect(body).toContain('classDiagram')
+    expect(body).toContain('erDiagram')
+    expect(body).toContain('sequenceDiagram')
+    expect(body).toContain('stateDiagram-v2')
+    expect(body).toContain('timeline')
+    expect(body).toContain('每篇只有一个 H1')
+    expect(body).toContain('普通导语')
+    expect(body).toContain('不默认附加“90 秒口径”')
     expect(body).toContain('同一结论')
     expect(body).toContain('默认不出笔记预览')
     expect(body).toContain('模式只影响讲解和答疑')
@@ -180,7 +190,14 @@ describe('study preset skills', () => {
     expect(body).toContain("action: 'confirm'")
     // 模板退场的口径也要写出来（否则模型会自己发明小节）
     expect(body).toContain('没有模板')
-    expect(body).toContain('不设上下限')
+    expect(body).toContain('篇幅由信息完备性决定')
+    expect(body).toContain('删除不推进理解的铺陈')
+    expect(body).toContain('sequenceDiagram')
+    expect(body).toContain('classDiagram')
+    expect(body).toContain('erDiagram')
+    expect(body).toContain('timeline')
+    expect(body).toContain('每篇只有一个 H1')
+    expect(body).not.toContain('尽细尽全')
   })
 
   test('note-format 技能写清归档十步、微目录与覆盖度口径', () => {

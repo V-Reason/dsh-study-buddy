@@ -68,10 +68,21 @@ describe('note 块契约', () => {
     const withLead = renderNote({ id: 'y', ...BASE, content: '> 化上三角后回代\n\n## 直接法\n\n正文。' })
     expect(withLead).toContain('简介: 化上三角后回代')
     expect(withLead.match(/^> 化上三角后回代$/gm)).toHaveLength(1)
-    // 显式传 summary 时才前置引用块（正文里没有定位时仍会补上）
+    // 旧形态正文从 H2 开始时，显式 summary 仍前置引用块
     const explicit = renderNote({ id: 'y', ...BASE, summary: '化上三角后回代', content: '## 直接法\n\n正文。' })
     expect(explicit).toContain('简介: 化上三角后回代')
     expect(explicit.match(/^> 化上三角后回代$/gm)).toHaveLength(1)
+    // 新形态正文从 H1 开始时，简介只在 frontmatter，H1 是正文第一项
+    const explicitH1 = renderNote({
+      id: 'y',
+      ...BASE,
+      summary: '化上三角后回代',
+      content: '# 高斯消元法\n\n## 直接法\n\n正文。',
+    })
+    expect(explicitH1).toContain('简介: 化上三角后回代')
+    expect(explicitH1).not.toContain('> 化上三角后回代')
+    const explicitBody = explicitH1.replace(/^---[\s\S]*?\n---\n/, '').trimStart()
+    expect(explicitBody.startsWith('# 高斯消元法')).toBe(true)
     // 旧笔记形态 `> 概念: …` 仍优先取概念行，此时正文自带的引用块保留（不回归）
     const concept = renderNote({ id: 'y', ...BASE, content: '> 概念: 迭代器是一种设计模式\n\n正文。' })
     expect(concept).toContain('简介: 迭代器是一种设计模式')
@@ -162,6 +173,23 @@ describe('note 更新动作（append / replace / definition）', () => {
     expect(() => applyUpdate(RAW, 'x', { action: 'definition', summary: '' })).toThrow('definition 需要 summary')
     expect(() => applyUpdate('---\nID: x\n---\n正文没有引用块', 'x', { action: 'definition', summary: 's' }))
       .toThrow('要求正文首行为引用块')
+
+    const h1Raw = [
+      '---',
+      'ID: 202611072042_46a429',
+      '标题: asmdef 拓扑',
+      '来源: 项目复盘',
+      '简介: 旧定位',
+      '---',
+      '',
+      '# asmdef 拓扑',
+      '',
+      '正文。',
+    ].join('\n')
+    const h1Result = applyUpdate(h1Raw, '202611072042_46a429', { action: 'definition', summary: '新定位' })
+    expect(h1Result.text).toContain('简介: 新定位')
+    expect(h1Result.text).toContain('\n\n# asmdef 拓扑\n\n正文。')
+    expect(h1Result.text).not.toContain('> 新定位')
   })
 
   test('replace：整篇替换、不产生 <details> 历史块（旧正文由调用方先存档）', () => {
