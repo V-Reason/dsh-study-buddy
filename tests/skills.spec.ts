@@ -129,15 +129,22 @@ describe('study preset skills', () => {
     expect(body).toContain('模式只影响讲解和答疑')
     expect(body).toContain('不确定')
     expect(body).toContain('study_mode')
-    // 2026-11 实际使用回归：聊天端没有 Mermaid 渲染器，图文契约必须分渠道。
-    expect(body).toContain('对话端不渲染 Mermaid')
-    expect(body).toContain('Obsidian 笔记端')
+    // 2026-11-08 V2：用户明确允许在讲解中使用 Mermaid。
+    expect(body).toContain('讲解与笔记均可使用 Mermaid')
+    expect(body).toContain('渲染失败或用户表示看不到')
+    expect(body).not.toContain('对话端不渲染 Mermaid')
     // 代码机制先落对象与时机，再上图、代码和失效边界。
+    expect(body).toContain('第一屏')
     expect(body).toContain('对象与时机')
     expect(body).toContain('一张主图')
     expect(body).toContain('真实代码')
     expect(body).toContain('失效边界')
     expect(body).toContain('一个主机制和最多两个直接后果')
+    expect(body).toContain('一段一个观点')
+    expect(body).toContain('一张图必须替代')
+    expect(body).toContain('并排代码')
+    expect(body).toContain('问题重述与不变量')
+    expect(body).toContain('可见症状')
     expect(body).toContain('不写 `Next:`、下一步预告或自动邀请')
     // 生命周期、多方交互和跨时刻状态变化必须用主图守住结构。
     expect(body).toContain('生命周期、多方交互或跨时刻状态变化')
@@ -178,6 +185,8 @@ describe('study preset skills', () => {
     expect(body).not.toContain('问答 3~6 行')
     expect(body).not.toContain('讲完即出')
     expect(body).not.toContain('三明治')
+    expect(body).not.toContain('清晰？细化/跳过？')
+    expect(body).not.toContain('必须出「微计划」')
   })
 
   test('memory-auto 技能含自迭代要点', () => {
@@ -214,6 +223,8 @@ describe('study preset skills', () => {
     expect(body).toContain('每篇只有一个 H1')
     expect(body).not.toContain('尽细尽全')
     expect(body).toContain('主图')
+    expect(body).toContain('讲解与笔记均可使用 Mermaid')
+    expect(body).toContain('一张图必须替代')
     expect(body).toContain('生命周期、多方交互或跨时刻状态变化')
     expect(body).toContain('不能把所有关系都默认画成 `flowchart`')
     expect(body).toContain('删除主图后会失去关键顺序或边界')
