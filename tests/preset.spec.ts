@@ -196,6 +196,11 @@ describe('presets/study.patch.yml 声明卫生', () => {
     expect(text).not.toContain('问答 3~6 行')
     expect(text).not.toContain('讲完即出"笔记预览"')
     expect(text).not.toContain('三明治 =')
+    expect(text).toContain('对话端不渲染 Mermaid')
+    expect(text).toContain('对象与时机')
+    expect(text).toContain('一个主机制和最多两个直接后果')
+    expect(text).toContain('不写 `Next:`、下一步预告或自动邀请')
+    expect(text).toContain('至少有一张主图')
   })
 
   test('技能资产从已安装包解析（不再锚定预设目录）', () => {
@@ -231,5 +236,11 @@ describe('presets/study.patch.yml 声明卫生', () => {
     expect(template).toContain('每篇只有一个 H1')
     expect(template).not.toContain('加粗小标签起句')
     expect(template).not.toContain('不吝啬篇幅')
+    expect(template).toContain('对话端不渲染 Mermaid')
+    expect(template).toContain('对象与时机')
+    expect(template).toContain('一个主机制和最多两个直接后果')
+    expect(template).toContain('至少有一张主图')
+    expect(template).toContain('反例')
+    expect(template).toContain('好例')
   })
 })
