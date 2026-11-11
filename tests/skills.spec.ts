@@ -265,6 +265,36 @@ describe('study preset skills', () => {
     expect(body).not.toContain('关联卡片')
   })
 
+  test('工程百科笔记契约：对话克制、自研项目离线可复用、证据分级', () => {
+    const style = listSkills().find(({ dir }) => dir === 'output-style')!.skill.body
+    const loop = listSkills().find(({ dir }) => dir === 'study-loop')!.skill.body
+    const format = listSkills().find(({ dir }) => dir === 'note-format')!.skill.body
+    const expectation = readFileSync(join(SKILLS_DIR, '..', 'assets', '笔记期望.md'), 'utf8')
+
+    for (const body of [style, loop, format]) {
+      expect(body).toContain('自研项目')
+      expect(body).toContain('工程复用')
+      expect(body).toContain('源码地图')
+      expect(body).toContain('证据级')
+    }
+
+    for (const body of [format, expectation]) {
+      expect(body).toContain('源码已核对')
+      expect(body).toContain('测试已覆盖')
+      expect(body).toContain('运行已观察')
+      expect(body).toContain('待验证')
+      expect(body).toContain('相对路径')
+      expect(body).toContain('符号名')
+      expect(body).not.toContain('省略开源项目的具体实现细节')
+    }
+
+    // 对话仍是一个主机制；百科笔记不会被对话的“最小证据”规则压回摘要。
+    expect(style).toContain('对话讲解')
+    expect(style).toContain('正式百科笔记')
+    expect(format).toContain('接口、状态或数据契约')
+    expect(format).toContain('适用与不适用条件')
+  })
+
   test('domain-adaptation 技能覆盖数学/数值分析条目', () => {
     const body = listSkills().find(({ dir }) => dir === 'domain-adaptation')!.skill.body
     expect(body).toContain('数学/数值分析')
