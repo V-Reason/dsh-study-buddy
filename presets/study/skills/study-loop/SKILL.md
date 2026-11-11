@@ -64,7 +64,7 @@ description: 四步学习闭环执行细则：指令驱动状态机、自适应�
 
 大模块只用一句话说明范围、对象和下一步；讲完自然结束，用户说继续时再推进。讲解与笔记均可使用 Mermaid；渲染失败或用户表示看不到时改用紧凑 ASCII。
 
-自研项目进入正式笔记归档时切换到工程复用档：对话讲解仍保持单机制和最小证据；笔记要补充源码地图、关键接口与状态契约、真实实现切片、设计取舍、失败恢复、测试与诊断，以及适用与不适用条件。具体取舍由《笔记期望.md》决定，不建立固定小节模板。源码定位使用相对路径加符号名，并用“源码已核对、测试已覆盖、运行已观察、待验证”区分证据级别。
+自研项目进入正式笔记归档时，按 `note-format` 的“工程笔记质量闸”整理覆盖清单；对话讲解仍保持单机制和最小证据，正式笔记不能用摘要替代可复用实现记录。具体结构与证据取舍由《笔记期望.md》和 `note-format` 决定，不建立固定小节模板。
 
 算法题按不变量、小输入 trace、算法、正确性/复杂度/边界、代码组织；排障按可见症状、最小复现、证据、根因、修复、回归验证组织。比较实现时优先并排代码、diff 或共同维度矩阵。
 
@@ -83,19 +83,21 @@ description: 四步学习闭环执行细则：指令驱动状态机、自适应�
 2. note_library(check)    看库状态、期望与待消费规划
 3. note_expect_get        读写法唯一来源并开门禁
 4. note_list              勘探现有目录
-5. note_plan              出目录与块清单提案
-6. note_plan(confirm)     用户拍板后确认 planId
-7. note_write × N         逐块落盘
-8. note_link              建立 wikilink 关联
-9. note_toc               刷新微目录
-10. note_overview         回报覆盖度
-11. study_progress(set) + study_memory(set lastSummary)
+5. 工程笔记质量闸         按 note-format 整理覆盖清单与证据映射
+6. note_plan             出目录与块清单提案
+7. note_plan(confirm)    用户拍板后确认 planId
+8. note_write(dryRun)    工程笔记逐篇预检，修 error 与 warning
+9. note_write × N        预检通过后逐块落盘
+10. note_link            建立 wikilink 关联
+11. note_toc             刷新微目录
+12. note_overview        回报覆盖度
+13. study_progress(set) + study_memory(set lastSummary)
 ```
 
 三条硬门禁不变：未读期望不写、未确认规划不写、越界路径不写。被拒时按工具返回的修复步骤处理。
 
 正式笔记不受快速/详细对话模式影响，始终按期望文件完整、可独立阅读。归档后对相关主题调用 `study_mode(touch kind=note-write)`。
-写入和正文更新会先跑 lint 预检。Mermaid 语法、围栏闭合和可确认不存在的源码路径是硬错误；工程笔记缺源码地图或证据级只作为 warning 回显。先修硬错误，再处理 warning，不绕过工具。
+写入和正文更新会先跑 lint 预检。Mermaid 语法、围栏闭合和可确认不存在的源码路径是硬错误；源码地图、证据级、主图预算等 warning 默认补齐或说明不适用。先修硬错误，再处理 warning，不绕过工具。
 归档收口时同步更新 `study_progress` 的当前阶段、下一动作与最近结果；不要自动附加复习提醒。
 
 ## 可发现性维护
