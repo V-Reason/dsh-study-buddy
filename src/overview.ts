@@ -10,7 +10,7 @@
  */
 
 import { compareText } from './order.ts'
-import { normalizeSourceSection } from './sourceSection.ts'
+import { isSourceRefComplete, normalizeSourceSection } from './sourceSection.ts'
 
 /** 输入：一篇待聚合的笔记（由调用方从目录遍历或索引给出） */
 export interface OverviewNote {
@@ -41,6 +41,8 @@ export interface OverviewChapter {
 
 export interface OverviewResult {
   chapters: OverviewChapter[]
+  /** 资料总纲/综述；不参与章节覆盖度统计 */
+  overviews: Array<{ title: string; rel: string; material: string; overviewTitle: string }>
   /** 无法归入任何章节的笔记（缺 `来源章节` 或写法解析不出） */
   unclassified: Array<{ title: string; rel: string }>
   /** 每份资料已记录的章号（升序） */
@@ -97,6 +99,7 @@ function gapsOf(sections: string[]): string[] {
  */
 export function summarizeOverview(notes: OverviewNote[], opts: { material?: string } = {}): OverviewResult {
   const groups = new Map<string, OverviewChapter>()
+  const overviews: OverviewResult['overviews'] = []
   const unclassified: Array<{ title: string; rel: string }> = []
   const materialChapters = new Map<string, Set<string>>()
   let counted = 0
@@ -105,11 +108,20 @@ export function summarizeOverview(notes: OverviewNote[], opts: { material?: stri
     // 只有块（有 ID 且有来源章节）参与覆盖度；存量卡与旧笔记另行标注
     if (note.kind === 'note') continue
     const ref = note.sourceSection ? normalizeSourceSection(note.sourceSection) : null
-    if (!ref || !ref.material || !ref.chapter) {
+    if (!ref || !isSourceRefComplete(ref)) {
       unclassified.push({ title: note.title, rel: note.rel })
       continue
     }
     if (opts.material && ref.material !== opts.material) continue
+    if (ref.kind === 'overview') {
+      overviews.push({
+        title: note.title,
+        rel: note.rel,
+        material: ref.material,
+        overviewTitle: ref.overviewTitle,
+      })
+      continue
+    }
     counted += 1
     const key = `${ref.material}\u0000${ref.chapter}\u0000${ref.chapterTitle}`
     const group = groups.get(key) ?? {
@@ -143,13 +155,19 @@ export function summarizeOverview(notes: OverviewNote[], opts: { material?: stri
     .map(([material, set]) => ({ material, chapters: [...set].sort(compareSection) }))
     .sort((a, b) => compareText(a.material, b.material))
 
-  return { chapters, unclassified, materials, counted }
+  return {
+    chapters,
+    overviews: overviews.sort((a, b) => compareText(a.material, b.material) || compareText(a.title, b.title)),
+    unclassified,
+    materials,
+    counted,
+  }
 }
 
 /** 渲染成对话可读的报告（工具直接返回它） */
 export function formatOverview(result: OverviewResult, opts: { scope?: string } = {}): string {
   const lines: string[] = [`## 覆盖情况（${opts.scope || '整个库'}）`, '']
-  if (result.chapters.length === 0 && result.unclassified.length === 0) {
+  if (result.chapters.length === 0 && result.overviews.length === 0 && result.unclassified.length === 0) {
     lines.push('该范围内还没有带 ID 的笔记。')
     return lines.join('\n')
   }
@@ -165,6 +183,12 @@ export function formatOverview(result: OverviewResult, opts: { scope?: string } 
   if (result.materials.length > 0) {
     lines.push('')
     for (const item of result.materials) lines.push(`- 《${item.material}》：已记录第 ${item.chapters.join('、')} 章`)
+  }
+  if (result.overviews.length > 0) {
+    lines.push('', `### 综述 ${result.overviews.length} 篇（不计入章节覆盖度）`)
+    for (const item of result.overviews) {
+      lines.push(`- ${item.title}（${item.rel}）｜《${item.material}》${item.overviewTitle}`)
+    }
   }
   if (result.unclassified.length > 0) {
     lines.push('', `### 未归类 ${result.unclassified.length} 篇（缺 来源章节 或写法无法解析）`)

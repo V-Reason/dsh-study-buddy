@@ -90,6 +90,10 @@ export declare class VaultStore {
         sessionCwd?: string;
     }): Promise<string>;
     private lintCtx;
+    private isEngineeringRel;
+    private isEngineeringCard;
+    private sourceReferenceStatus;
+    private preflightBody;
     /**
      * 从《笔记期望.md》解析出的检查项（`- [检查] 禁止/必须 …`）。
      *
@@ -209,6 +213,8 @@ export declare class VaultStore {
         tags?: string[];
         links?: BlockLinks;
         dryRun?: boolean;
+    }, call?: {
+        sessionCwd?: string;
     }): Promise<string>;
     /** `note_update`：append（补充）/ replace（替换，先存档）/ move（迁目录） */
     noteUpdate(args: {

@@ -34,6 +34,13 @@ export interface OverviewChapter {
 }
 export interface OverviewResult {
     chapters: OverviewChapter[];
+    /** 资料总纲/综述；不参与章节覆盖度统计 */
+    overviews: Array<{
+        title: string;
+        rel: string;
+        material: string;
+        overviewTitle: string;
+    }>;
     /** 无法归入任何章节的笔记（缺 `来源章节` 或写法解析不出） */
     unclassified: Array<{
         title: string;

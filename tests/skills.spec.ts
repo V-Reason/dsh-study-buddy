@@ -265,6 +265,58 @@ describe('study preset skills', () => {
     expect(body).not.toContain('关联卡片')
   })
 
+  test('工程笔记质量闸：单一来源、对话边界与证据分级', () => {
+    const style = listSkills().find(({ dir }) => dir === 'output-style')!.skill.body
+    const loop = listSkills().find(({ dir }) => dir === 'study-loop')!.skill.body
+    const format = listSkills().find(({ dir }) => dir === 'note-format')!.skill.body
+    const expectation = readFileSync(join(SKILLS_DIR, '..', 'assets', '笔记期望.md'), 'utf8')
+
+    for (const body of [style, loop, format]) expect(body).toContain('工程笔记')
+    expect(format).toContain('工程复用')
+    expect(format).toContain('源码地图')
+    expect(format).toContain('证据级别')
+    expect(loop).toContain('note-format')
+    expect(style).toContain('note-format')
+
+    for (const body of [format, expectation]) {
+      expect(body).toContain('源码已核对')
+      expect(body).toContain('测试已覆盖')
+      expect(body).toContain('运行已观察')
+      expect(body).toContain('待验证')
+      expect(body).toContain('相对路径')
+      expect(body).toContain('符号名')
+      expect(body).not.toContain('省略开源项目的具体实现细节')
+    }
+
+    // 对话仍是一个主机制；百科笔记不会被对话的“最小证据”规则压回摘要。
+    expect(style).toContain('对话讲解')
+    expect(style).toContain('正式工程笔记')
+    expect(style).toContain('最小真实代码')
+    expect(style).toContain('仅约束对话')
+    expect(style).toContain('note-format')
+    expect(style).not.toContain('按适用项覆盖对象与所有权')
+    expect(format).toContain('核心调用链或状态流')
+    expect(format).toContain('适用与不适用条件')
+    expect(format).toContain('lint.engineeringPaths')
+    expect(format).toContain('写前预检')
+    expect(format).toContain('工程笔记质量闸')
+    expect(format).toContain('唯一执行来源')
+    expect(format).toContain('没有模板不等于没有最低内容要求')
+    expect(format).toContain('note_write(dryRun)')
+    expect(format).toContain('补齐或说明不适用')
+    expect(loop).toContain('Mermaid 语法')
+    expect(loop).toContain('按 note-format')
+    expect(loop).toContain('note_write(dryRun)')
+    expect(loop).toContain('补齐或说明不适用')
+    const persona = readFileSync(DECLARATION, 'utf8')
+    expect(persona).toContain('不得绕过工具直写')
+    expect(persona).toContain('短不等于完整')
+    expect(persona).toContain('工程笔记质量闸')
+    expect(expectation).toContain('默认必须')
+    expect(expectation).toContain('不适用时')
+    expect(expectation).not.toContain('源码地图或证据缺口只作提醒')
+  })
+
   test('domain-adaptation 技能覆盖数学/数值分析条目', () => {
     const body = listSkills().find(({ dir }) => dir === 'domain-adaptation')!.skill.body
     expect(body).toContain('数学/数值分析')

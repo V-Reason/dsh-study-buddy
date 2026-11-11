@@ -17,6 +17,7 @@
  * @module lint
  */
 import { type DocSection } from './notemodel.ts';
+import type { MermaidIssue } from './mermaid.ts';
 export type Severity = 'error' | 'warn' | 'info';
 export interface LintFinding {
     /** 规则 id（稳定，供 rule 过滤与统计） */
@@ -57,6 +58,12 @@ export interface LintContext {
     /** 关闭的规则 id 列表 */
     rulesOff?: string[];
     kind?: 'block' | 'legacy' | 'note';
+    /** 当前笔记位于 lint.engineeringPaths 覆盖范围内 */
+    engineering?: boolean;
+    /** 相对源码路径 → 是否在任一已知项目根下存在；缺键表示无法验证 */
+    sourceReferenceStatus?: Record<string, boolean>;
+    /** 由异步 Mermaid parser 预先计算的问题 */
+    mermaidIssues?: MermaidIssue[];
     /** 由《笔记期望.md》解析出的检查项（`- [检查] 禁止 xx` / `- [检查] 必须 xx`） */
     expectRules?: ExpectRule[];
 }
@@ -70,6 +77,9 @@ export interface RuleCtx {
     bodyChars: number;
     residueLevel: 'off' | 'warn' | 'error';
     kind: 'block' | 'legacy' | 'note';
+    engineering: boolean;
+    sourceReferenceStatus: Record<string, boolean>;
+    mermaidIssues: MermaidIssue[];
     expectRules: ExpectRule[];
 }
 export interface Rule {

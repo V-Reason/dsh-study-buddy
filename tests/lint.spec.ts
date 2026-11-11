@@ -25,10 +25,15 @@ const CLEAN = [
 ].join('\n')
 
 describe('lint 规则注册表', () => {
-  test('规则集只剩 4 条，模板类规则已彻底退场', () => {
-    expect(ruleIds()).toEqual(['session-residue', 'code-language', 'external-resource', 'expect-rule'])
-    expect(RULES).toHaveLength(4)
-    expect(ruleCatalog().map((r) => r.severity)).toEqual(['warn', 'warn', 'info', 'info'])
+  test('规则集含数据卫生与围栏闭合，模板类规则已彻底退场', () => {
+    expect(ruleIds()).toEqual([
+      'session-residue', 'fence-balance', 'mermaid-syntax', 'code-language', 'diagram-budget',
+      'engineering-source-map', 'engineering-evidence', 'source-reference', 'external-resource', 'expect-rule',
+    ])
+    expect(RULES).toHaveLength(10)
+    expect(ruleCatalog().map((r) => r.severity)).toEqual([
+      'warn', 'error', 'error', 'warn', 'warn', 'warn', 'warn', 'error', 'info', 'info',
+    ])
     expect(ruleTitle('session-residue')).toBe('会话残留')
     expect(ruleTitle('不存在的规则')).toBe('不存在的规则')
   })
@@ -61,6 +66,20 @@ describe('lint 规则注册表', () => {
   test('会话残留：residueLevel=error 时严重度升级（但仍不阻塞写盘）', () => {
     const report = lintNote({ title: '甲', body: '见 D:\\a\\b.cs' }, { residueLevel: 'error' })
     expect(report.findings.every((f) => f.severity === 'error')).toBe(true)
+  })
+
+  test('仓库相对源码地图不是本机路径，盘符绝对路径仍然命中', () => {
+    const portabilityBreak = lintNote({
+      title: '工程笔记',
+      body: '实现入口：`Assets/Scripts/Presentation/Root/CombatRoot.cs · Assemble()`。',
+    })
+    expect(portabilityBreak.findings.filter((f) => f.rule === 'session-residue')).toEqual([])
+
+    const absolutePathBreak = lintNote({
+      title: '工程笔记',
+      body: '实现入口：`T:\\GAMES\\deepseaoil\\Assets\\Scripts\\Presentation\\Root\\CombatRoot.cs`。',
+    })
+    expect(absolutePathBreak.findings.some((f) => f.message.includes('本机路径'))).toBe(true)
   })
 
   test('白名单反例：球谐带 / LOD / 讲义的 L 编号 / 代码块与折叠块内都不算残留', () => {
@@ -97,11 +116,71 @@ describe('lint 规则注册表', () => {
     expect(report.passed['code-language']).toBeUndefined()
   })
 
+  test('未闭合代码围栏是 error，完整围栏不受影响', () => {
+    const broken = lintNote({ title: '甲', body: '```mermaid\nflowchart LR\n  A --> B' })
+    const finding = broken.findings.find((f) => f.rule === 'fence-balance')
+    expect(finding?.severity).toBe('error')
+    expect(finding?.message).toContain('未闭合')
+
+    const valid = lintNote({ title: '甲', body: '```mermaid\nflowchart LR\n  A --> B\n```' })
+    expect(valid.findings.some((f) => f.rule === 'fence-balance')).toBe(false)
+  })
+
   test('external-resource 是 info 级且只提示（SEC-7）', () => {
     const report = lintNote({ title: '甲', body: '<img src="https://example.com/a.png">' })
     const finding = report.findings.find((f) => f.rule === 'external-resource')
     expect(finding?.severity).toBe('info')
     expect(finding?.message).toContain('外部资源')
+  })
+
+  test('工程路径缺源码地图或证据级时告警，路径外不触发工程规则', () => {
+    const noMap = lintNote({
+      title: '装配',
+      body: '这里只有装配结论。\n\n证据：源码已核对。',
+    }, { engineering: true })
+    expect(noMap.findings.find((f) => f.rule === 'engineering-source-map')?.severity).toBe('warn')
+    expect(noMap.findings.some((f) => f.rule === 'engineering-evidence')).toBe(false)
+
+    const noEvidence = lintNote({
+      title: '装配',
+      body: '入口：`Assets/Scripts/Presentation/Root/CombatRoot.cs · Assemble()`。',
+    }, { engineering: true })
+    expect(noEvidence.findings.find((f) => f.rule === 'engineering-evidence')?.severity).toBe('warn')
+    expect(noEvidence.findings.some((f) => f.rule === 'engineering-source-map')).toBe(false)
+
+    const generic = lintNote({ title: '定义', body: '幂等表示重复执行结果不变。' })
+    expect(generic.findings.some((f) => f.rule.startsWith('engineering-'))).toBe(false)
+  })
+
+  test('一篇文章超过一张 Mermaid 主图时告警', () => {
+    const body = [
+      '```mermaid', 'flowchart LR', '  A --> B', '```',
+      '', '```mermaid', 'sequenceDiagram', '  A->>B: step', '```',
+    ].join('\n')
+    const report = lintNote({ title: '装配', body })
+    expect(report.findings.find((f) => f.rule === 'diagram-budget')?.severity).toBe('warn')
+  })
+
+  test('源码地图在已知根下不存在时是 error，未提供根时只提示待验证', () => {
+    const body = '入口：`Assets/Scripts/Presentation/Root/CombatRoot.cs · Assemble()`。\n\n源码已核对。'
+    const missing = lintNote({ title: '装配', body }, {
+      engineering: true,
+      sourceReferenceStatus: { 'Assets/Scripts/Presentation/Root/CombatRoot.cs': false },
+    })
+    const missingHit = missing.findings.find((f) => f.rule === 'source-reference')
+    expect(missingHit?.severity).toBe('error')
+    expect(missingHit?.message).toContain('不存在')
+
+    const unverified = lintNote({ title: '装配', body }, { engineering: true })
+    const unverifiedHit = unverified.findings.find((f) => f.rule === 'source-reference')
+    expect(unverifiedHit?.severity).toBe('info')
+    expect(unverifiedHit?.message).toContain('无法验证')
+
+    const known = lintNote({ title: '装配', body }, {
+      engineering: true,
+      sourceReferenceStatus: { 'Assets/Scripts/Presentation/Root/CombatRoot.cs': true },
+    })
+    expect(known.findings.some((f) => f.rule === 'source-reference' && f.severity !== 'info')).toBe(false)
   })
 })
 

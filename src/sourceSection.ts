@@ -11,6 +11,8 @@
  */
 
 export interface SourceRef {
+  /** chapter=可统计章节；overview=资料总纲；invalid=无法归类 */
+  kind: 'chapter' | 'overview' | 'invalid'
   /** 资料名（`《…》` 内的内容或章节号之前的裸文本） */
   material: string
   /** 章号（阿拉伯数字；缺失时为空串） */
@@ -21,9 +23,13 @@ export interface SourceRef {
   section: string
   /** 归一后的完整字符串（原样落进 frontmatter） */
   raw: string
+  /** 总纲 / 综述 / 概览标题（overview 时非空） */
+  overviewTitle: string
 }
 
-const EMPTY: SourceRef = { material: '', chapter: '', chapterTitle: '', section: '', raw: '' }
+const EMPTY: SourceRef = {
+  kind: 'invalid', material: '', chapter: '', chapterTitle: '', section: '', raw: '', overviewTitle: '',
+}
 
 /** 全角数字 → 半角（`第２章` 这类写法在中文输入法下很常见） */
 function toHalfWidthDigits(text: string): string {
@@ -51,7 +57,24 @@ export function normalizeSourceSection(input: string): SourceRef {
   if (!raw) return { ...EMPTY }
 
   const chapterMatch = /第\s*(\d+)\s*章/.exec(raw)
-  if (!chapterMatch) return { ...EMPTY, raw }
+  if (!chapterMatch) {
+    const materialMatch = /《([^》]*)》/.exec(raw)
+    const overviewMatch = /(总纲|综述|概览)/.exec(raw)
+    if (materialMatch && overviewMatch) {
+      const material = squeeze(materialMatch[1])
+      const tail = raw.slice(materialMatch.index + materialMatch[0].length)
+        .replace(/^[\s/·:：-]+/, '')
+      const overviewTitle = squeeze(tail) || overviewMatch[1]
+      return {
+        ...EMPTY,
+        kind: 'overview',
+        material,
+        overviewTitle,
+        raw,
+      }
+    }
+    return { ...EMPTY, raw }
+  }
 
   const chapter = chapterMatch[1]
   const beforeChapter = raw.slice(0, chapterMatch.index)
@@ -75,7 +98,7 @@ export function normalizeSourceSection(input: string): SourceRef {
   const tail = section ? ` / ${section}节` : ''
   const raw2 = material ? `${normalized}${tail}` : `${`第${chapter}章 ${chapterTitle}`.trim()}${tail}`
 
-  return { material, chapter, chapterTitle, section, raw: raw2 }
+  return { kind: 'chapter', material, chapter, chapterTitle, section, raw: raw2, overviewTitle: '' }
 }
 
 /** 归一后的字符串；识别不出「第N章」时返回原文折叠结果（保留用户写法） */
@@ -85,5 +108,7 @@ export function normalizeSourceSectionText(input: string): string {
 
 /** 是否可参与覆盖度聚合（能切出资料名与章号的才算） */
 export function isSourceRefComplete(ref: SourceRef): boolean {
-  return Boolean(ref.material && ref.chapter)
+  return ref.kind === 'overview'
+    ? Boolean(ref.material && ref.overviewTitle)
+    : Boolean(ref.kind === 'chapter' && ref.material && ref.chapter)
 }

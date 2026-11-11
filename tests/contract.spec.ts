@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
@@ -69,6 +70,18 @@ describe('工具面契约', () => {
   test('工具定义可无损 JSON 序列化（注册表会快照参数与输出）', () => {
     expect(() => JSON.stringify(defs)).not.toThrow()
     expect(JSON.stringify(defs).length).toBeGreaterThan(1000)
+  })
+
+  test('Mermaid 运行时依赖与构建 external 已接线', () => {
+    const root = join(import.meta.dirname, '..')
+    const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    expect(pkg.dependencies?.mermaid).toMatch(/^\d/)
+    expect(pkg.dependencies?.jsdom).toMatch(/^\^?\d/)
+    const build = readFileSync(join(root, 'build.mjs'), 'utf8')
+    expect(build).toContain("'mermaid'")
+    expect(build).toContain("'jsdom'")
   })
 })
 

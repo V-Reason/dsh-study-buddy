@@ -6,7 +6,7 @@
 >
 > `dsh-study-buddy` is a study companion plugin and agent preset for [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeekHarness) (DSH). It guides you from source material through adaptive explanations and follow-up questions to durable Markdown notes in an Obsidian vault.
 
-Current version: **v1.6.0** · [MIT](LICENSE) · DSH `>=0.1.7-rc.1 <0.3.0-0`
+Current version: **v1.7.0** · [MIT](LICENSE) · DSH `>=0.1.7-rc.1 <0.3.0-0`
 
 ## Why use it
 
@@ -28,6 +28,7 @@ It is designed for self-directed learners in computer science, game development,
 | Expectation-driven notes | One `笔记期望.md` file defines the writing style instead of multiple templates |
 | Structured documents | Notes follow `source / chapter / section / block` folders, with a maintainable directory index at each topic level |
 | Coverage and audits | Detects missing source sections, missing indexes, broken links, ambiguous links, and duplicate titles |
+| Engineering-note quality gate | Parses Mermaid, blocks broken fences and confirmed-missing source paths, and warns on missing source maps, evidence levels, or extra diagrams |
 | Safe updates and history | Append, replace, move, and rename are explicit operations; replaced content is archived first |
 | Session continuity | Progress, unanswered questions, and preferences persist under `.study/` in the vault |
 

@@ -20,8 +20,10 @@
 import { blankOutBlocks, makeLineOf, type DocSection } from './notemodel.ts'
 import { compareText } from './order.ts'
 import {
-  bodyLength, checkCodeFences, checkExternalResources, scanResidue, type ResidueHit,
+  bodyLength, checkCodeFences, checkExternalResources, EVIDENCE_LEVEL_RE, mermaidDiagramCount,
+  scanResidue, sourceReferences, type ResidueHit,
 } from './lintrules.ts'
+import type { MermaidIssue } from './mermaid.ts'
 
 export type Severity = 'error' | 'warn' | 'info'
 
@@ -67,6 +69,12 @@ export interface LintContext {
   /** 关闭的规则 id 列表 */
   rulesOff?: string[]
   kind?: 'block' | 'legacy' | 'note'
+  /** 当前笔记位于 lint.engineeringPaths 覆盖范围内 */
+  engineering?: boolean
+  /** 相对源码路径 → 是否在任一已知项目根下存在；缺键表示无法验证 */
+  sourceReferenceStatus?: Record<string, boolean>
+  /** 由异步 Mermaid parser 预先计算的问题 */
+  mermaidIssues?: MermaidIssue[]
   /** 由《笔记期望.md》解析出的检查项（`- [检查] 禁止 xx` / `- [检查] 必须 xx`） */
   expectRules?: ExpectRule[]
 }
@@ -81,6 +89,9 @@ export interface RuleCtx {
   bodyChars: number
   residueLevel: 'off' | 'warn' | 'error'
   kind: 'block' | 'legacy' | 'note'
+  engineering: boolean
+  sourceReferenceStatus: Record<string, boolean>
+  mermaidIssues: MermaidIssue[]
   expectRules: ExpectRule[]
 }
 
@@ -127,6 +138,38 @@ export const RULES: Rule[] = [
     },
   },
   {
+    id: 'fence-balance',
+    title: '代码围栏闭合',
+    severity: 'error',
+    run(ctx) {
+      const check = checkCodeFences(ctx.body)
+      if (check.balanced) return []
+      return [{
+        rule: 'fence-balance',
+        severity: 'error',
+        title: '代码围栏闭合',
+        message: `第 ${check.unclosedLine ?? '?'} 行的代码围栏未闭合`,
+        line: check.unclosedLine ?? 0,
+        suggestion: '补上与 opener 同字符且不短于 opener 的闭合围栏',
+      }]
+    },
+  },
+  {
+    id: 'mermaid-syntax',
+    title: 'Mermaid 语法',
+    severity: 'error',
+    run(ctx) {
+      return ctx.mermaidIssues.map((issue) => ({
+        rule: 'mermaid-syntax',
+        severity: 'error' as const,
+        title: 'Mermaid 语法',
+        message: issue.message,
+        line: issue.line,
+        suggestion: '先用 Mermaid 预览确认语法；渲染失败时回退为紧凑 ASCII',
+      }))
+    },
+  },
+  {
     id: 'code-language',
     title: '代码块语言',
     severity: 'warn',
@@ -142,6 +185,83 @@ export const RULES: Rule[] = [
         line: 0,
         suggestion: '给围栏加语言标注（如 ```csharp、```hlsl、```python）；纯文本用 ```text',
       }]
+    },
+  },
+  {
+    id: 'diagram-budget',
+    title: '主图数量',
+    severity: 'warn',
+    run(ctx) {
+      const count = mermaidDiagramCount(ctx.body)
+      if (count <= 1) return []
+      return [{
+        rule: 'diagram-budget',
+        severity: 'warn',
+        title: '主图数量',
+        message: `检测到 ${count} 张 Mermaid 主图；一个阅读单元通常只保留一张`,
+        line: 0,
+        suggestion: '把需要不同图型的机制拆成互链笔记，或删掉不承担核心关系的图',
+      }]
+    },
+  },
+  {
+    id: 'engineering-source-map',
+    title: '工程源码地图',
+    severity: 'warn',
+    run(ctx) {
+      if (!ctx.engineering || sourceReferences(ctx.body).length > 0) return []
+      return [{
+        rule: 'engineering-source-map',
+        severity: 'warn',
+        title: '工程源码地图',
+        message: '工程笔记没有可定位的相对源码路径',
+        line: 0,
+        suggestion: '加入 `Assets/.../Type.cs · Symbol` 形式的源码地图；不记录本机绝对路径',
+      }]
+    },
+  },
+  {
+    id: 'engineering-evidence',
+    title: '证据级别',
+    severity: 'warn',
+    run(ctx) {
+      if (!ctx.engineering || EVIDENCE_LEVEL_RE.test(ctx.body)) return []
+      return [{
+        rule: 'engineering-evidence',
+        severity: 'warn',
+        title: '证据级别',
+        message: '工程笔记没有声明证据状态',
+        line: 0,
+        suggestion: '用源码已核对、测试已覆盖、运行已观察或待验证说明结论依据',
+      }]
+    },
+  },
+  {
+    id: 'source-reference',
+    title: '源码引用',
+    severity: 'error',
+    run(ctx) {
+      if (!ctx.engineering) return []
+      const findings: LintFinding[] = []
+      for (const ref of sourceReferences(ctx.body)) {
+        const status = ctx.sourceReferenceStatus[ref.path]
+        if (status === true) continue
+        const knownMissing = status === false
+        findings.push({
+          rule: 'source-reference',
+          severity: knownMissing ? 'error' : 'info',
+          title: '源码引用',
+          message: knownMissing
+            ? `源码路径不存在：${ref.path}${ref.symbol ? ` · ${ref.symbol}` : ''}`
+            : `无法验证源码路径：${ref.path}${ref.symbol ? ` · ${ref.symbol}` : ''}`,
+          line: ref.line,
+          excerpt: ref.path,
+          suggestion: knownMissing
+            ? '核对仓库相对路径，或把缺失的项目根加入 lint.sourceRoots'
+            : '在项目工作目录中运行 note_lint，或配置 lint.sourceRoots',
+        })
+      }
+      return findings
     },
   },
   {
@@ -266,6 +386,9 @@ export function lintNote(
     bodyChars: bodyLength(body, residueText),
     residueLevel,
     kind,
+    engineering: ctx.engineering === true,
+    sourceReferenceStatus: ctx.sourceReferenceStatus ?? {},
+    mermaidIssues: ctx.mermaidIssues ?? [],
     expectRules: ctx.expectRules ?? [],
   }
   const findings: LintFinding[] = []

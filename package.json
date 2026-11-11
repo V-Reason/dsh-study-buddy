@@ -1,7 +1,7 @@
 {
   "name": "dsh-study-buddy",
   "description": "DSH 通用学习 Agent「学习伙伴」：计划感知、意图驱动讲解与文档式笔记插件——Obsidian vault 多根检索、可发现性体检、规划门禁与跨会话记忆",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
@@ -52,9 +52,14 @@
     "verify:deploy": "pwsh -NoProfile -File tools/verify-deploy.ps1"
   },
   "devDependencies": {
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^24.0.0",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"
+  },
+  "dependencies": {
+    "jsdom": "^27.4.0",
+    "mermaid": "12.3.0"
   }
 }

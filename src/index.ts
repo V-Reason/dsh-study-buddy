@@ -11,7 +11,7 @@
  * @module index
  */
 
-import { promises as fsp } from 'node:fs'
+import { promises as fsp, statSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 /** 笔记契约的唯一来源（阶段 6 起 card.ts / history.ts / moc.ts 已删除） */
 import {
@@ -37,6 +37,8 @@ import {
   auditDiscoverability, formatDiscoverability, type DiscoverabilityNote,
 } from './discoverability.ts'
 import { formatBatch, formatReport, lintNote, parseExpectRules, ruleTitle, summarizeLint, type ExpectRule, type LintReport } from './lint.ts'
+import { sourceReferences } from './lintrules.ts'
+import { validateMermaid } from './mermaid.ts'
 import {
   AUTO_PREFS_KEY, checkMemoryValue, findProgressSentences, formatAutoPrefs, formatMemory,
   normalizeAutoPrefsValue, normalizeMemoryKey, readMemory, writeMemory, type MemoryState,
@@ -430,6 +432,56 @@ export class VaultStore {
     }
   }
 
+  private isEngineeringRel(relValue: string): boolean {
+    const rel = normRel(relValue)
+    return (this.layout.lint?.engineeringPaths ?? []).some((prefix) => rel === prefix || rel.startsWith(`${prefix}/`))
+  }
+
+  private isEngineeringCard(card: IndexedCard): boolean {
+    return this.isEngineeringRel(card.rel)
+  }
+
+  private async sourceReferenceStatus(body: string, sessionCwd?: string): Promise<Record<string, boolean>> {
+    const refs = sourceReferences(body)
+    if (refs.length === 0) return {}
+    const roots = [
+      ...(sessionCwd && String(sessionCwd).trim() && !isFsRoot(String(sessionCwd)) ? [resolve(String(sessionCwd))] : []),
+      ...(this.layout.lint?.sourceRoots ?? []),
+    ].filter((root, index, all) => all.indexOf(root) === index)
+    if (roots.length === 0) return {}
+
+    const out: Record<string, boolean> = {}
+    for (const ref of refs) {
+      out[ref.path] = roots.some((root) => {
+        const abs = resolve(root, ref.path)
+        if (!withinRoot(root, abs)) return false
+        try {
+          return statSync(abs, { throwIfNoEntry: false })?.isFile() === true
+        } catch {
+          return false
+        }
+      })
+    }
+    return out
+  }
+
+  private async preflightBody(body: string, rel: string, sessionCwd?: string): Promise<{
+    errors: LintReport['findings']
+    warnings: LintReport['findings']
+  }> {
+    const report = lintNote({ body }, {
+      ...this.lintCtx(),
+      engineering: this.isEngineeringRel(rel),
+      sourceReferenceStatus: await this.sourceReferenceStatus(body, sessionCwd),
+      mermaidIssues: await validateMermaid(body),
+      expectRules: await this.expectRules(),
+    })
+    return {
+      errors: report.findings.filter((finding) => finding.severity === 'error'),
+      warnings: report.findings.filter((finding) => finding.severity !== 'error'),
+    }
+  }
+
   /**
    * 从《笔记期望.md》解析出的检查项（`- [检查] 禁止/必须 …`）。
    *
@@ -452,13 +504,20 @@ export class VaultStore {
   }
 
   /** 单篇报告：用刚从磁盘读到的原文（保证是最新版） */
-  private async reportOfRaw(raw: string, card: IndexedCard): Promise<LintReport> {
+  private async reportOfRaw(raw: string, card: IndexedCard, sessionCwd?: string): Promise<LintReport> {
     const parsed = parseFrontmatter(raw)
     return lintNote({
       title: parsed.meta?.title ?? card.title,
       summary: parsed.meta?.summary ?? card.definition ?? '',
       body: parsed.body,
-    }, { ...this.lintCtx(), kind: this.kindOf(card), expectRules: await this.expectRules() })
+    }, {
+      ...this.lintCtx(),
+      kind: this.kindOf(card),
+      engineering: this.isEngineeringCard(card),
+      sourceReferenceStatus: await this.sourceReferenceStatus(parsed.body, sessionCwd),
+      mermaidIssues: await validateMermaid(parsed.body),
+      expectRules: await this.expectRules(),
+    })
   }
 
   /**
@@ -467,7 +526,7 @@ export class VaultStore {
    * 代价是批量体检要逐篇读盘——这是"索引不常驻正文"的必然交换：内存从
    * 全库正文降到倒排表，而批量体检本来就是低频重操作。
    */
-  private async reportOfIndexed(card: IndexedCard): Promise<LintReport> {
+  private async reportOfIndexed(card: IndexedCard, sessionCwd?: string): Promise<LintReport> {
     let body = ''
     try {
       body = parseFrontmatter(await fsp.readFile(card.path, 'utf8')).body
@@ -478,7 +537,14 @@ export class VaultStore {
       title: card.title,
       summary: card.definition ?? '',
       body,
-    }, { ...this.lintCtx(), kind: this.kindOf(card), expectRules: await this.expectRules() })
+    }, {
+      ...this.lintCtx(),
+      kind: this.kindOf(card),
+      engineering: this.isEngineeringCard(card),
+      sourceReferenceStatus: await this.sourceReferenceStatus(body, sessionCwd),
+      mermaidIssues: await validateMermaid(body),
+      expectRules: await this.expectRules(),
+    })
   }
 
   /**
@@ -498,7 +564,7 @@ export class VaultStore {
 
   private async lintOne(opts: { ref?: string; rule?: string }, call?: { sessionCwd?: string }): Promise<string> {
     const { card, raw } = await this.resolveCard(opts.ref ?? '', call?.sessionCwd)
-    const report = await this.reportOfRaw(raw, card)
+    const report = await this.reportOfRaw(raw, card, call?.sessionCwd)
     if (opts.rule) {
       const hits = report.findings.filter((f) => f.rule === opts.rule)
       // 规则"跑过没有"要同时看 passed 与 findings：新报告里 `passed` 只收录**零发现**的
@@ -522,7 +588,7 @@ export class VaultStore {
     // 默认只体检"块 + 存量卡"（有 ID）；scope='all' 才带上旧笔记
     const cards = index.all().filter((c) => (opts.scope === 'all' ? true : c.id !== null))
     if (cards.length === 0) return '未找到可体检的笔记。'
-    const reports: LintReport[] = await Promise.all(cards.map((card) => this.reportOfIndexed(card)))
+    const reports: LintReport[] = await Promise.all(cards.map((card) => this.reportOfIndexed(card, call?.sessionCwd)))
     if (opts.rule) {
       const hit = reports.filter((r) => r.findings.some((f) => f.rule === opts.rule))
       const lines = [`规则 ${opts.rule}（${ruleTitle(opts.rule)}）：${hit.length}/${reports.length} 篇命中`]
@@ -1045,7 +1111,7 @@ export class VaultStore {
     tags?: string[]
     links?: BlockLinks
     dryRun?: boolean
-  }): Promise<string> {
+  }, call?: { sessionCwd?: string }): Promise<string> {
     await this.assertVault()
     const targetRel = normRel(input.path)
     if (!targetRel.endsWith('.md')) throw new Error(`path 必须是 vault 内的 .md 相对路径，收到：${input.path}`)
@@ -1070,12 +1136,19 @@ export class VaultStore {
     }
     const result = validateBlock(blockInput)
     if (result.errors.length > 0) throw new Error(`笔记校验失败：${result.errors.join('；')}`)
+    const preflight = await this.preflightBody(blockInput.content, targetRel, call?.sessionCwd)
+    if (preflight.errors.length > 0) {
+      throw new Error(`写入预检失败：${preflight.errors.map((finding) => finding.message).join('；')}`)
+    }
     const abs = resolve(this.layout.vaultRoot, targetRel)
     if (!withinRoot(this.layout.vaultRoot, abs)) throw new Error(`落盘路径越界：${targetRel}`)
     const exists = await fsp.access(abs).then(() => true).catch(() => false)
     if (exists) throw new Error(`目标已存在：${targetRel}——如需改写请用 note_update，避免覆盖`)
     if (input.dryRun) {
-      return `[dryRun] 将写入：${targetRel}（规划 ${input.planId}；未落盘）\n\n${renderNote({ ...blockInput, id: '（dryRun）' })}`
+      const warning = preflight.warnings.length > 0
+        ? `\n提示：${preflight.warnings.map((finding) => finding.message).join('；')}`
+        : ''
+      return `[dryRun] 将写入：${targetRel}（规划 ${input.planId}；未落盘）${warning}\n\n${renderNote({ ...blockInput, id: '（dryRun）' })}`
     }
     const consumed = await consumePlanItem(file, input.title, targetRel, { ttlHours: this.layout.planTtlHours })
     if (!consumed.ok) throw new Error(`写入被拒绝：${consumed.reason}`)
@@ -1086,7 +1159,8 @@ export class VaultStore {
     const dir = dirOfRel(targetRel)
     const dirIndex = this.dirIndexFor(await this.ensureIndex())
     const needToc = dir !== '' && !dirIndex.statOf(dir).hasToc
-    const warn = result.warnings.length > 0 ? `\n提示：${result.warnings.join('；')}` : ''
+    const warnings = [...result.warnings, ...preflight.warnings.map((finding) => finding.message)]
+    const warn = warnings.length > 0 ? `\n提示：${warnings.join('；')}` : ''
     const tocLine = needToc ? `\n⚠ 该目录还没有微目录：请调用 note_toc({ dir: "${dir}" }) 生成，否则导航入口缺失` : ''
     return `已写入：${targetRel}\nID：${id}\n规划：${input.planId}（剩余 ${plan.items.length - plan.consumed.length - 1} 项）${warn}${tocLine}\n\n${text}`
   }
@@ -1140,10 +1214,17 @@ export class VaultStore {
     }
     if (action === 'append') {
       const result = applyNoteUpdate(raw, card.id ?? args.ref, { action: 'append', changes: args.changes, section: args.section })
-      if (args.dryRun) return `[dryRun] 将追加到 ${card.rel}（${args.section ? `「${args.section}」` : '文末'}；未落盘）`
+      const preflight = await this.preflightBody(parseFrontmatter(result.text).body, card.rel, call?.sessionCwd)
+      if (preflight.errors.length > 0) {
+        throw new Error(`更新预检失败：${preflight.errors.map((finding) => finding.message).join('；')}`)
+      }
+      const warning = preflight.warnings.length > 0
+        ? `\n提示：${preflight.warnings.map((finding) => finding.message).join('；')}`
+        : ''
+      if (args.dryRun) return `[dryRun] 将追加到 ${card.rel}（${args.section ? `「${args.section}」` : '文末'}；未落盘）${warning}`
       await atomicWrite(card.path, result.text)
       this.invalidate()
-      return `已更新：${card.rel}（补充${args.section ? `到「${args.section}」` : '到末尾'}）\n\n${result.text}`
+      return `已更新：${card.rel}（补充${args.section ? `到「${args.section}」` : '到末尾'}）${warning}\n\n${result.text}`
     }
     if (action === 'definition') {
       const result = applyNoteUpdate(raw, card.id ?? args.ref, { action: 'definition', summary: args.summary })
@@ -1185,6 +1266,10 @@ export class VaultStore {
     }
     const result = validateBlock(blockInput)
     if (result.errors.length > 0) throw new Error(`替换内容校验失败：${result.errors.join('；')}`)
+    const preflight = await this.preflightBody(blockInput.content, card.rel, call?.sessionCwd)
+    if (preflight.errors.length > 0) {
+      throw new Error(`替换预检失败：${preflight.errors.map((finding) => finding.message).join('；')}`)
+    }
     // 校验按用户传入的 newContent 做（空正文必须拒绝），通过后再继承旧「关联」小节
     blockInput.content = preserveLinksSection(oldParsed.body, args.newContent)
     const entry = await archiveThenWrite({
@@ -1198,7 +1283,10 @@ export class VaultStore {
       write: async () => { await atomicWrite(card.path, renderNote({ ...blockInput, id: card.id ?? generateId() })) },
     })
     this.invalidate()
-    return `已更新：${card.rel}\n旧正文已存档：${this.layout.stateDir}/archive/${card.id ?? 'legacy'}/${entry.id}.md（note_history 可查看、note_restore 可恢复）\n\n${renderNote({ ...blockInput, id: card.id ?? '' })}`
+    const warning = preflight.warnings.length > 0
+      ? `\n提示：${preflight.warnings.map((finding) => finding.message).join('；')}`
+      : ''
+    return `已更新：${card.rel}\n旧正文已存档：${this.layout.stateDir}/archive/${card.id ?? 'legacy'}/${entry.id}.md（note_history 可查看、note_restore 可恢复）${warning}\n\n${renderNote({ ...blockInput, id: card.id ?? '' })}`
   }
 
   /** `note_history`：列出/读取某篇笔记的历史存档 */
@@ -1258,7 +1346,18 @@ export class VaultStore {
     if (norm === '') throw new Error('note_toc 需要 dir（要生成微目录的主题目录，vault 内相对路径）')
     const listing = await listDir(this.layout.vaultRoot, norm)
     const blocks = listing.files.filter((f) => f.kind !== 'note')
-    if (blocks.length === 0) throw new Error(`目录里没有带 ID 的笔记，无法生成微目录：${norm}`)
+    const dirIndex = this.dirIndexFor(await this.ensureIndex())
+    const childTopics: Array<{ dir: string; count: number; hasToc: boolean }> = []
+    for (const sub of listing.subdirs) {
+      const count = dirIndex.countAt(sub).blocks
+      if (count === 0) continue
+      const hasToc = await fsp.access(join(dirPathFor(this.layout.vaultRoot, sub), TOC_FILE))
+        .then(() => true).catch(() => false)
+      childTopics.push({ dir: sub, count, hasToc })
+    }
+    if (blocks.length === 0 && childTopics.length === 0) {
+      throw new Error(`目录里没有带 ID 的笔记或子主题，无法生成微目录：${norm}`)
+    }
     const tocPath = join(dirPathFor(this.layout.vaultRoot, norm), TOC_FILE)
     let custom = ''
     try {
@@ -1278,12 +1377,22 @@ export class VaultStore {
       const section = f.sourceSection ? `（${f.sourceSection.split('/').pop()?.trim() ?? ''}）` : ''
       lines.push(`${i + 1}. [[${f.fileName.replace(/\.md$/i, '')}]]${section}${summary}`)
     })
+    if (childTopics.length > 0) {
+      lines.push('', '### 子主题')
+      for (const child of childTopics) {
+        const name = basename(child.dir)
+        lines.push(child.hasToc
+          ? `- [[${child.dir}/${TOC_FILE.replace(/\.md$/i, '')}|${name}]]（${child.count} 块）`
+          : `- ⚠ ${name}（${child.count} 块，缺微目录）`)
+      }
+    }
     lines.push('<!-- note_toc:end -->', '')
     const text = lines.join('\n')
-    if (opts.dryRun) return `[dryRun] 将写入 ${norm}/${TOC_FILE}（收录 ${blocks.length} 块）：\n\n${text}`
+    const total = blocks.length + childTopics.reduce((sum, child) => sum + child.count, 0)
+    if (opts.dryRun) return `[dryRun] 将写入 ${norm}/${TOC_FILE}（收录 ${total} 块）：\n\n${text}`
     await atomicWrite(tocPath, text)
     this.invalidate()
-    return `已生成：${norm}/${TOC_FILE}（收录 ${blocks.length} 块）\n\n${text}`
+    return `已生成：${norm}/${TOC_FILE}（收录 ${total} 块）\n\n${text}`
   }
 
   /** `note_link` / `note_unlink`：wikilink 关联的双向增删（先校验后写盘） */

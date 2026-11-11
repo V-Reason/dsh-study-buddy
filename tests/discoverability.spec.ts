@@ -46,6 +46,19 @@ describe('笔记可发现性审计', () => {
     expect(report.issues.some((i) => i.kind === 'orphan' && i.rel === 'a/甲.md')).toBe(false)
   })
 
+  test('合法总纲来源单独归类，不报来源章节不可归类', () => {
+    const report = auditDiscoverability([
+      {
+        rel: '项目/总纲.md',
+        title: '总纲',
+        kind: 'block',
+        sourceSection: '《荒原复苏指南》deepseaoil 项目复盘 / 总纲',
+        body: '',
+      },
+    ], ['项目'], { path: '项目' })
+    expect(report.issues.some((i) => i.kind === 'invalid-source-section')).toBe(false)
+  })
+
   test('代码块内链接与注释不参与解析；歧义目标单独报告', () => {
     expect(wikilinkTargets([
       '[[有效]]',

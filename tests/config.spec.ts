@@ -135,6 +135,30 @@ describe('resolveLayout（配置来源链）', () => {
     expect(ok.layout.vaultRoot).toBe(resolve(VAULT))
   })
 
+  test('lint 工程路径规范化，sourceRoots 必须是真实目录', () => {
+    const projectRoot = tmpdir()
+    const result = resolveLayout({
+      vaultRoot: VAULT,
+      lint: {
+        engineeringPaths: ['游戏开发\\项目复盘', ' 游戏开发 / 项目复盘 '],
+        sourceRoots: [projectRoot],
+      },
+    }, { env: envOf(), readFile: readerOf({}) })
+
+    expect(result.layout.lint?.engineeringPaths).toEqual(['游戏开发/项目复盘'])
+    expect(result.layout.lint?.sourceRoots).toEqual([resolve(projectRoot)])
+
+    expect(() => resolveLayout({
+      vaultRoot: VAULT,
+      lint: { engineeringPaths: ['../逃逸'] },
+    }, { env: envOf(), readFile: readerOf({}) })).toThrow(/engineeringPaths/)
+
+    expect(() => resolveLayout({
+      vaultRoot: VAULT,
+      lint: { sourceRoots: [join(tmpdir(), 'definitely-missing-project-root')] },
+    }, { env: envOf(), readFile: readerOf({}) })).toThrow(/sourceRoots/)
+  })
+
   test('默认值兜底不受来源影响', () => {
     const result = resolveLayout({ vaultRoot: VAULT }, { env: envOf(), readFile: readerOf({}) })
     expect(result.layout.stateDir).toBe('.study')

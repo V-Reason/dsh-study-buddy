@@ -11,7 +11,7 @@
  * 3. 新增判定只改本文件，lint 引擎与工具描述自动跟随。
  * @module lintrules
  */
-/** 会话残留：文件路径（`.md` 引用不算——笔记互引是合法内容） */
+/** 会话残留：带机器根的路径；仓库相对的 `Assets/...` 源码地图是长期资产，不在此列 */
 export declare const RESIDUE_PATH_RE: RegExp;
 /** 会话残留：源码行号（需紧跟文件名或成 `L35-55` 区间；`L0/L1/L2` 球谐带白名单） */
 export declare const RESIDUE_LINE_RE: RegExp;
@@ -56,9 +56,26 @@ export interface CodeFenceCheck {
     unlabeled: number;
     /** 未标语言的代码块序号（1 基，**不是行号**） */
     unlabeledIndexes: number[];
+    /** 最后一个 opener 是否缺少同类型 closer */
+    balanced: boolean;
+    /** 未闭合 opener 的行号（1 基） */
+    unclosedLine: number | null;
 }
 /** 代码块语言标注检查 */
 export declare function checkCodeFences(body: string): CodeFenceCheck;
+export declare const EVIDENCE_LEVEL_RE: RegExp;
+export interface SourceReference {
+    path: string;
+    symbol: string | null;
+    line: number;
+}
+/**
+ * 提取仓库相对源码地图。只认带目录与源码扩展名的 inline code，避免把普通文件名
+ * 或绝对路径当工程索引；`· Symbol` 是推荐形式，但不是语法硬要求。
+ */
+export declare function sourceReferences(body: string): SourceReference[];
+/** Mermaid 主图块数量（只看 opener 的语言标记）。 */
+export declare function mermaidDiagramCount(body: string): number;
 export interface ExternalResourceHit {
     line: number;
     excerpt: string;

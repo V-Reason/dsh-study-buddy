@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { VaultStore } from '../src/index.ts'
 import { parseFrontmatter } from '../src/frontmatter.ts'
@@ -632,5 +632,186 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
       vaultRoot: dir, stateDir: '.study', fallbackDir: '未分类', expectFile: '../外面.md',
     })
     await expect(s.noteLibrary('check')).rejects.toThrow(/不能含路径分隔符/)
+  })
+
+  test('note_lint：工程路径内校验真实源码文件，路径外不触发工程规则', async () => {
+    const projectRoot = join(dir, 'project')
+    const sourceDir = join(projectRoot, 'Assets/Scripts/Presentation/Root')
+    await mkdir(sourceDir, { recursive: true })
+    await writeFile(join(sourceDir, 'CombatRoot.cs'), 'public sealed class CombatRoot { }', 'utf8')
+    await mkdir(join(dir, '游戏开发/项目复盘'), { recursive: true })
+    await mkdir(join(dir, '数学'), { recursive: true })
+
+    const frontmatter = (id: string, title: string): string => [
+      '---', `ID: ${id}`, `标题: ${title}`, '来源: deepseaoil', '状态: 草稿',
+      '来源章节: 《荒原复苏指南》第7章 战斗总装', '顺序: 1', '---', '',
+    ].join('\n')
+    await writeFile(join(dir, '游戏开发/项目复盘/装配.md'), `${frontmatter('202611111200_aaaaaa', '装配')}# 装配
+
+入口：\`Assets/Scripts/Presentation/Root/CombatRoot.cs · Assemble()\`。
+
+源码已核对。`, 'utf8')
+    await writeFile(join(dir, '游戏开发/项目复盘/缺件.md'), `${frontmatter('202611111200_bbbbbb', '缺件')}# 缺件
+
+入口：\`Assets/Scripts/Missing.cs · Missing\`。
+
+源码已核对。`, 'utf8')
+    await writeFile(join(dir, '数学/定义.md'), `${frontmatter('202611111200_cccccc', '定义')}# 定义
+
+参数方程给出一条曲线。`, 'utf8')
+
+    const s = new VaultStore({
+      vaultRoot: dir,
+      stateDir: '.study',
+      fallbackDir: '未分类',
+      lint: { engineeringPaths: ['游戏开发/项目复盘'], sourceRoots: [projectRoot] },
+    })
+
+    const valid = await s.lint({ ref: '装配' })
+    expect(valid).not.toContain('源码路径不存在')
+    expect(valid).not.toContain('工程源码地图')
+    expect(valid).not.toContain('证据级别')
+
+    const missing = await s.lint({ ref: '缺件' })
+    expect(missing).toContain('源码路径不存在')
+    expect(missing).toContain('Assets/Scripts/Missing.cs')
+
+    const generic = await s.lint({ ref: '定义' })
+    expect(generic).not.toContain('工程源码地图')
+    expect(generic).not.toContain('证据级别')
+  })
+
+  test('note_write / note_update：客观 lint error 在写盘和存档前阻断', async () => {
+    const projectRoot = join(dir, 'project-write')
+    await mkdir(join(projectRoot, 'Assets/Scripts'), { recursive: true })
+    await writeFile(join(projectRoot, 'Assets/Scripts/Good.cs'), 'public sealed class Good { }', 'utf8')
+    const s = new VaultStore({
+      vaultRoot: dir,
+      stateDir: '.study',
+      fallbackDir: '未分类',
+      lint: { engineeringPaths: ['游戏开发/项目复盘'], sourceRoots: [projectRoot] },
+    })
+    await s.noteExpectGet()
+    const path = '游戏开发/项目复盘/装配.md'
+    const planId = await planAndConfirm(s, [{ title: '装配', path }], '游戏开发/项目复盘')
+
+    await expect(s.noteWrite({
+      planId,
+      title: '装配',
+      path,
+      source: 'deepseaoil',
+      content: '```mermaid\nflowchart LR\n  A --> B',
+    })).rejects.toThrow(/代码围栏未闭合/)
+    expect(await exists(path)).toBe(false)
+
+    await expect(s.noteWrite({
+      planId,
+      title: '装配',
+      path,
+      source: 'deepseaoil',
+      content: '入口：`Assets/Scripts/Missing.cs · Missing`。\n\n源码已核对。',
+    })).rejects.toThrow(/源码路径不存在/)
+    expect(await exists(path)).toBe(false)
+
+    await s.noteWrite({
+      planId,
+      title: '装配',
+      path,
+      source: 'deepseaoil',
+      content: '入口：`Assets/Scripts/Good.cs · Good`。\n\n源码已核对。',
+    })
+    const before = await readFile(join(dir, path), 'utf8')
+    await expect(s.noteUpdate({
+      ref: '装配',
+      action: 'append',
+      changes: '```mermaid\nflowchart LR\n  X --> Y',
+    })).rejects.toThrow(/代码围栏未闭合/)
+    expect(await readFile(join(dir, path), 'utf8')).toBe(before)
+    expect(await s.noteHistory('装配')).not.toContain('历史存档（1 份')
+  })
+
+  test('note_write：Mermaid 语法错误在写盘前阻断', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const path = `${ROOT}/直接法/坏图.md`
+    const planId = await planAndConfirm(s, [{ title: '坏图', path }])
+    const content = [
+      '```mermaid',
+      'sequenceDiagram',
+      '    participant A',
+      '    A->>: missing target',
+      '```',
+    ].join('\n')
+
+    await expect(s.noteWrite({
+      planId,
+      title: '坏图',
+      path,
+      source: '《计算方法》',
+      content,
+    })).rejects.toThrow(/Mermaid/)
+    expect(await exists(path)).toBe(false)
+
+    await mkdir(dirname(join(dir, path)), { recursive: true })
+    await writeFile(join(dir, path), [
+      '---', 'ID: 202611111301_eeeeee', '标题: 坏图', '来源: 《计算方法》', '状态: 草稿',
+      '来源章节: 《计算方法》第2章 线性方程组数值解法 / 2.1节', '顺序: 1', '---', '',
+      content,
+    ].join('\n'), 'utf8')
+    expect(await s.lint({ ref: '坏图' })).toContain('Mermaid 语法')
+  })
+
+  test('note_toc：容器目录导航子主题，并标出缺失的子微目录', async () => {
+    const root = '项目导航'
+    const child = `${root}/子主题`
+    await mkdir(join(dir, child), { recursive: true })
+    await writeFile(join(dir, child, '笔记.md'), [
+      '---', 'ID: 202611111300_dddddd', '标题: 笔记', '来源: 测试', '状态: 草稿',
+      '来源章节: 《测试》第1章 总览', '顺序: 1', '---', '', '# 笔记', '',
+    ].join('\n'), 'utf8')
+    await writeFile(join(dir, child, '微目录.md'), '# 子主题\n', 'utf8')
+
+    const s = store()
+    const toc = await s.noteToc(root)
+    expect(toc).toContain('[[项目导航/子主题/微目录|子主题]]')
+    expect(toc).toContain('1 块')
+
+    await rm(join(dir, child, '微目录.md'), { force: true })
+    const missing = await s.noteToc(root)
+    expect(missing).toContain('子主题（1 块，缺微目录）')
+  })
+
+  test('note_write：工程源码地图和证据缺口只告警，不阻止落盘', async () => {
+    const s = new VaultStore({
+      vaultRoot: dir,
+      stateDir: '.study',
+      fallbackDir: '未分类',
+      lint: { engineeringPaths: ['游戏开发/项目复盘'] },
+    })
+    await s.noteExpectGet()
+    const path = '游戏开发/项目复盘/纯结论.md'
+    const planId = await planAndConfirm(s, [{ title: '纯结论', path }], '游戏开发/项目复盘')
+    const result = await s.noteWrite({
+      planId,
+      title: '纯结论',
+      path,
+      source: 'deepseaoil',
+      content: '# 纯结论\n\n先记录装配结论。',
+    })
+    expect(result).toContain('工程笔记没有可定位')
+    expect(result).toContain('没有声明证据状态')
+    expect(await exists(path)).toBe(true)
+
+    const unverifiedPath = '游戏开发/项目复盘/待验证.md'
+    const unverifiedPlan = await planAndConfirm(s, [{ title: '待验证', path: unverifiedPath }], '游戏开发/项目复盘')
+    const unverified = await s.noteWrite({
+      planId: unverifiedPlan,
+      title: '待验证',
+      path: unverifiedPath,
+      source: 'deepseaoil',
+      content: '入口：`Assets/Scripts/Missing.cs · Missing`。\n\n待验证。',
+    })
+    expect(unverified).toContain('无法验证源码路径')
+    expect(await exists(unverifiedPath)).toBe(true)
   })
 })

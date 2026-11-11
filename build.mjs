@@ -20,7 +20,7 @@ await build({
   platform: 'node',
   target: ['node22'],
   sourcemap: true,
-  external: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-*'],
+  external: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-*', 'jsdom', 'mermaid'],
   logLevel: 'info',
 })
 

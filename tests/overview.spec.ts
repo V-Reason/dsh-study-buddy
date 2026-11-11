@@ -89,6 +89,19 @@ describe('summarizeOverview 聚合', () => {
     expect(result.unclassified).toEqual([])
   })
 
+  test('总纲 / 综述 / 概览进入独立综述分组，不报未归类', () => {
+    const result = summarizeOverview([
+      note('项目总纲', '《荒原复苏指南》deepseaoil 项目复盘 / 总纲', 'block', '项目/总纲.md'),
+      note('课程概览', '《计算方法》课程概览', 'block', '课程/概览.md'),
+    ])
+    expect(result.unclassified).toEqual([])
+    expect(result.overviews.map((item) => item.title)).toEqual(['项目总纲', '课程概览'])
+    expect(result.counted).toBe(0)
+    const text = formatOverview(result)
+    expect(text).toContain('### 综述 2 篇')
+    expect(text).not.toContain('未归类')
+  })
+
   test('material 过滤只留指定资料', () => {
     const notes = [
       note('误差', '《计算方法》第1章 误差与有效数字 / 1.1节', 'block', 'a/误差.md'),
