@@ -373,6 +373,33 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     await assertDryRun({ ref: '高斯消元法', action: 'metadata', status: '需更新', dryRun: true })
   })
 
+  test('Mermaid 校验在 replace 的 dryRun 与真实写入上结论一致', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const planId = await planAndConfirm(s)
+    await s.noteWrite({
+      planId, title: '高斯消元法', path: ITEMS[0].path, source: '《计算方法》',
+      content: '## 正文\n\n旧正文必须保留。',
+    })
+
+    const file = join(dir, ITEMS[0].path)
+    const before = await readFile(file, 'utf8')
+    const newContent = [
+      '## 正文',
+      '',
+      '```mermaid',
+      'flowchart LR',
+      '  A -->',
+      '```',
+    ].join('\n')
+    const update = { ref: '高斯消元法', action: 'replace', newContent }
+
+    await expect(s.noteUpdate({ ...update, dryRun: true })).rejects.toThrow(/Mermaid|预检/)
+    expect(await readFile(file, 'utf8')).toBe(before)
+    await expect(s.noteUpdate(update)).rejects.toThrow(/Mermaid|预检/)
+    expect(await readFile(file, 'utf8')).toBe(before)
+  })
+
   test('BUG-003 definition 同步 frontmatter 简介，note_search 摘要一致', async () => {
     const s = store()
     await s.noteExpectGet()

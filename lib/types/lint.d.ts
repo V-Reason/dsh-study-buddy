@@ -64,6 +64,8 @@ export interface LintContext {
     sourceReferenceStatus?: Record<string, boolean>;
     /** 由异步 Mermaid parser 预先计算的问题 */
     mermaidIssues?: MermaidIssue[];
+    /** 解析器没有执行时，明确进入报告的降级告警 */
+    mermaidWarning?: string;
     /** 由《笔记期望.md》解析出的检查项（`- [检查] 禁止 xx` / `- [检查] 必须 xx`） */
     expectRules?: ExpectRule[];
 }
@@ -80,6 +82,7 @@ export interface RuleCtx {
     engineering: boolean;
     sourceReferenceStatus: Record<string, boolean>;
     mermaidIssues: MermaidIssue[];
+    mermaidWarning: string;
     expectRules: ExpectRule[];
 }
 export interface Rule {

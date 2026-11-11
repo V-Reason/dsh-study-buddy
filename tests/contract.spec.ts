@@ -79,9 +79,6 @@ describe('工具面契约', () => {
     }
     expect(pkg.dependencies?.mermaid).toMatch(/^\d/)
     expect(pkg.dependencies?.jsdom).toMatch(/^\^?\d/)
-    const build = readFileSync(join(root, 'build.mjs'), 'utf8')
-    expect(build).toContain("'mermaid'")
-    expect(build).toContain("'jsdom'")
   })
 })
 

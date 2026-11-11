@@ -38,7 +38,7 @@ import {
 } from './discoverability.ts'
 import { formatBatch, formatReport, lintNote, parseExpectRules, ruleTitle, summarizeLint, type ExpectRule, type LintReport } from './lint.ts'
 import { sourceReferences } from './lintrules.ts'
-import { validateMermaid } from './mermaid.ts'
+import { validateMermaidReport } from './mermaid.ts'
 import {
   AUTO_PREFS_KEY, checkMemoryValue, findProgressSentences, formatAutoPrefs, formatMemory,
   normalizeAutoPrefsValue, normalizeMemoryKey, readMemory, writeMemory, type MemoryState,
@@ -469,11 +469,13 @@ export class VaultStore {
     errors: LintReport['findings']
     warnings: LintReport['findings']
   }> {
+    const mermaid = await validateMermaidReport(body)
     const report = lintNote({ body }, {
       ...this.lintCtx(),
       engineering: this.isEngineeringRel(rel),
       sourceReferenceStatus: await this.sourceReferenceStatus(body, sessionCwd),
-      mermaidIssues: await validateMermaid(body),
+      mermaidIssues: mermaid.issues,
+      mermaidWarning: mermaid.warning,
       expectRules: await this.expectRules(),
     })
     return {
@@ -506,6 +508,7 @@ export class VaultStore {
   /** 单篇报告：用刚从磁盘读到的原文（保证是最新版） */
   private async reportOfRaw(raw: string, card: IndexedCard, sessionCwd?: string): Promise<LintReport> {
     const parsed = parseFrontmatter(raw)
+    const mermaid = await validateMermaidReport(parsed.body)
     return lintNote({
       title: parsed.meta?.title ?? card.title,
       summary: parsed.meta?.summary ?? card.definition ?? '',
@@ -515,7 +518,8 @@ export class VaultStore {
       kind: this.kindOf(card),
       engineering: this.isEngineeringCard(card),
       sourceReferenceStatus: await this.sourceReferenceStatus(parsed.body, sessionCwd),
-      mermaidIssues: await validateMermaid(parsed.body),
+      mermaidIssues: mermaid.issues,
+      mermaidWarning: mermaid.warning,
       expectRules: await this.expectRules(),
     })
   }
@@ -533,6 +537,7 @@ export class VaultStore {
     } catch (error) {
       this.skipped.push({ path: card.path, reason: `文件读取失败（${(error as NodeJS.ErrnoException).code ?? '未知错误'}）` })
     }
+    const mermaid = await validateMermaidReport(body)
     return lintNote({
       title: card.title,
       summary: card.definition ?? '',
@@ -542,7 +547,8 @@ export class VaultStore {
       kind: this.kindOf(card),
       engineering: this.isEngineeringCard(card),
       sourceReferenceStatus: await this.sourceReferenceStatus(body, sessionCwd),
-      mermaidIssues: await validateMermaid(body),
+      mermaidIssues: mermaid.issues,
+      mermaidWarning: mermaid.warning,
       expectRules: await this.expectRules(),
     })
   }
@@ -1249,9 +1255,6 @@ export class VaultStore {
     }
     // replace：先存档、后写正文（需求 N1 的关键不变量）
     if (!args.newContent?.trim()) throw new Error('replace 需要 newContent（新正文）')
-    if (args.dryRun) {
-      return `[dryRun] 将替换：${card.rel}（旧正文会先存档到 ${this.layout.stateDir}/archive/${card.id ?? 'legacy'}/）`
-    }
     const oldParsed = parseFrontmatter(raw)
     const blockInput: BlockInput = {
       title: card.title,
@@ -1270,6 +1273,12 @@ export class VaultStore {
     if (preflight.errors.length > 0) {
       throw new Error(`替换预检失败：${preflight.errors.map((finding) => finding.message).join('；')}`)
     }
+    const warning = preflight.warnings.length > 0
+      ? `\n提示：${preflight.warnings.map((finding) => finding.message).join('；')}`
+      : ''
+    if (args.dryRun) {
+      return `[dryRun] 将替换：${card.rel}（旧正文会先存档到 ${this.layout.stateDir}/archive/${card.id ?? 'legacy'}/）${warning}`
+    }
     // 校验按用户传入的 newContent 做（空正文必须拒绝），通过后再继承旧「关联」小节
     blockInput.content = preserveLinksSection(oldParsed.body, args.newContent)
     const entry = await archiveThenWrite({
@@ -1283,9 +1292,6 @@ export class VaultStore {
       write: async () => { await atomicWrite(card.path, renderNote({ ...blockInput, id: card.id ?? generateId() })) },
     })
     this.invalidate()
-    const warning = preflight.warnings.length > 0
-      ? `\n提示：${preflight.warnings.map((finding) => finding.message).join('；')}`
-      : ''
     return `已更新：${card.rel}\n旧正文已存档：${this.layout.stateDir}/archive/${card.id ?? 'legacy'}/${entry.id}.md（note_history 可查看、note_restore 可恢复）${warning}\n\n${renderNote({ ...blockInput, id: card.id ?? '' })}`
   }
 

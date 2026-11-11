@@ -4,3 +4,7 @@
 # 二进制
 *.png binary
 *.jpg binary
+
+# 构建产物内联了第三方源码字符串，不能把字符串内的空白当作补丁格式错误
+lib/index.js -whitespace
+lib/index.js.map -whitespace

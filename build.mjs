@@ -4,13 +4,43 @@
  * profile's node_modules provides them). tsc then emits declarations.
  */
 import { build } from 'esbuild'
-import { mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { dirname, resolve } from 'node:path'
 
 mkdirSync('lib', { recursive: true })
 // 清掉上一次的声明产物：删掉的模块（card/insight/template/moc/history…）如果留着
 // `lib/types/*.d.ts`，消费方还是能 import 到"已经不存在的 API"——编译期零信号。
 rmSync('lib/types', { recursive: true, force: true })
+
+/** jsdom 默认样式表原本从包内文件读取；单文件产物需要把这段小资产一并内联。 */
+const inlineJsdomStylesheet = {
+  name: 'inline-jsdom-default-stylesheet',
+  setup(build) {
+    build.onLoad(
+      { filter: /jsdom[\\/]lib[\\/]jsdom[\\/]living[\\/]helpers[\\/]style-rules\.js$/ },
+      (args) => {
+        const cssPath = resolve(dirname(args.path), '../../browser/default-stylesheet.css')
+        const css = readFileSync(cssPath, 'utf8')
+        const source = readFileSync(args.path, 'utf8').replace(
+          /fs\.readFileSync\(\s*path\.resolve\(\s*__dirname,\s*"\.\.\/\.\.\/browser\/default-stylesheet\.css"\s*\),\s*\{\s*encoding:\s*"utf-8"\s*\}\s*\)/,
+          JSON.stringify(css),
+        )
+        return { contents: source, loader: 'js', resolveDir: dirname(args.path) }
+      },
+    )
+    build.onLoad(
+      { filter: /jsdom[\\/]lib[\\/]jsdom[\\/]living[\\/]xhr[\\/]XMLHttpRequest-impl\.js$/ },
+      (args) => {
+        const source = readFileSync(args.path, 'utf8').replace(
+          /const syncWorkerFile = require\.resolve \? require\.resolve\("\.\/xhr-sync-worker\.js"\) : null;/,
+          'const syncWorkerFile = null;',
+        )
+        return { contents: source, loader: 'js', resolveDir: dirname(args.path) }
+      },
+    )
+  },
+}
 
 await build({
   entryPoints: ['src/index.ts'],
@@ -20,7 +50,21 @@ await build({
   platform: 'node',
   target: ['node22'],
   sourcemap: true,
-  external: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-*', 'jsdom', 'mermaid'],
+  sourcesContent: false,
+  minify: true,
+  legalComments: 'none',
+  banner: {
+    js: [
+      "import { createRequire } from 'node:module';",
+      "import { dirname } from 'node:path';",
+      "import { fileURLToPath } from 'node:url';",
+      'const require = createRequire(import.meta.url);',
+      'const __filename = fileURLToPath(import.meta.url);',
+      'const __dirname = dirname(__filename);',
+    ].join('\n'),
+  },
+  plugins: [inlineJsdomStylesheet],
+  external: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-*'],
   logLevel: 'info',
 })
 

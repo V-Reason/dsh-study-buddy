@@ -75,6 +75,8 @@ export interface LintContext {
   sourceReferenceStatus?: Record<string, boolean>
   /** 由异步 Mermaid parser 预先计算的问题 */
   mermaidIssues?: MermaidIssue[]
+  /** 解析器没有执行时，明确进入报告的降级告警 */
+  mermaidWarning?: string
   /** 由《笔记期望.md》解析出的检查项（`- [检查] 禁止 xx` / `- [检查] 必须 xx`） */
   expectRules?: ExpectRule[]
 }
@@ -92,6 +94,7 @@ export interface RuleCtx {
   engineering: boolean
   sourceReferenceStatus: Record<string, boolean>
   mermaidIssues: MermaidIssue[]
+  mermaidWarning: string
   expectRules: ExpectRule[]
 }
 
@@ -159,7 +162,7 @@ export const RULES: Rule[] = [
     title: 'Mermaid 语法',
     severity: 'error',
     run(ctx) {
-      return ctx.mermaidIssues.map((issue) => ({
+      const issues = ctx.mermaidIssues.map((issue) => ({
         rule: 'mermaid-syntax',
         severity: 'error' as const,
         title: 'Mermaid 语法',
@@ -167,6 +170,15 @@ export const RULES: Rule[] = [
         line: issue.line,
         suggestion: '先用 Mermaid 预览确认语法；渲染失败时回退为紧凑 ASCII',
       }))
+      if (!ctx.mermaidWarning) return issues
+      return [...issues, {
+        rule: 'mermaid-syntax',
+        severity: 'warn' as const,
+        title: 'Mermaid 校验',
+        message: ctx.mermaidWarning,
+        line: 0,
+        suggestion: '确认插件产物已内联解析器；修复前不要把这轮体检视为 Mermaid 已通过',
+      }]
     },
   },
   {
@@ -389,6 +401,7 @@ export function lintNote(
     engineering: ctx.engineering === true,
     sourceReferenceStatus: ctx.sourceReferenceStatus ?? {},
     mermaidIssues: ctx.mermaidIssues ?? [],
+    mermaidWarning: ctx.mermaidWarning ?? '',
     expectRules: ctx.expectRules ?? [],
   }
   const findings: LintFinding[] = []
