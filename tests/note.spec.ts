@@ -306,11 +306,13 @@ describe('sourceSection 归一（覆盖度数据源）', () => {
   test('标准写法：资料名 + 章 + 节', () => {
     const ref = normalizeSourceSection('《计算方法》第2章 线性方程组数值解法 / 2.1节')
     expect(ref).toEqual({
+      kind: 'chapter',
       material: '计算方法',
       chapter: '2',
       chapterTitle: '线性方程组数值解法',
       section: '2.1',
       raw: '《计算方法》第2章 线性方程组数值解法 / 2.1节',
+      overviewTitle: '',
     })
   })
 

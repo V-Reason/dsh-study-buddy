@@ -10,6 +10,8 @@
  * @module sourceSection
  */
 export interface SourceRef {
+    /** chapter=可统计章节；overview=资料总纲；invalid=无法归类 */
+    kind: 'chapter' | 'overview' | 'invalid';
     /** 资料名（`《…》` 内的内容或章节号之前的裸文本） */
     material: string;
     /** 章号（阿拉伯数字；缺失时为空串） */
@@ -20,6 +22,8 @@ export interface SourceRef {
     section: string;
     /** 归一后的完整字符串（原样落进 frontmatter） */
     raw: string;
+    /** 总纲 / 综述 / 概览标题（overview 时非空） */
+    overviewTitle: string;
 }
 /**
  * 归一 `来源章节`：

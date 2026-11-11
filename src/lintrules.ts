@@ -12,10 +12,10 @@
  * @module lintrules
  */
 
-import { blankOutBlocks, codeFenceLanguages } from './notemodel.ts'
+import { blankOutBlocks, scanCodeFences } from './notemodel.ts'
 
-/** 会话残留：文件路径（`.md` 引用不算——笔记互引是合法内容） */
-export const RESIDUE_PATH_RE = /(?:[A-Za-z]:\\|Assets[\\/]|\.(?:shader|unity|mat|asset|hlsl|cs|cginc|compute)\b)/
+/** 会话残留：带机器根的路径；仓库相对的 `Assets/...` 源码地图是长期资产，不在此列 */
+export const RESIDUE_PATH_RE = /(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/]|file:\/\/|~\/|\/(?:Users|home|mnt|Volumes)\/)/
 /** 会话残留：源码行号（需紧跟文件名或成 `L35-55` 区间；`L0/L1/L2` 球谐带白名单） */
 export const RESIDUE_LINE_RE = /\bL\d+(?:\s*[-–]\s*L?\d+)?\b/
 /** 会话残留：第二人称 */
@@ -129,13 +129,53 @@ export interface CodeFenceCheck {
   unlabeled: number
   /** 未标语言的代码块序号（1 基，**不是行号**） */
   unlabeledIndexes: number[]
+  /** 最后一个 opener 是否缺少同类型 closer */
+  balanced: boolean
+  /** 未闭合 opener 的行号（1 基） */
+  unclosedLine: number | null
 }
 
 /** 代码块语言标注检查 */
 export function checkCodeFences(body: string): CodeFenceCheck {
-  const langs = codeFenceLanguages(body)
+  const scan = scanCodeFences(body)
+  const langs = scan.languages
   const unlabeledIndexes = langs.map((l, i) => (l.trim() === '' ? i + 1 : 0)).filter((n) => n > 0)
-  return { total: langs.length, unlabeled: unlabeledIndexes.length, unlabeledIndexes }
+  return {
+    total: langs.length,
+    unlabeled: unlabeledIndexes.length,
+    unlabeledIndexes,
+    balanced: scan.unclosedLine === null,
+    unclosedLine: scan.unclosedLine,
+  }
+}
+
+export const EVIDENCE_LEVEL_RE = /源码已核对|测试已覆盖|运行已观察|待验证/
+
+export interface SourceReference {
+  path: string
+  symbol: string | null
+  line: number
+}
+
+/**
+ * 提取仓库相对源码地图。只认带目录与源码扩展名的 inline code，避免把普通文件名
+ * 或绝对路径当工程索引；`· Symbol` 是推荐形式，但不是语法硬要求。
+ */
+export function sourceReferences(body: string): SourceReference[] {
+  const refs: SourceReference[] = []
+  const text = blankOutBlocks(body)
+  const re = /`((?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:cs|shader|hlsl|cginc|compute|asmdef|json|unity))(?:\s*·\s*([^`\n]+))?`/g
+  text.split(/\r?\n/).forEach((line, index) => {
+    for (const match of line.matchAll(re)) {
+      refs.push({ path: match[1], symbol: match[2]?.trim() || null, line: index + 1 })
+    }
+  })
+  return refs
+}
+
+/** Mermaid 主图块数量（只看 opener 的语言标记）。 */
+export function mermaidDiagramCount(body: string): number {
+  return scanCodeFences(body).languages.filter((lang) => lang.toLowerCase() === 'mermaid').length
 }
 
 export interface ExternalResourceHit {

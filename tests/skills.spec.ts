@@ -293,6 +293,11 @@ describe('study preset skills', () => {
     expect(style).toContain('正式百科笔记')
     expect(format).toContain('接口、状态或数据契约')
     expect(format).toContain('适用与不适用条件')
+    expect(format).toContain('lint.engineeringPaths')
+    expect(format).toContain('写前预检')
+    expect(loop).toContain('Mermaid 语法')
+    const persona = readFileSync(DECLARATION, 'utf8')
+    expect(persona).toContain('不得绕过工具直写')
   })
 
   test('domain-adaptation 技能覆盖数学/数值分析条目', () => {

@@ -16,12 +16,50 @@
  * @module config
  */
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { EXPECT_FILE } from './dirs.ts'
 import { ruleIds } from './lint.ts'
 import { MAX_WALK_FILES, isFsRoot, type VaultLayout } from './vault.ts'
+
+function normalizeEngineeringPaths(values: string[] | undefined): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of values ?? []) {
+    const text = String(raw).trim().replace(/\\/g, '/')
+    if (!text) continue
+    if (/^[A-Za-z]:\//.test(text) || text.startsWith('/')) {
+      throw new Error(`lint.engineeringPaths 必须是 vault 相对路径：${raw}`)
+    }
+    const parts = text.split('/').map((part) => part.trim()).filter(Boolean)
+    if (parts.includes('..')) throw new Error(`lint.engineeringPaths 不能包含 ..：${raw}`)
+    const norm = parts.join('/')
+    if (!norm || seen.has(norm)) continue
+    seen.add(norm)
+    out.push(norm)
+  }
+  return out
+}
+
+function resolveSourceRoots(values: string[] | undefined): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of values ?? []) {
+    const text = String(raw).trim()
+    if (!text) continue
+    const abs = resolve(text)
+    if (isFsRoot(abs)) throw new Error(`lint.sourceRoots 不能是文件系统根：${abs}`)
+    if (!statSync(abs, { throwIfNoEntry: false })?.isDirectory()) {
+      throw new Error(`lint.sourceRoots 目录不存在或不可读：${abs}`)
+    }
+    if (!seen.has(abs)) {
+      seen.add(abs)
+      out.push(abs)
+    }
+  }
+  return out
+}
 
 /**
  * 插件配置：`VaultLayout` 的"可省略默认值"视图（EXT-6：配置类型只有一份定义，
@@ -199,6 +237,13 @@ export function resolveLayout(config: StudyConfig | undefined, options: ResolveO
       )
     }
   }
+  const lint = merged.lint
+    ? {
+        ...merged.lint,
+        engineeringPaths: normalizeEngineeringPaths(merged.lint.engineeringPaths),
+        sourceRoots: resolveSourceRoots(merged.lint.sourceRoots),
+      }
+    : undefined
   const maxWalkFiles = Number(merged.maxWalkFiles)
   const layout: VaultLayout = {
     vaultRoot,
@@ -209,7 +254,7 @@ export function resolveLayout(config: StudyConfig | undefined, options: ResolveO
     searchRoots: Array.isArray(merged.searchRoots) ? merged.searchRoots.map(String) : [],
     includeSessionCwd: merged.includeSessionCwd === true,
     linkIntoNotes: merged.linkIntoNotes === true,
-    lint: merged.lint,
+    lint,
     indexTtlMs: Number.isFinite(Number(merged.indexTtlMs)) && Number(merged.indexTtlMs) >= 0 ? Number(merged.indexTtlMs) : 2000,
     maxWalkFiles: Number.isFinite(maxWalkFiles) && maxWalkFiles >= 1 ? Math.floor(maxWalkFiles) : MAX_WALK_FILES,
     planTtlHours: Number.isFinite(Number(merged.planTtlHours)) && Number(merged.planTtlHours) > 0

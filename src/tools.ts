@@ -221,7 +221,8 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       name: 'note_write',
       description:
         '写入笔记块。门禁：先 note_expect_get，并带已确认 planId；路径须在规划根内且标题未写过。'
-        + '正文按《笔记期望.md》，无模板、必填小节或字数限制。dryRun 只预览。',
+        + '正文按《笔记期望.md》，无模板、必填小节或字数限制。写入前会阻断坏围栏、坏 Mermaid、'
+        + '已知根下不存在的源码路径；工程质量缺口只告警。dryRun 同样预检但不落盘。',
       parameters: {
         type: 'object',
         properties: {
@@ -250,7 +251,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         required: ['planId', 'title', 'path', 'source', 'content'],
       },
       output,
-      execute: (args) => store.noteWrite({
+      execute: (args, exec) => store.noteWrite({
         planId: String(args.planId ?? ''),
         title: String(args.title ?? ''),
         path: String(args.path ?? ''),
@@ -264,13 +265,14 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         tags: stringList(args.tags),
         links: linksOf(args.links),
         dryRun: args.dryRun === true,
-      }),
+      }, { sessionCwd: sessionCwdOf(exec) }),
     },
     {
       name: 'note_update',
       description:
         '更新笔记：append 补充；replace 整体替换，旧正文先存入 .study/archive/，绝不丢；'
-        + 'move 迁目录；definition 改一句话定位；metadata 只改来源章节/状态，正文逐字不变。dryRun 可预演。',
+        + 'move 迁目录；definition 改一句话定位；metadata 只改来源章节/状态，正文逐字不变。'
+        + '正文更新在存档前执行 lint 预检，客观错误不会产生新版本。dryRun 可预演。',
       parameters: {
         type: 'object',
         properties: {
@@ -305,7 +307,7 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
       name: 'note_toc',
       description:
         '生成/刷新主题目录的「微目录.md」并保留手写导读；只重写生成段。'
-        + '增删改名后重跑；dryRun 只预览。',
+        + '生成段会导航直接子主题；容器目录也可生成。增删改名后重跑；dryRun 只预览。',
       parameters: {
         type: 'object',
         properties: {

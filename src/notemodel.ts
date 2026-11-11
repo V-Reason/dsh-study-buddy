@@ -162,19 +162,32 @@ export function insertBlockBefore(body: string, block: string, beforeTitle = '�
 
 /** 从 Markdown 中提取 fenced code block 的语言标注（空串 = 未标语言） */
 export function codeFenceLanguages(body: string): string[] {
-  const out: string[] = []
-  let inFence = false
-  for (const line of String(body ?? '').split(/\r?\n/)) {
+  return scanCodeFences(body).languages
+}
+
+export interface CodeFenceScan {
+  languages: string[]
+  unclosedLine: number | null
+}
+
+/** 扫描代码围栏；同一 opener 必须由同字符、长度不短的 closer 关闭。 */
+export function scanCodeFences(body: string): CodeFenceScan {
+  const languages: string[] = []
+  let opener: { marker: string; line: number } | null = null
+  const lines = String(body ?? '').split(/\r?\n/)
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]
     const m = /^[ \t]*(```+|~~~+)[ \t]*([^\s`~]*)/.exec(line)
     if (!m) continue
-    if (inFence) {
-      inFence = false
+    const marker = m[1]
+    if (opener) {
+      if (marker[0] === opener.marker[0] && marker.length >= opener.marker.length) opener = null
       continue
     }
-    inFence = true
-    out.push(m[2] ?? '')
+    opener = { marker, line: index + 1 }
+    languages.push(m[2] ?? '')
   }
-  return out
+  return { languages, unclosedLine: opener?.line ?? null }
 }
 
 /** 编号/项目列表项数量（`1.` / `1)` / `- ` / `* ` / `+ `）。

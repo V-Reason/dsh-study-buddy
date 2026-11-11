@@ -89,6 +89,10 @@ export interface LintConfig {
     residueLevel?: 'off' | 'warn' | 'error';
     /** 禁用的规则 id 列表 */
     rulesOff?: string[];
+    /** vault 相对目录前缀：这些目录下的笔记启用工程复用规则 */
+    engineeringPaths?: string[];
+    /** 额外项目根：验证笔记里的仓库相对源码路径是否存在 */
+    sourceRoots?: string[];
 }
 export interface VaultLayout {
     vaultRoot: string;

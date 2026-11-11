@@ -74,6 +74,12 @@ export declare function makeLineOf(text: string): (index: number) => number;
 export declare function insertBlockBefore(body: string, block: string, beforeTitle?: string): string;
 /** 从 Markdown 中提取 fenced code block 的语言标注（空串 = 未标语言） */
 export declare function codeFenceLanguages(body: string): string[];
+export interface CodeFenceScan {
+    languages: string[];
+    unclosedLine: number | null;
+}
+/** 扫描代码围栏；同一 opener 必须由同字符、长度不短的 closer 关闭。 */
+export declare function scanCodeFences(body: string): CodeFenceScan;
 /** 编号/项目列表项数量（`1.` / `1)` / `- ` / `* ` / `+ `）。
  *  迁移期保留（模板类 lint 规则仍引用），阶段 6 随 `template.ts` 删除。 */
 export declare function countListItems(body: string): number;
