@@ -167,12 +167,15 @@ export function codeFenceLanguages(body: string): string[] {
 
 export interface CodeFenceScan {
   languages: string[]
+  /** 每个 opener 的 1 基行号，与 languages 同下标 */
+  openerLines: number[]
   unclosedLine: number | null
 }
 
 /** 扫描代码围栏；同一 opener 必须由同字符、长度不短的 closer 关闭。 */
 export function scanCodeFences(body: string): CodeFenceScan {
   const languages: string[] = []
+  const openerLines: number[] = []
   let opener: { marker: string; line: number } | null = null
   const lines = String(body ?? '').split(/\r?\n/)
   for (let index = 0; index < lines.length; index++) {
@@ -186,8 +189,9 @@ export function scanCodeFences(body: string): CodeFenceScan {
     }
     opener = { marker, line: index + 1 }
     languages.push(m[2] ?? '')
+    openerLines.push(index + 1)
   }
-  return { languages, unclosedLine: opener?.line ?? null }
+  return { languages, openerLines, unclosedLine: opener?.line ?? null }
 }
 
 /** 编号/项目列表项数量（`1.` / `1)` / `- ` / `* ` / `+ `）。

@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
@@ -34,9 +35,13 @@ describe('发布产物可脱离 profile 依赖运行', () => {
     })
     expect(result.status, result.stderr).toBe(0)
 
-    const report = JSON.parse(result.stdout) as { valid: string; invalid: string }
+    const report = JSON.parse(result.stdout) as { library: string; valid: string; invalid: string }
+    const version = (JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { version: string }).version
+    expect(report.library).toContain(`- 插件：v${version} · Mermaid/JSDOM 已内联`)
     expect(report.valid).not.toContain('Mermaid 校验未执行')
     expect(report.valid).not.toContain('Mermaid 语法')
     expect(report.invalid).toContain('Mermaid 语法')
+    const artifact = readFileSync(join(root, 'lib', 'index.js'), 'utf8')
+    expect(artifact).not.toMatch(/await import\(["'](?:mermaid|jsdom)["']\)/)
   }, 60_000)
 })

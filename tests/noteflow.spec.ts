@@ -565,6 +565,32 @@ describe('阶段 4b 端到端：门禁与闭环', () => {
     expect(await readFile(bFile, 'utf8')).not.toContain('- 前置：[[高斯消元法]]')
   })
 
+  test('note_update replace 保留既有领域标签全集', async () => {
+    const s = store()
+    await s.noteExpectGet()
+    const path = `${ROOT}/领域标签保真.md`
+    const planId = await planAndConfirm(s, [{ title: '领域标签保真', path }])
+    await s.noteWrite({
+      planId,
+      title: '领域标签保真',
+      path,
+      source: '《计算方法》',
+      domain: '计算方法',
+      tags: ['线性代数', '数值分析'],
+      content: '## 直接法\n\n第一版正文。',
+    })
+
+    await s.noteUpdate({
+      ref: '领域标签保真',
+      action: 'replace',
+      newContent: '## 直接法\n\n第二版正文。',
+    })
+
+    const text = await readFile(join(dir, path), 'utf8')
+    expect(text).toContain('领域: #计算方法 #线性代数 #数值分析')
+    expect(text).toContain('第二版正文。')
+  })
+
   test('note_lint：会话残留与期望检查项都能报出（无分值）', async () => {
     const s = store()
     await s.noteExpectGet()

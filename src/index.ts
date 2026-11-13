@@ -13,6 +13,7 @@
 
 import { promises as fsp, statSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
+import { ARTIFACT_LABEL, ARTIFACT_MARKER, PLUGIN_VERSION } from './buildInfo.ts'
 /** 笔记契约的唯一来源（阶段 6 起 card.ts / history.ts / moc.ts 已删除） */
 import {
   LINK_LABELS, applyMetadataUpdate, applyUpdate as applyNoteUpdate, generateId, inverseKind, preserveLinksSection,
@@ -911,6 +912,7 @@ export class VaultStore {
     const lines = [
       `## 笔记库状态`,
       '',
+      `- 插件：v${PLUGIN_VERSION} · ${ARTIFACT_LABEL}`,
       `- vault 根：${this.layout.vaultRoot}（可读可写）`,
       `- 状态目录：${this.layout.stateDir}/（进度、记忆、规划、存档；删掉不丢笔记）`,
       `- 笔记：块 ${blocks} 篇、存量卡 ${legacy} 篇、旧笔记 ${notes} 篇`,
@@ -1261,6 +1263,7 @@ export class VaultStore {
       source: card.source ?? '',
       content: args.newContent,
       domain: card.domain ?? undefined,
+      tags: card.domain ? card.tags.slice(1) : card.tags,
       status: card.status ?? undefined,
       sourceSection: args.sourceSection ?? card.sourceSection ?? undefined,
       order: card.order ?? undefined,
@@ -1796,7 +1799,8 @@ export function apply(ctx: HostContextLike | undefined, config?: StudyConfig): v
   for (const warning of resolved.warnings) console.error(`[dsh-study-buddy] ⚠ ${warning}`)
   // 来源回显：排障第一问是"到底读的哪个 vault"，让它出现在启动日志里（不翻配置文件）
   console.info(
-    `[dsh-study-buddy] vaultRoot ← ${resolved.vaultRootFrom}：${resolved.layout.vaultRoot}`
+    `[dsh-study-buddy] 插件 v${PLUGIN_VERSION}（${ARTIFACT_LABEL}；${ARTIFACT_MARKER}）`
+    + `；vaultRoot ← ${resolved.vaultRootFrom}：${resolved.layout.vaultRoot}`
     + `（宿主适配：${host.viaDshLoader ? 'dsh-loader 稳定入口' : '直接 Cordis 服务'}）`,
   )
 

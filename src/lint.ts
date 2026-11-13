@@ -188,13 +188,13 @@ export const RULES: Rule[] = [
     run(ctx) {
       const check = checkCodeFences(ctx.body)
       if (check.unlabeled === 0) return []
-      // unlabeledIndexes 是"第几个代码块"（1 基），不是行号——报告里按块序号说明
+      // 同时给 opener 行号与块序号：行号用于定位，块序号保留给习惯按图块导航的读者。
       return [{
         rule: 'code-language',
         severity: 'warn' as const,
         title: '代码块语言',
-        message: `代码块未标语言（第 ${check.unlabeledIndexes.join('、')} 块，共 ${check.total} 块）`,
-        line: 0,
+        message: `代码块未标语言（第 ${check.unlabeledLines.join('、')} 行；第 ${check.unlabeledIndexes.join('、')} 块，共 ${check.total} 块）`,
+        line: check.unlabeledLines[0] ?? 0,
         suggestion: '给围栏加语言标注（如 ```csharp、```hlsl、```python）；纯文本用 ```text',
       }]
     },

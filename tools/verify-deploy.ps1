@@ -75,6 +75,23 @@ if (-not (Test-Path -LiteralPath $repoLib)) {
     Write-Bad "lib/index.js 哈希不一致（仓库 $($repoHash.Substring(0,12))… / profile $($instHash.Substring(0,12))…）"
     Write-Info "修复：Remove-Item -Recurse -Force '$installedDir'; cd '$profileDir'; pnpm install（用户指南 §3.7）"
   }
+
+  $repoArtifact = [System.IO.File]::ReadAllText($repoLib)
+  $instArtifact = [System.IO.File]::ReadAllText($installedLib)
+  $externalRuntimeImport = 'await import\("(?:mermaid|jsdom)"\)'
+  foreach ($pair in @(
+      @{ Label = '仓库'; Path = $repoLib; Text = $repoArtifact },
+      @{ Label = '已装'; Path = $installedLib; Text = $instArtifact }
+    )) {
+    if ($pair.Text -match $externalRuntimeImport) {
+      Write-Bad "$($pair.Label)产物仍含 Mermaid/JSDOM 运行时包解析：$($pair.Path)"
+    }
+    if (-not $pair.Text.Contains('dsh-study-buddy-artifact:v') -or -not $pair.Text.Contains(':bundled-mermaid-jsdom')) {
+      Write-Bad "$($pair.Label)产物缺少内联发布标记：$($pair.Path)"
+    } else {
+      Write-Ok "$($pair.Label)产物含 Mermaid/JSDOM 内联发布标记"
+    }
+  }
 }
 
 # ── 2. 交付形态（声明式预设 + bundle 选中） ───────────────────────────────────
@@ -85,6 +102,13 @@ if (-not (Test-Path -LiteralPath $installedManifestPath)) {
   Write-Bad "已安装包没有 package.json：$installedManifestPath"
 } else {
   $manifest = Get-Content -LiteralPath $installedManifestPath -Raw | ConvertFrom-Json
+  $repoManifestForVersion = Get-Content -LiteralPath (Join-Path $RepoRoot 'package.json') -Raw | ConvertFrom-Json
+  if ($manifest.version -ne $repoManifestForVersion.version) {
+    Write-Bad "插件版本不一致（仓库 v$($repoManifestForVersion.version) / 已装 v$($manifest.version)）——运行实例不是仓库当前产物"
+    Write-Info "修复：发布对应 commit 后，在 profile 执行 pnpm update dsh-study-buddy，再重启 DSH"
+  } else {
+    Write-Ok "插件版本一致（v$($manifest.version)）"
+  }
   $declared = $manifest.dsh.bundle.patch
   if (-not $declared) {
     Write-Bad "已安装包没有 dsh.bundle.patch —— 预设不会被声明（「学习伙伴」不会出现在名单里，且不报错）"

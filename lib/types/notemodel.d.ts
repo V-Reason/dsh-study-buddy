@@ -76,6 +76,8 @@ export declare function insertBlockBefore(body: string, block: string, beforeTit
 export declare function codeFenceLanguages(body: string): string[];
 export interface CodeFenceScan {
     languages: string[];
+    /** 每个 opener 的 1 基行号，与 languages 同下标 */
+    openerLines: number[];
     unclosedLine: number | null;
 }
 /** 扫描代码围栏；同一 opener 必须由同字符、长度不短的 closer 关闭。 */

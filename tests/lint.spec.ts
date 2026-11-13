@@ -107,11 +107,12 @@ describe('lint 规则注册表', () => {
     expect(report.notRun).toContain('会话残留')
   })
 
-  test('代码块语言：未标语言的块报块序号（不是行号）', () => {
+  test('代码块语言：未标语言的块同时报告 opener 行号与块序号', () => {
     const report = lintNote({ title: '甲', body: '```\nplain\n```\n\n```python\nx=1\n```' })
     const finding = report.findings.find((f) => f.rule === 'code-language')
+    expect(finding?.message).toContain('第 1 行')
     expect(finding?.message).toContain('第 1 块')
-    expect(finding?.line).toBe(0)
+    expect(finding?.line).toBe(1)
     expect(checkCodeFences('```python\nx\n```').unlabeled).toBe(0)
     expect(report.passed['code-language']).toBeUndefined()
   })

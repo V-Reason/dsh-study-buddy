@@ -56,6 +56,8 @@ export interface CodeFenceCheck {
     unlabeled: number;
     /** 未标语言的代码块序号（1 基，**不是行号**） */
     unlabeledIndexes: number[];
+    /** 未标语言 opener 的 1 基行号，与 unlabeledIndexes 同下标 */
+    unlabeledLines: number[];
     /** 最后一个 opener 是否缺少同类型 closer */
     balanced: boolean;
     /** 未闭合 opener 的行号（1 基） */

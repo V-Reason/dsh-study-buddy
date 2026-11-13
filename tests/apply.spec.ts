@@ -64,6 +64,14 @@ function fakeCtx(register?: (def: { name: string }) => () => void): FakeCtx {
 }
 
 describe('apply（fail-loud 与 vaultRoot==cwd 回归）', () => {
+  test('挂载时回显插件版本与内联产物标识', () => {
+    const fake = fakeCtx()
+    apply(fake.ctx, { vaultRoot: dir })
+    const output = vi.mocked(console.info).mock.calls.flat().map(String).join('\n')
+    expect(output).toContain('插件 v')
+    expect(output).toContain('Mermaid/JSDOM 已内联')
+  })
+
   test('vaultRoot 等于工作目录时注册全部 19 个工具（launcher 以 vault 为 cwd 的部署回归）', () => {
     const prev = process.cwd()
     try {

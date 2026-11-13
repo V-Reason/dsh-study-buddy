@@ -129,6 +129,8 @@ export interface CodeFenceCheck {
   unlabeled: number
   /** 未标语言的代码块序号（1 基，**不是行号**） */
   unlabeledIndexes: number[]
+  /** 未标语言 opener 的 1 基行号，与 unlabeledIndexes 同下标 */
+  unlabeledLines: number[]
   /** 最后一个 opener 是否缺少同类型 closer */
   balanced: boolean
   /** 未闭合 opener 的行号（1 基） */
@@ -139,11 +141,15 @@ export interface CodeFenceCheck {
 export function checkCodeFences(body: string): CodeFenceCheck {
   const scan = scanCodeFences(body)
   const langs = scan.languages
-  const unlabeledIndexes = langs.map((l, i) => (l.trim() === '' ? i + 1 : 0)).filter((n) => n > 0)
+  const missing = langs
+    .map((language, index) => ({ language, index }))
+    .filter(({ language }) => language.trim() === '')
+  const unlabeledIndexes = missing.map(({ index }) => index + 1)
   return {
     total: langs.length,
     unlabeled: unlabeledIndexes.length,
     unlabeledIndexes,
+    unlabeledLines: missing.map(({ index }) => scan.openerLines[index]),
     balanced: scan.unclosedLine === null,
     unclosedLine: scan.unclosedLine,
   }

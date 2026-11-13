@@ -33,6 +33,7 @@ await writeFile(join(vaultRoot, 'invalid.md'), note('invalid-id', '坏图', [
 ].join('\n')), 'utf8')
 
 const store = new VaultStore({ vaultRoot, stateDir: '.study', fallbackDir: '未分类' })
+const library = await store.noteLibrary('check')
 const valid = await store.lint({ ref: '合法图' })
 const invalid = await store.lint({ ref: '坏图' })
-process.stdout.write(JSON.stringify({ valid, invalid }))
+process.stdout.write(JSON.stringify({ library, valid, invalid }))
