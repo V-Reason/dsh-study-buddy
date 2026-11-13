@@ -4,7 +4,7 @@
  * profile's node_modules provides them). tsc then emits declarations.
  */
 import { build } from 'esbuild'
-import { mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 
@@ -44,7 +44,7 @@ const inlineJsdomStylesheet = {
   },
 }
 
-await build({
+const result = await build({
   entryPoints: ['src/index.ts'],
   outfile: 'lib/index.js',
   bundle: true,
@@ -71,7 +71,35 @@ await build({
   plugins: [inlineJsdomStylesheet],
   external: ['@deepseek-ai/cordis', '@deepseek-ai/dsh-*'],
   logLevel: 'info',
+  write: false,
 })
+
+/**
+ * Windows 在 Vitest 刚退出时可能仍短暂映射旧 bundle。先生成临时文件，再重试
+ * 原子替换；直接让 esbuild 覆写目标会报 "user-mapped section open"。
+ */
+function commitOutput(target, contents) {
+  const temp = `${target}.tmp-${process.pid}`
+  writeFileSync(temp, contents)
+  let lastError
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      renameSync(temp, target)
+      return
+    } catch (error) {
+      lastError = error
+      const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+      if (!['EBUSY', 'EPERM', 'EACCES'].includes(code)) break
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
+    }
+  }
+  rmSync(temp, { force: true })
+  throw lastError
+}
+
+for (const output of result.outputFiles) {
+  commitOutput(output.path, output.contents)
+}
 
 const artifact = readFileSync('lib/index.js', 'utf8')
 if (/await import\(["'](?:mermaid|jsdom)["']\)/.test(artifact)) {

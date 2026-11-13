@@ -6,7 +6,7 @@
 >
 > `dsh-study-buddy` 是 [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeekHarness)（DSH）的「学习伙伴」插件与 Agent 预设。它陪你完成读取资料、自适应讲解、对话答疑和归档笔记，并把内容写成 Obsidian vault 里普通、可检索的 Markdown 文档。
 
-当前版本：**v1.7.1** · [MIT](LICENSE) · 支持 DSH `>=0.1.7-rc.1 <0.3.0-0`
+当前版本：**v1.7.2** · [MIT](LICENSE) · 支持 DSH `>=0.1.7-rc.1 <0.3.0-0`
 
 ## 为什么值得用
 
@@ -135,6 +135,7 @@ cp presets/study/assets/笔记期望.md "<your vault>/笔记期望.md"
 | 安装、配置、工具与排障 | [用户使用指南（中文）](docs/用户使用指南.md) |
 | 设计原则与关键取舍 | [设计文档（中文）](docs/设计文档.md) |
 | 模块、API、规则与测试布局 | [技术文档（中文）](docs/技术文档.md) |
+| 发布流程、缺陷回归与故障定位 | [开发维护与回归（中文）](docs/开发维护与回归.md) |
 | 全部文档入口与维护约定 | [文档地图（中文）](docs/README.md) |
 | 版本变化与已知问题 | [更新记录（中文）](docs/更新记录.md) |
 

@@ -1,84 +1,49 @@
 # docs/archive — 历史文档归档
 
-> 这里放**已完成、已被取代或仅供溯源**的文档。当前有效文档在 `docs/` 根目录、`docs/refactor/`（本轮过程）与 `docs/check/`（验证）。
-> 归档不等于删除：历史结论、复盘方法论、用户反馈原件都保留，只是不再作为执行依据。
+> 这里保存已完成、已被取代或仅供溯源的材料。归档不等于删除，但其中的版本、路径、
+> 行号和结论都是时间点快照，不能直接当作当前行为说明。
+>
+> 当前行为从 [`../README.md`](../README.md) 进入；发布与回归从
+> [`../开发维护与回归.md`](../开发维护与回归.md) 进入。
 
-## 归档判据（三条满足其一即归档）
+## 1. 归档判据
 
-1. **已完成**：文档里的事项全部落地，且落地结果已在当前代码/文档中体现；
-2. **已取代**：内容被更新版本文档覆盖（如卡片格式规范 `card-format/SKILL.md` → 文档式笔记规范 `note-format/SKILL.md`，v1.0 改名）；
-3. **仅供溯源**：需求/设计的历史原稿，保留用于解释"为什么当初这样设计"。
+满足任一条件即归档：
 
-**不归档**：当前文档——文档地图 `docs/README.md`、操作手册 `docs/用户使用指南.md`、设计文档 `docs/设计文档.md`、
-技术文档 `docs/技术文档.md`、经验文档 `docs/经验文档.md`、更新记录 `docs/更新记录.md`、
-本轮过程文档 `docs/refactor/`、验证脚本 `docs/check/prompt-verify-all-features.md`。
+- 文档里的计划、需求或修复已全部落地，当前结论已经进入现行文档。
+- 内容被更新版本取代，例如卡片体系被文档式笔记取代。
+- 只用于解释设计来龙去脉、历史误判或真实会话体验。
 
-## 目录
+归档时保留原文结论；工具移动后只修相对链接和归档状态说明。
 
-### `design/` — 设计与体检历史
+## 2. 目录索引
 
-| 文档 | 是什么 | 为什么归档 | 当前口径在哪 |
-| :-- | :-- | :-- | :-- |
-| `card-format-2026-09-redesign-proposal.md` | 卡片格式与质量重设计提案（P0/P1/P2 三层） | **已全部落地**（v0.6.0–v0.8.0） | `docs/设计文档.md` |
-| `design-2026-09-card-framework-landing-record.md` | 本轮重设计的落地记录与验收（按 P0/P1/P2 逐项对照） | 内容已并入 `docs/设计文档.md`（设计）与 `docs/技术文档.md`（实现） | `docs/设计文档.md`、`docs/技术文档.md` |
-| `DeepSeekHarness —— 通用学习 Agent.md` | 项目早期需求与交互设计稿 | 卡片格式与交互细则已被技能取代（文件头也已自标"历史需求文档"） | `presets/study/skills/note-format/SKILL.md`、`study-loop/SKILL.md` |
-| `health-check-2026-08-21.md` | v0.3.0 全面体检（定义提取 P0 修复 + 8 项加固） | 问题全部修复，8 项建议全部实施（测试 70 → 81 → 209） | 代码即口径；本仓库测试与 `docs/用户使用指南.md` |
-
-### `dev-experience/` — 开发经验与故障复盘
-
-| 文档 | 是什么 | 为什么归档 | 仍然有效的结论 |
-| :-- | :-- | :-- | :-- |
-| `postmortem-2026-08-21-tools-not-registered.md` | vaultRoot == cwd 时 9 个工具静默不注册的复盘 | 故障已修（fail-loud），版本停在 0.3.0 语境 | fail-loud 设计、`tests/apply.spec.ts` 回归仍生效 |
-| `postmortem-2026-08-23-vault-subfolder-reorganization.md` | vault 子文件夹重组 + `card_id` 预生成 ID 的两个坑 | 事件已处理完毕 | `domainFolders` 是配置而非约定；`card_create` 不消费 `card_id` 预取值（已写进工具描述） |
-| `dev-experience-2026-08-four-features.md` | 四需求落地会话实录（自迭代开关/开场门禁/图片提取/阶梯式解剖） | 该轮已发布（v0.4.0） | 纯函数优先、技能关键词断言钉住等方法论 |
-| `dev-experience-2026-09-experience-report-fixes.md` | 五轮体验报告修复实录（v0.3.0 → v0.4.0） | 该轮已发布 | "版本号是最后一刀""工作区外数据先备份+唯一锚点校验" |
-| `dev-experience-2026-09-platform-adaptation.md` | dsh 0.1.3-alpha.1 平台适配实录（v0.4.0 → v0.5.0） | 适配已完成 | `session.events` → `snapshotEvents()` 双形状探测仍生效 |
-| `dev-experience-2026-09-card-framework-redesign.md` | 本轮重设计会话实录（v0.5.0 → v0.8.0） | 内容已并入 `docs/经验文档.md`（并补充了文档归档与行尾两坑） | 规则类需求先只读校准、成对结构用状态机、新旧值互为子串时先排除新值 |
-
-### `review/` — 审查与复审报告（原件）
-
-两轮代码审查的**时间点快照**：首轮（v0.8.0 重构后，`01`~`06`）+ 复审（v0.9.0 修复后，`07`）。
-结论与逐项修复状态已回填到现行台账 [`审查修复记录.md`](审查修复记录.md)，报告本身不再改动。
-
-| 文档 | 是什么 | 为什么归档 | 当前口径在哪 |
-| :-- | :-- | :-- | :-- |
-| `01-隐私与安全.md` | SEC-1~SEC-8 安全审计 | 47 项发现全部处置完毕（38 修 / 5 部分 / 2 不修 / 1 文档化 / 1 无需动作） | `审查修复记录.md` §二 |
-| `02-复杂度与可维护性.md` | CPLX-1~CPLX-11 度量与死代码 | 同上 | 同上 |
-| `03-可拓展性.md` | EXT-1~EXT-8 扩展点评估 | 同上 | 同上 |
-| `04-业务质量.md` | BIZ-1~BIZ-12（含 2 个 blocker） | 同上 | 同上 |
-| `05-性能表现.md` | PERF-1~PERF-8 实测与对照 | 同上（复测数据见 `07` §六） | 同上 |
-| `06-架构决策.md` | ARCH 六问（挑战式评审） | 同上 | `审查修复记录.md` §2.7 |
-| `07-复审-修复验收.md` | 第二次审查：blocker 探针验收 + 15 条修复副作用（N1~N15） | 15 条副作用已于 v0.9.1 全部修复 | `审查修复记录.md` §三 |
-
-> 报告内的行号、路径与章节引用均为**当时状态**，不随代码更新改写——这是有意的：它记录了"当时看到了什么"。
-
-### `experience-reports/` — 用户侧体验报告（原件）
-
-七次真实学习会话的体验报告。它们全部保留为**时间点快照**，用于需求溯源和回归对照；
-报告中的旧路径、旧工具名与当时缺陷都按原语境保留，不作为当前使用说明。
-
-| 文档 | 主题 |
+| 目录 | 内容 |
 | :-- | :-- |
-| `2026-09-01_study-partner-dsh-experience-report.md` | 早期学习伙伴闭环基线 |
-| `2026-09-01_study-partner-dsh-experience-report-l20-games101.md` | GAMES101 L20 |
-| `2026-09-01_study-partner-dsh-experience-report-b17-surface-shader.md` | B17 表面着色器 |
-| `2026-09-02_study-partner-dsh-experience-report-unity-shader-pbr-ch18-20.md` | PBR 18–20 |
-| `2026-09-03_study-partner-dsh-experience-report-games101-l21-22-finish.md` | GAMES101 L21–22 收尾 |
-| `2026-09-17_study-partner-dsh-experience-report-note-format-first-run.md` | 文档式笔记首次实战 |
-| `2026-09-30_study-partner-dsh-experience-report-luban-config-pipeline.md` | Luban 配表工作流 |
+| [`refactor/2026-v1.0-v1.4/`](refactor/2026-v1.0-v1.4/) | 文档式笔记重构与计划感知的已完成需求、选型和实施计划 |
+| [`reports/2026-09-15/`](reports/2026-09-15/) | v1.0 时期真实会话验证与修复复验快照 |
+| [`defects/`](defects/) | BUG-001～008 的完整复现、证据、根因、修复与验收记录 |
+| [`review/`](review/) | 2026-09 两轮代码审查原件 |
+| [`design/`](design/) | 卡片时代、早期学习 Agent 与项目体检历史稿 |
+| [`dev-experience/`](dev-experience/) | 长篇开发实录、事故复盘与方法论 |
+| [`experience-reports/`](experience-reports/) | 2026-09 学习伙伴真实会话体验报告 |
+| [`审查修复记录.md`](审查修复记录.md) | v0.9 审查结论与逐项处置台账 |
 
-> 注：旧 `docs/Experience Report/` 工作目录已退役；所有历史体验报告统一放在本目录。
+## 3. 最常用的历史入口
 
-## 归档后如何找当前口径
+- 需要追查当前缺陷编号：先看
+  [`defects/v1.4-v1.7-defect-ledger.md`](defects/v1.4-v1.7-defect-ledger.md)。
+- 需要解释为什么从卡片改为文档式笔记：看
+  [`refactor/2026-v1.0-v1.4/需求分析.md`](refactor/2026-v1.0-v1.4/需求分析.md) 与
+  [`重构计划.md`](refactor/2026-v1.0-v1.4/重构计划.md)。
+- 需要复算 v1.0 真机问题：看 [`reports/2026-09-15/`](reports/2026-09-15/)。
+- 需要复用平台适配与发布事故经验：看 [`dev-experience/`](dev-experience/)。
+- 需要看真实学习工作流的摩擦点：看 [`experience-reports/`](experience-reports/)。
 
-| 想了解 | 看这里 |
-| :-- | :-- |
-| **全部文档地图（先看这个）** | `docs/README.md` |
-| 怎么用（安装/配置/工具/格式/排障） | `docs/用户使用指南.md` |
-| 卡片该写成什么样 | `presets/study/skills/note-format/SKILL.md`（v1.0 起为**文档式笔记**口径） |
-| 为什么这样设计（架构、模板、决策取舍） | `docs/设计文档.md` |
-| 怎么实现（API、规则表、配置、测试布局） | `docs/技术文档.md` |
-| 本轮踩了什么坑、有什么可复用技巧 | `docs/经验文档.md` |
-| 2026-09 审查发现了什么、修了没有、为什么不修（含复审 15 条） | `审查修复记录.md`（§二 首轮状态、§三 复审处置） |
-| 全功能验证怎么跑 | `docs/check/prompt-verify-all-features.md` |
-| 特性/性能/更新记录/隐私 | `README.md`（门面摘要）· `docs/用户使用指南.md` §12/§14 · `docs/更新记录.md` |
+## 4. 不应从归档直接执行的内容
+
+- 旧工具名 `card_*` 和目录式预设已经退场。
+- 旧版本中的测试数量、模块数量和部署步骤只代表当时状态。
+- 历史报告标为 P0/P1 的观察项，只有在现行维护文档复核后才算仍有效。
+- 归档里的“下一步建议”不等于已批准 backlog；当前 backlog 见
+  [`../开发维护与回归.md#5-严重历史项复核`](../开发维护与回归.md#5-严重历史项复核)。

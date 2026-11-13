@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { describe, expect, test } from 'vitest'
 
@@ -90,7 +90,7 @@ describe('文档卫生（链接 / 锚点 / 版本基线）', () => {
       'docs/用户使用指南.md',
       'docs/设计文档.md',
       'docs/技术文档.md',
-      'docs/经验文档.md',
+      'docs/开发维护与回归.md',
       'docs/更新记录.md',
       'docs/check/prompt-verify-all-features.md',
     ]
@@ -103,6 +103,16 @@ describe('文档卫生（链接 / 锚点 / 版本基线）', () => {
     // 两个 manifest 必须同版本（发布前的最后一刀）
     const plugin = JSON.parse(readFileSync(join(ROOT, 'dsh.plugin.json'), 'utf8')) as { version: string }
     expect(plugin.version).toBe(version)
+  })
+
+  test('已完成过程与时间点报告只存在于 archive', () => {
+    expect(existsSync(join(ROOT, 'docs', 'refactor'))).toBe(false)
+    expect(existsSync(join(ROOT, 'docs', 'check', 'reports'))).toBe(false)
+    expect(existsSync(join(ROOT, 'docs', '经验文档.md'))).toBe(false)
+    expect(existsSync(join(ROOT, 'docs', '待修缺陷清单.md'))).toBe(false)
+    expect(existsSync(join(ROOT, 'docs', 'archive', 'refactor', '2026-v1.0-v1.4'))).toBe(true)
+    expect(existsSync(join(ROOT, 'docs', 'archive', 'reports', '2026-09-15'))).toBe(true)
+    expect(existsSync(join(ROOT, 'docs', 'archive', 'defects', 'v1.4-v1.7-defect-ledger.md'))).toBe(true)
   })
 
   /**
