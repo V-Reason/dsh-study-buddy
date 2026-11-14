@@ -313,6 +313,22 @@ describe('archive 历史存档', () => {
     expect(() => archiveDirFor(dir, 'a/b')).toThrow('存档 id 非法')
   })
 
+  test('writeArchive 同一毫秒的两次存档不撞名、不覆盖', async () => {
+    const now = new Date('2026-10-24T10:00:00.123Z')
+    const first = await writeArchive(dir, {
+      fromId: 'same-ms', oldRel: 'a/b.md', reason: '第一次替换', content: '旧正文 1', now,
+    })
+    const second = await writeArchive(dir, {
+      fromId: 'same-ms', oldRel: 'a/b.md', reason: '第二次替换', content: '旧正文 2', now,
+    })
+
+    expect(first.id).not.toBe(second.id)
+    const list = await listArchives(dir, 'same-ms')
+    expect(list).toHaveLength(2)
+    expect((await readArchive(dir, 'same-ms', first.id))?.raw).toContain('旧正文 1')
+    expect((await readArchive(dir, 'same-ms', second.id))?.raw).toContain('旧正文 2')
+  })
+
   test('先存档后写正文：存档失败时正文一个字都不动（先红后绿的关键不变量）', async () => {
     const target = join(dir, '计算方法', '块.md')
     await mkdir(join(dir, '计算方法'), { recursive: true })

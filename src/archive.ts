@@ -14,7 +14,7 @@
  */
 
 import { promises as fsp } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { normRel } from './dirs.ts'
 import { compareText } from './order.ts'
 import { atomicWrite, ensureDir, withinRoot } from './vault.ts'
@@ -109,17 +109,39 @@ export async function writeArchive(
   input: { fromId: string; oldRel: string; reason: string; title?: string; content: string; now?: Date; stateDir?: string },
 ): Promise<ArchiveEntry> {
   const dir = archiveDirFor(vaultRoot, input.fromId, input.stateDir)
-  const stamp = archiveStamp(input.now ?? new Date())
-  const file = join(dir, `${stamp}.md`)
+  await ensureDir(dir)
+  const base = input.now ?? new Date()
+  let stamp = ''
+  let file = ''
+  let archivedAt = base
+  for (let offset = 0; offset < 1000; offset++) {
+    archivedAt = new Date(base.getTime() + offset)
+    stamp = archiveStamp(archivedAt)
+    file = join(dir, `${stamp}.md`)
+    try {
+      // 独占创建先占名：并发/同毫秒调用不会共享同一路径；随后再用原子写填充内容。
+      const claim = await fsp.open(file, 'wx')
+      await claim.close()
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      file = ''
+    }
+  }
+  if (!file) throw new Error(`存档文件名连续碰撞过多：${input.fromId} @ ${archiveStamp(base)}`)
   const meta: ArchiveMeta = {
     fromId: input.fromId,
     oldRel: normRel(input.oldRel),
-    archivedAt: (input.now ?? new Date()).toISOString(),
+    archivedAt: archivedAt.toISOString(),
     reason: String(input.reason ?? '').trim() || '未注明原因',
   }
   if (input.title) meta.title = input.title
-  await ensureDir(dirname(file))
-  await atomicWrite(file, renderArchive(meta, input.content))
+  try {
+    await atomicWrite(file, renderArchive(meta, input.content))
+  } catch (error) {
+    await fsp.rm(file, { force: true }).catch(() => {})
+    throw error
+  }
   return { id: stamp, file, meta }
 }
 
