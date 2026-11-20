@@ -235,7 +235,7 @@ if (-not $VaultRoot) {
   }
 }
 
-# 技能资产随包发：比对仓库与已安装副本的目录集合
+# 技能资产随包发：目录名相同还不够，提示词正文落后会继续用旧行为
 $skillsRepo = Join-Path $RepoRoot 'presets\study\skills'
 $skillsInstalled = Join-Path $installedDir 'presets\study\skills'
 if ((Test-Path -LiteralPath $skillsRepo) -and (Test-Path -LiteralPath $skillsInstalled)) {
@@ -244,7 +244,28 @@ if ((Test-Path -LiteralPath $skillsRepo) -and (Test-Path -LiteralPath $skillsIns
   $ghost = @($namesInstalled | Where-Object { $_ -notin $namesRepo })
   $gone = @($namesRepo | Where-Object { $_ -notin $namesInstalled })
   if ($ghost.Count -eq 0 -and $gone.Count -eq 0) {
-    Write-Ok "技能目录一致（$($namesRepo.Count) 个，随包发）"
+    $repoFiles = @(Get-ChildItem -LiteralPath $skillsRepo -File -Recurse)
+    $installedFiles = @(Get-ChildItem -LiteralPath $skillsInstalled -File -Recurse)
+    $repoRel = @($repoFiles | ForEach-Object { [System.IO.Path]::GetRelativePath($skillsRepo, $_.FullName) })
+    $installedRel = @($installedFiles | ForEach-Object { [System.IO.Path]::GetRelativePath($skillsInstalled, $_.FullName) })
+    $filesGone = @($repoRel | Where-Object { $_ -notin $installedRel })
+    $filesGhost = @($installedRel | Where-Object { $_ -notin $repoRel })
+    $changed = [System.Collections.Generic.List[string]]::new()
+    foreach ($relative in $repoRel) {
+      if ($relative -notin $installedRel) { continue }
+      $repoHash = (Get-FileHash -LiteralPath (Join-Path $skillsRepo $relative) -Algorithm SHA256).Hash
+      $instHash = (Get-FileHash -LiteralPath (Join-Path $skillsInstalled $relative) -Algorithm SHA256).Hash
+      if ($repoHash -ne $instHash) { $changed.Add($relative) }
+    }
+    if ($filesGone.Count -gt 0) { Write-Bad "已安装技能缺文件：$($filesGone -join '、')" }
+    if ($filesGhost.Count -gt 0) { Write-Bad "已安装技能有仓库不存在的文件：$($filesGhost -join '、')" }
+    if ($changed.Count -gt 0) {
+      Write-Bad "技能文件内容不一致（$($changed.Count) 个）：$($changed -join '、')"
+      Write-Info "修复：把仓库 presets\study\skills 完整同步到已安装包，再重载预设"
+    }
+    if ($filesGone.Count -eq 0 -and $filesGhost.Count -eq 0 -and $changed.Count -eq 0) {
+      Write-Ok "技能目录一致（$($namesRepo.Count) 个目录 / $($repoFiles.Count) 个文件，内容哈希一致）"
+    }
   } else {
     if ($ghost.Count -gt 0) { Write-Bad "已安装副本有仓库已删的技能目录：$($ghost -join '、')" }
     if ($gone.Count -gt 0) { Write-Bad "已安装副本缺技能目录：$($gone -join '、')" }

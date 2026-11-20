@@ -133,8 +133,11 @@ describe('study preset skills', () => {
     expect(body).toContain('讲解与笔记均可使用 Mermaid')
     expect(body).toContain('渲染失败或用户表示看不到')
     expect(body).not.toContain('对话端不渲染 Mermaid')
-    // 代码机制先落对象与时机，再上图、代码和失效边界。
+    // 代码机制先建立问题与载重概念，再进入对象、状态变化和代码。
     expect(body).toContain('第一屏')
+    expect(body).toContain('问题中心的引导式工作样例')
+    expect(body).toContain('载重概念')
+    expect(body).toContain('一个因果片段')
     expect(body).toContain('对象与时机')
     expect(body).toContain('一张主图')
     expect(body).toContain('真实代码')
@@ -146,6 +149,9 @@ describe('study preset skills', () => {
     expect(body).toContain('问题重述与不变量')
     expect(body).toContain('可见症状')
     expect(body).toContain('不写 `Next:`、下一步预告或自动邀请')
+    expect(body).toContain('用户提问时只回答被问的那一点')
+    expect(body).toContain('没懂 / 讲乱了')
+    expect(body).toContain('不能把载重概念当成已解释')
     // 生命周期、多方交互和跨时刻状态变化必须用主图守住结构。
     expect(body).toContain('生命周期、多方交互或跨时刻状态变化')
     expect(body).toContain('至少有一张主图')
@@ -187,6 +193,11 @@ describe('study preset skills', () => {
     expect(body).not.toContain('三明治')
     expect(body).not.toContain('清晰？细化/跳过？')
     expect(body).not.toContain('必须出「微计划」')
+    expect(body).toContain('问题或故障建立需求')
+    expect(body).toContain('载重概念')
+    expect(body).toContain('一个原子因果片段')
+    expect(body).toContain('只回答被问的那一点')
+    expect(body).toContain('换介质')
   })
 
   test('memory-auto 技能含自迭代要点', () => {
@@ -196,6 +207,8 @@ describe('study preset skills', () => {
     expect(body).toContain('prefs.')
     expect(body).toContain('已自动记入偏好')
     expect(body).toContain('_autoPrefs')
+    expect(body).toContain('只在语义冲突的条款上覆盖')
+    expect(body).toContain('载重概念必须先定义')
   })
 
   // 2026-10 重构：card-format → note-format。断言从"模板小节齐备"改为
@@ -228,6 +241,10 @@ describe('study preset skills', () => {
     expect(body).toContain('生命周期、多方交互或跨时刻状态变化')
     expect(body).toContain('不能把所有关系都默认画成 `flowchart`')
     expect(body).toContain('删除主图后会失去关键顺序或边界')
+    expect(body).toContain('载重概念都在首次使用前得到定义')
+    expect(body).toContain('至少有一个真实输入的状态 trace')
+    expect(body).toContain('note_lint')
+    expect(body).toContain('不能证明概念顺序')
   })
 
   test('note-format 技能写清归档十步、微目录与覆盖度口径', () => {

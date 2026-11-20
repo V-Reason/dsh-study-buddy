@@ -13,6 +13,8 @@ Current version: **v1.7.3** · [MIT](LICENSE) · DSH `>=0.1.7-rc.1 <0.3.0-0`
 - **Explanations adapt to your familiarity.** New topics are usually explained in depth; related topics studied recently can be summarized more quickly.
 - **Notes are more than chat summaries.** Each note is a self-contained knowledge unit with room for examples, derivations, code, dependency diagrams, sequence diagrams, and links to related material.
 - **You control the writing style.** Audience, tone, depth, and domain-specific expectations live in a single `笔记期望.md` file at the vault root.
+- **Concepts come before implementation.** Explanations start from an observable problem and teach load-bearing concepts before the code that depends on them.
+- **You control the pace.** The lesson advances one causal segment at a time; questions answer only the point asked, and “continue” moves to the next segment.
 - **The agent cannot silently reorganize your vault.** It proposes a folder plan before writing, and only writes after you confirm it.
 - **Your notes remain yours.** Everything is ordinary Markdown. You can edit it in Obsidian, version it with Git, and remove `.study/` without losing a note.
 
@@ -23,7 +25,7 @@ It is designed for self-directed learners in computer science, game development,
 | Capability | What it provides |
 | :-- | :-- |
 | Adaptive explanations | Chooses a quick or detailed mode from prior notes and learning history, defaulting to detail when evidence is weak |
-| Four-stage study loop | Source reading, explanation, Q&A, and note archiving form one continuous workflow |
+| Four-stage study loop | Source reading, problem-centered explanation, Q&A, and note archiving form one continuous workflow |
 | Plan-aware progress | `study_progress(brief)` returns the current thread, one next action, and completion criteria |
 | Expectation-driven notes | One `笔记期望.md` file defines the writing style instead of multiple templates |
 | Structured documents | Notes follow `source / chapter / section / block` folders, with a maintainable directory index at each topic level |
