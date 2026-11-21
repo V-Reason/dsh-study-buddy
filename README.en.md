@@ -6,7 +6,7 @@
 >
 > `dsh-study-buddy` is a study companion plugin and agent preset for [DeepSeek Harness](https://github.com/deepseek-ai/DeepSeekHarness) (DSH). It guides you from source material through adaptive explanations and follow-up questions to durable Markdown notes in an Obsidian vault.
 
-Current version: **v1.8.0** · [MIT](LICENSE) · DSH `>=0.1.7-rc.1 <0.3.0-0`
+Current version: **v1.7.3** · [MIT](LICENSE) · DSH `>=0.1.7-rc.1 <0.3.0-0`
 
 ## Why use it
 
@@ -14,7 +14,6 @@ Current version: **v1.8.0** · [MIT](LICENSE) · DSH `>=0.1.7-rc.1 <0.3.0-0`
 - **Notes are more than chat summaries.** Each note is a self-contained knowledge unit with room for examples, derivations, code, dependency diagrams, sequence diagrams, and links to related material.
 - **You control the writing style.** Audience, tone, depth, and domain-specific expectations live in a single `笔记期望.md` file at the vault root.
 - **Concepts come before implementation.** Explanations start from an observable problem and teach load-bearing concepts before the code that depends on them.
-- **The course model comes before teaching.** Project reviews inventory the whole source set, reconstruct complete runtime chains, and request approval of a visible course map.
 - **You control the pace.** The lesson advances one causal segment at a time; questions answer only the point asked, and “continue” moves to the next segment.
 - **The agent cannot silently reorganize your vault.** It proposes a folder plan before writing, and only writes after you confirm it.
 - **Your notes remain yours.** Everything is ordinary Markdown. You can edit it in Obsidian, version it with Git, and remove `.study/` without losing a note.
@@ -25,7 +24,6 @@ It is designed for self-directed learners in computer science, game development,
 
 | Capability | What it provides |
 | :-- | :-- |
-| Course compiler | Full source inventory, visible course map, complete runtime chains, prerequisite closure, and source-staleness detection |
 | Adaptive explanations | Chooses a quick or detailed mode from prior notes and learning history, defaulting to detail when evidence is weak |
 | Four-stage study loop | Source reading, problem-centered explanation, Q&A, and note archiving form one continuous workflow |
 | Plan-aware progress | `study_progress(brief)` returns the current thread, one next action, and completion criteria |
@@ -39,7 +37,7 @@ It is designed for self-directed learners in computer science, game development,
 ## How the study loop works
 
 ```text
-Read source → Compile and approve the course → Teach complete run chains → Discuss and ask → Plan and archive
+Read source → Explain → Discuss and ask → Plan and archive
      ↑                                         │
      └──────── progress, memory, and next step ┘
 ```
@@ -102,7 +100,7 @@ Copy-Item presets/study/assets/笔记期望.md "<your vault>/笔记期望.md"
 cp presets/study/assets/笔记期望.md "<your vault>/笔记期望.md"
 ```
 
-Restart DSH, create a session, and select the **学习伙伴** preset. You should see 20 `note_*` / `study_*` tools in the session.
+Restart DSH, create a session, and select the **学习伙伴** preset. You should see 19 `note_*` / `study_*` tools in the session.
 
 The `笔记期望.md` file is required. Without it, note creation is intentionally rejected with instructions for creating the file.
 
@@ -126,7 +124,7 @@ See the full [privacy and data-flow guide (Chinese)](docs/用户使用指南.md#
 
 ## Compatibility and limitations
 
-- Supports DSH `>=0.1.7-rc.1 <0.3.0-0` and exposes 20 `note_*` / `study_*` tools.
+- Supports DSH `>=0.1.7-rc.1 <0.3.0-0` and exposes 19 `note_*` / `study_*` tools.
 - Search is currently keyword-based, with CJK bigrams for Chinese retrieval; it does not use semantic vectors.
 - Coverage reporting depends on a valid `来源章节` field. Unrecognized entries are grouped as “unclassified.”
 - Detailed configuration, upgrade steps, platform compatibility history, and troubleshooting are in the [Chinese user guide](docs/用户使用指南.md).

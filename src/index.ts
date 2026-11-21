@@ -12,7 +12,7 @@
  */
 
 import { promises as fsp, statSync } from 'node:fs'
-import { basename, dirname, join, relative, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { ARTIFACT_LABEL, ARTIFACT_MARKER, PLUGIN_VERSION } from './buildInfo.ts'
 /** 笔记契约的唯一来源（阶段 6 起 card.ts / history.ts / moc.ts 已删除） */
 import {
@@ -55,11 +55,6 @@ import {
 import { indexNote, SearchIndex, snippetOf, type IndexedCard, type NoteKind, type SearchHit } from './search.ts'
 import { readProgress, writeProgress, type ProgressState } from './state.ts'
 import { formatStudyBrief, normalizeBriefText, normalizeParallelLines } from './studyBrief.ts'
-import {
-  COURSE_SCHEMA_VERSION, buildCourseInventory, courseInventorySignature, findLesson,
-  parseCourseBlueprint, resolveCourseRoot, validateCourseBlueprint,
-  type CourseInventory, type CourseState,
-} from './course.ts'
 import { buildToolDefs } from './tools.ts'
 import {
   normalizeTopicKey, readLearningState, touchLearningState, writeLearningState, type LearningState,
@@ -70,7 +65,7 @@ import {
   type StudyModeOverride, type StudyScope,
 } from './studyMode.ts'
 import {
-  atomicWrite, canonicalRootKey, dedupeFiles, dedupeRoots, ensureDir, isFsRoot, MAX_WALK_FILES, sanitizeFilename,
+  atomicWrite, canonicalRootKey, dedupeFiles, dedupeRoots, ensureDir, isFsRoot, MAX_WALK_FILES,
   readNoteSource, resolveSearchRoots, skipSetFor, walkRoots, withinRoot,
   type SearchRoot, type VaultLayout,
 } from './vault.ts'
@@ -143,41 +138,6 @@ function fmtListFile(f: { title: string; fileName: string; kind: string; sourceS
   const section = f.sourceSection ? `（${f.sourceSection}）` : ''
   const summary = f.summary ? ` —— ${f.summary}` : ''
   return `${f.title} · ${kind}${section}${summary}`
-}
-
-function parseInventoryJson(raw: string, file: string): CourseInventory {
-  let value: unknown
-  try {
-    value = JSON.parse(raw)
-  } catch (error) {
-    throw new Error(`课程来源清单损坏：${file}（${(error as Error).message}）`)
-  }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`课程来源清单损坏：${file}（顶层必须是对象）`)
-  }
-  const inventory = value as CourseInventory
-  if (inventory.version !== COURSE_SCHEMA_VERSION || !Array.isArray(inventory.files)
-    || !Array.isArray(inventory.roots) || typeof inventory.courseId !== 'string') {
-    throw new Error(`课程来源清单损坏或版本不受支持：${file}`)
-  }
-  return inventory
-}
-
-function parseCourseStateJson(raw: string, file: string): CourseState {
-  let value: unknown
-  try {
-    value = JSON.parse(raw)
-  } catch (error) {
-    throw new Error(`课程状态损坏：${file}（${(error as Error).message}）`)
-  }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`课程状态损坏：${file}（顶层必须是对象）`)
-  }
-  const state = value as CourseState
-  if (state.version !== COURSE_SCHEMA_VERSION || !state.courseId || !state.blueprintPath) {
-    throw new Error(`课程状态损坏或版本不受支持：${file}`)
-  }
-  return state
 }
 
 /** `note_overview` 用的目录遍历结果（只读 frontmatter 头，不读正文） */
@@ -275,19 +235,6 @@ export class VaultStore {
   private memoryFile(): string {
     const p = join(this.layout.vaultRoot, this.layout.stateDir, 'memory.json')
     if (!withinRoot(this.layout.vaultRoot, p)) throw new Error('记忆文件路径越界')
-    return p
-  }
-
-  private courseStateFile(): string {
-    const p = join(this.layout.vaultRoot, this.layout.stateDir, 'course.json')
-    if (!withinRoot(this.layout.vaultRoot, p)) throw new Error('课程状态文件路径越界')
-    return p
-  }
-
-  private courseInventoryFile(courseId: string): string {
-    const dir = sanitizeFilename(courseId)
-    const p = join(this.layout.vaultRoot, this.layout.stateDir, 'courses', dir, 'inventory.json')
-    if (!withinRoot(this.layout.vaultRoot, p)) throw new Error('课程来源清单路径越界')
     return p
   }
 
@@ -1524,21 +1471,8 @@ export class VaultStore {
       return '学习进度已清空。'
     }
     const current = await readProgress(file)
-    if (action === 'get' || action === 'brief') {
-      const course = await this.readCourseState()
-      const courseLines = course
-        ? [
-            `课程：${course.title}（${course.courseId}）`,
-            `课程状态：${course.status}`,
-            `课程位置：${course.currentRun ?? '-'} / ${course.currentLesson ?? '-'}`,
-            `课程上一输出：${course.previousOutput ?? '-'}`,
-          ]
-        : []
-      if (action === 'get') return [fmtProgress(current), ...courseLines].filter(Boolean).join('\n')
-      const brief = formatStudyBrief(current)
-      if (brief === '尚未记录学习计划上下文。' && courseLines.length > 0) return courseLines.join('\n')
-      return [brief, ...courseLines].filter(Boolean).join('\n')
-    }
+    if (action === 'get') return fmtProgress(current)
+    if (action === 'brief') return formatStudyBrief(current)
     const next: ProgressState = { ...current }
     if (fields.material !== undefined) next.currentMaterial = String(fields.material).trim()
     if (fields.section !== undefined) next.currentSection = String(fields.section).trim()
@@ -1566,236 +1500,6 @@ export class VaultStore {
     }
     await writeProgress(file, next)
     return fmtProgress(next)
-  }
-
-  private async readCourseState(): Promise<CourseState | undefined> {
-    const file = this.courseStateFile()
-    try {
-      return parseCourseStateJson(await fsp.readFile(file, 'utf8'), file)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return undefined
-      throw error
-    }
-  }
-
-  private async readCourseInventory(courseId: string): Promise<CourseInventory> {
-    const file = this.courseInventoryFile(courseId)
-    try {
-      return parseInventoryJson(await fsp.readFile(file, 'utf8'), file)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
-        throw new Error(`课程 "${courseId}" 还没有来源清单：先调用 study_course(action=inventory)`)
-      }
-      throw error
-    }
-  }
-
-  private async loadCourseBlueprint(blueprintRef: string, sessionCwd?: string): Promise<{
-    raw: string
-    relativePath: string
-    hash: string
-    blueprint: ReturnType<typeof parseCourseBlueprint>
-  }> {
-    const { card, raw } = await this.resolveCard(blueprintRef, sessionCwd)
-    if (!withinRoot(this.layout.vaultRoot, card.path)) {
-      throw new Error(`课程母图必须位于 vault 内：${card.path}`)
-    }
-    return {
-      raw,
-      relativePath: relative(this.layout.vaultRoot, card.path).replace(/\\/g, '/'),
-      hash: (await signatureOf(card.path)) ?? '',
-      blueprint: parseCourseBlueprint(raw),
-    }
-  }
-
-  private async courseFreshness(state: CourseState): Promise<{
-    inventory: CourseInventory
-    blueprintRaw: string
-    reasons: string[]
-  }> {
-    const inventoryFile = join(this.layout.vaultRoot, state.inventoryPath)
-    if (!withinRoot(this.layout.vaultRoot, inventoryFile)) throw new Error('课程清单路径越界')
-    const inventory = parseInventoryJson(await fsp.readFile(inventoryFile, 'utf8'), inventoryFile)
-    const blueprintFile = join(this.layout.vaultRoot, state.blueprintPath)
-    if (!withinRoot(this.layout.vaultRoot, blueprintFile)) throw new Error('课程母图路径越界')
-    const blueprintRaw = await fsp.readFile(blueprintFile, 'utf8')
-    const reasons: string[] = []
-    if ((await signatureOf(blueprintFile)) !== state.blueprintHash) reasons.push('蓝图已变化')
-    const current = await buildCourseInventory(inventory.courseId, inventory.roots.map((root) => root.path), {
-      maxFiles: this.layout.maxWalkFiles,
-      skipDirs: this.layout.skipDirs,
-    })
-    if (courseInventorySignature(current) !== state.inventorySignature) reasons.push('来源已变化')
-    return { inventory, blueprintRaw, reasons }
-  }
-
-  /**
-   * 课程备课门禁：来源清单、蓝图验证、显式激活与当前讲次位置。
-   *
-   * 课程正文保存在可见 Markdown；本方法只维护批准指纹、来源快照和当前位置。
-   */
-  async studyCourse(action: string, fields: {
-    courseId?: string
-    roots?: string[]
-    blueprintRef?: string
-    run?: string
-    lesson?: string
-    previousOutput?: string
-    mapSlice?: string
-  }, call?: { sessionCwd?: string }): Promise<string> {
-    if (!['inventory', 'validate', 'activate', 'status', 'position', 'clear'].includes(action)) {
-      throw new Error(`study_course 未知 action "${action}"（可用 inventory/validate/activate/status/position/clear）`)
-    }
-    await this.assertVault()
-    const stateFile = this.courseStateFile()
-
-    if (action === 'clear') {
-      await fsp.rm(stateFile, { force: true })
-      return '活动课程已清除（课程母图与来源清单保留）。'
-    }
-
-    if (action === 'inventory') {
-      const courseId = String(fields.courseId ?? '').trim()
-      if (!courseId) throw new Error('inventory 需要 courseId')
-      const configured = this.layout.lint?.sourceRoots?.length
-        ? this.layout.lint.sourceRoots
-        : (this.layout.searchRoots ?? []).map((root) => resolve(this.layout.vaultRoot, root))
-      const rawRoots = fields.roots?.length ? fields.roots : configured
-      if (rawRoots.length === 0) {
-        throw new Error('没有来源根：传 roots，或配置 lint.sourceRoots / searchRoots')
-      }
-      const roots = [...new Set(rawRoots.map((root) => resolveCourseRoot(root, call?.sessionCwd)))]
-      for (const root of roots) {
-        if (isFsRoot(root)) throw new Error(`课程来源根不能是文件系统根：${root}`)
-        const stat = await fsp.stat(root).catch(() => undefined)
-        if (!stat?.isDirectory()) throw new Error(`课程来源根不存在或不是目录：${root}`)
-      }
-      const inventory = await buildCourseInventory(courseId, roots, {
-        maxFiles: this.layout.maxWalkFiles,
-        skipDirs: this.layout.skipDirs,
-      })
-      const inventoryFile = this.courseInventoryFile(courseId)
-      await atomicWrite(inventoryFile, `${JSON.stringify(inventory, null, 2)}\n`)
-      const extCounts = new Map<string, number>()
-      for (const file of inventory.files) {
-        const ext = file.extension || '(无扩展名)'
-        extCounts.set(ext, (extCounts.get(ext) ?? 0) + 1)
-      }
-      const samples = inventory.files.slice(0, 12).map((file) => `- ${file.path}`)
-      return [
-        `来源清单已生成：${relative(this.layout.vaultRoot, inventoryFile).replace(/\\/g, '/')}`,
-        `课程：${courseId}`,
-        `来源文件：${inventory.files.length}（${inventory.roots.length} 个根）`,
-        `类型：${[...extCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([ext, count]) => `${ext} ${count}`).join('、')}`,
-        inventory.skipped.length ? `⚠ 跳过 ${inventory.skipped.length} 项，激活前检查原因` : '跳过项：0',
-        '',
-        '首批文件：',
-        ...samples,
-      ].join('\n')
-    }
-
-    if (action === 'validate' || action === 'activate') {
-      const ref = String(fields.blueprintRef ?? '').trim()
-      if (!ref) throw new Error(`${action} 需要 blueprintRef`)
-      const loaded = await this.loadCourseBlueprint(ref, call?.sessionCwd)
-      const inventory = await this.readCourseInventory(loaded.blueprint.courseId)
-      const current = await buildCourseInventory(inventory.courseId, inventory.roots.map((root) => root.path), {
-        maxFiles: this.layout.maxWalkFiles,
-        skipDirs: this.layout.skipDirs,
-      })
-      if (courseInventorySignature(current) !== courseInventorySignature(inventory)) {
-        const message = '课程验证失败：来源已变化，请重新运行 study_course(action=inventory)'
-        if (action === 'activate') throw new Error(message)
-        return message
-      }
-      const report = validateCourseBlueprint(loaded.blueprint, inventory)
-      if (report.errors.length > 0) {
-        const message = `课程验证失败（${report.errors.length} error）：\n${report.errors.map((error) => `- ${error}`).join('\n')}`
-        if (action === 'activate') throw new Error(message)
-        return message
-      }
-      const warningText = report.warnings.length
-        ? `\n⚠ ${report.warnings.length} warning：\n${report.warnings.map((warning) => `- ${warning}`).join('\n')}`
-        : ''
-      if (action === 'validate') {
-        return `课程验证通过：${loaded.blueprint.title}（${loaded.blueprint.runs.length} 条运行链）${warningText}`
-      }
-      const firstRun = loaded.blueprint.runs[0]
-      const firstLesson = firstRun.lessons[0]
-      const previous = await this.readCourseState()
-      const preserved = previous?.courseId === loaded.blueprint.courseId
-        && previous.currentRun && previous.currentLesson
-        ? findLesson(loaded.blueprint, previous.currentRun, previous.currentLesson)
-        : undefined
-      const state: CourseState = {
-        version: COURSE_SCHEMA_VERSION,
-        status: 'active',
-        courseId: loaded.blueprint.courseId,
-        title: loaded.blueprint.title,
-        blueprintPath: loaded.relativePath,
-        blueprintHash: loaded.hash,
-        inventoryPath: relative(this.layout.vaultRoot, this.courseInventoryFile(loaded.blueprint.courseId)).replace(/\\/g, '/'),
-        inventorySignature: courseInventorySignature(inventory),
-        activatedAt: new Date().toISOString(),
-        currentRun: preserved?.run.id ?? firstRun.id,
-        currentLesson: preserved?.lesson.id ?? firstLesson.id,
-        previousOutput: preserved ? previous?.previousOutput ?? preserved.lesson.previousOutput : firstLesson.previousOutput,
-        mapSlice: preserved
-          ? previous?.mapSlice ?? `${preserved.run.title} / ${preserved.lesson.title}`
-          : `${firstRun.title} / ${firstLesson.title}`,
-        updatedAt: new Date().toISOString(),
-      }
-      await atomicWrite(stateFile, `${JSON.stringify(state, null, 2)}\n`)
-      return `课程已激活：${state.title}（${state.courseId}）\n位置：${state.currentRun} / ${state.currentLesson}${warningText}`
-    }
-
-    const state = await this.readCourseState()
-    if (!state) return '尚未激活课程。先完成 inventory → validate，再由用户确认 activate。'
-
-    if (action === 'status') {
-      const fresh = await this.courseFreshness(state)
-      if (fresh.reasons.length > 0) {
-        const stale: CourseState = { ...state, status: 'stale', updatedAt: new Date().toISOString() }
-        await atomicWrite(stateFile, `${JSON.stringify(stale, null, 2)}\n`)
-        return [
-          `课程：${state.title}（${state.courseId}）`,
-          `状态：${fresh.reasons.join('、')}`,
-          `位置：${state.currentRun ?? '-'} / ${state.currentLesson ?? '-'}`,
-          '下一步：重新 inventory、validate，并由用户确认 activate。',
-        ].join('\n')
-      }
-      return [
-        `课程：${state.title}（${state.courseId}）`,
-        `状态：active`,
-        `位置：${state.currentRun ?? '-'} / ${state.currentLesson ?? '-'}`,
-        `地图切片：${state.mapSlice ?? '-'}`,
-        `上一输出：${state.previousOutput ?? '-'}`,
-      ].join('\n')
-    }
-
-    const fresh = await this.courseFreshness(state)
-    if (fresh.reasons.length > 0) {
-      const stale: CourseState = { ...state, status: 'stale', updatedAt: new Date().toISOString() }
-      await atomicWrite(stateFile, `${JSON.stringify(stale, null, 2)}\n`)
-      throw new Error(`课程已失效：${fresh.reasons.join('、')}；请重新 inventory、validate、activate`)
-    }
-    const runId = String(fields.run ?? '').trim()
-    const lessonId = String(fields.lesson ?? '').trim()
-    const previousOutput = String(fields.previousOutput ?? '').trim()
-    if (!runId || !lessonId || !previousOutput) throw new Error('position 需要 run、lesson 与 previousOutput')
-    const found = findLesson(parseCourseBlueprint(fresh.blueprintRaw), runId, lessonId)
-    if (!found) throw new Error(`课程位置不存在：${runId} / ${lessonId}`)
-    const next: CourseState = {
-      ...state,
-      status: 'active',
-      currentRun: runId,
-      currentLesson: lessonId,
-      previousOutput,
-      mapSlice: String(fields.mapSlice ?? `${found.run.title} / ${found.lesson.title}`).trim(),
-      updatedAt: new Date().toISOString(),
-    }
-    await atomicWrite(stateFile, `${JSON.stringify(next, null, 2)}\n`)
-    return `课程位置：${next.currentRun} / ${next.currentLesson}\n上一输出：${next.previousOutput}\n地图切片：${next.mapSlice}`
   }
 
   private learningFile(): string {

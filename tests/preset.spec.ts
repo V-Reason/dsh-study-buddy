@@ -174,7 +174,7 @@ describe('presets/study.patch.yml 声明卫生', () => {
     for (const gone of ['card_create', 'card_update', 'card_link', 'card_moc', 'card_lint', 'card_history', 'card_rename', 'card_search', 'card_get', 'card_id']) {
       expect(text, `persona/config 仍提到已退场的 ${gone}`).not.toContain(gone)
     }
-    for (const tool of ['note_write', 'note_plan', 'note_expect_get', 'note_toc', 'note_overview', 'study_mode', 'study_course']) {
+    for (const tool of ['note_write', 'note_plan', 'note_expect_get', 'note_toc', 'note_overview', 'study_mode']) {
       expect(text, `persona 应写明 ${tool}`).toContain(tool)
     }
   })
@@ -208,11 +208,6 @@ describe('presets/study.patch.yml 声明卫生', () => {
     expect(text).toContain('没懂 / 讲乱了')
     expect(text).toContain('不写 `Next:`、下一步预告或自动邀请')
     expect(text).toContain('至少有一张主图')
-    expect(text).toContain('course-compiler')
-    expect(text).toContain('完整运行链')
-    expect(text).toContain('课程母图')
-    expect(text).toContain('不把沉默当作掌握')
-    expect(text).toContain('不主动测验')
     expect(text).toContain('一段一个观点')
     expect(text).toContain('问题重述与不变量')
     expect(text).toContain('可见症状')
@@ -263,10 +258,6 @@ describe('presets/study.patch.yml 声明卫生', () => {
     expect(template).toContain('一个主机制和最多两个直接后果')
     expect(template).toContain('只答被问的那一点')
     expect(template).toContain('教学主线＋工程索引')
-    expect(template).toContain('## 课程母图')
-    expect(template).toContain('完整运行链')
-    expect(template).toContain('course-anchor')
-    expect(template).toContain('不主动测验')
     expect(template).toContain('至少有一张主图')
     expect(template).toContain('一段一个观点')
     expect(template).toContain('问题重述与不变量')

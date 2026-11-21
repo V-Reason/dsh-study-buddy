@@ -102,35 +102,11 @@ describe('study preset skills', () => {
     expect(unique.size).toBe(names.length)
   })
 
-  test('技能集合恰为 8 个既有技能', () => {
+  test('技能集合恰为 7 个既有技能', () => {
     const names = listSkills().map(({ skill }) => skill.name).sort()
     expect(names).toEqual(
-      ['note-format', 'domain-adaptation', 'file-reading', 'incremental-update', 'memory-auto', 'study-loop', 'output-style', 'course-compiler'].sort(),
+      ['note-format', 'domain-adaptation', 'file-reading', 'incremental-update', 'memory-auto', 'study-loop', 'output-style'].sort(),
     )
-  })
-
-  test('course-compiler：全量覆盖、五条运行链、证据与用户批准门禁', () => {
-    const skill = listSkills().find(({ dir }) => dir === 'course-compiler')
-    expect(skill).toBeDefined()
-    const body = skill!.skill.body
-    expect(body).toContain('全量覆盖')
-    expect(body).toContain('分层精读')
-    expect(body).toContain('课程母图')
-    expect(body).toContain('完整运行链')
-    expect(body).toContain('course-json')
-    expect(body).toContain('study_course')
-    expect(body).toContain('inventory')
-    expect(body).toContain('validate')
-    expect(body).toContain('activate')
-    expect(body).toContain('用户明确批准')
-    expect(body).toContain('不推断掌握')
-    expect(body).toContain('主轴必懂')
-    expect(body).toContain('当前支撑')
-    expect(body).toContain('实现细节')
-    expect(body).toContain('以后可查')
-    expect(body).toContain('源码/测试/运行事实')
-    expect(body).toContain('旧笔记')
-    expect(body).toContain('不是实际 PowerPoint')
   })
 
   test('output-style 固化自然正文、按关系选图、克制的结构使用与自适应模式', () => {
@@ -176,10 +152,6 @@ describe('study preset skills', () => {
     expect(body).toContain('用户提问时只回答被问的那一点')
     expect(body).toContain('没懂 / 讲乱了')
     expect(body).toContain('不能把载重概念当成已解释')
-    expect(body).toContain('课程母图')
-    expect(body).toContain('当前地图位置')
-    expect(body).toContain('上一输出')
-    expect(body).toContain('不主动测验')
     // 生命周期、多方交互和跨时刻状态变化必须用主图守住结构。
     expect(body).toContain('生命周期、多方交互或跨时刻状态变化')
     expect(body).toContain('至少有一张主图')
@@ -192,7 +164,7 @@ describe('study preset skills', () => {
     const style = listSkills().find(({ dir }) => dir === 'output-style')!.skill.body
     expect(loop).toContain('study_progress(action=brief)')
     expect(loop).toContain('静默读取')
-    expect(loop).toContain('运行片段结束后')
+    expect(loop).toContain('完整知识单元结束后')
     expect(loop).toContain('不主动询问是否继续')
     expect(style).toContain('默认不展示模式标签')
     expect(style).toContain('不做主动复习提醒')
@@ -213,10 +185,7 @@ describe('study preset skills', () => {
   test('讲解技能不再强制固定行数、三明治或自动预览', () => {
     const body = listSkills().find(({ dir }) => dir === 'study-loop')!.skill.body
     expect(body).toContain('study_mode')
-    expect(body).toContain('完整运行链')
-    expect(body).toContain('study_course')
-    expect(body).toContain('课程母图')
-    expect(body).toContain('不把沉默当作掌握')
+    expect(body).toContain('一个完整知识单元')
     expect(body).toContain('默认不生成笔记预览')
     expect(body).not.toContain('≤15 行')
     expect(body).not.toContain('问答 3~6 行')
@@ -276,10 +245,6 @@ describe('study preset skills', () => {
     expect(body).toContain('至少有一个真实输入的状态 trace')
     expect(body).toContain('note_lint')
     expect(body).toContain('不能证明概念顺序')
-    expect(body).toContain('course-anchor')
-    expect(body).toContain('运行链：R')
-    expect(body).toContain('上一输出：')
-    expect(body).toContain('本步输出：')
   })
 
   test('note-format 技能写清归档十步、微目录与覆盖度口径', () => {

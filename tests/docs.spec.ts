@@ -11,9 +11,7 @@ import { describe, expect, test } from 'vitest'
  */
 
 const ROOT = join(import.meta.dirname, '..')
-// tmp/ 存放用户导出的真实会话与外部 vault 引用，不是受仓库维护的现行文档。
-// 把它纳入文档检查会把“记录里指向外部资料”误判成产品文档断链。
-const SKIP_DIRS = new Set(['node_modules', '.git', 'lib', 'dist', 'coverage', 'tmp'])
+const SKIP_DIRS = new Set(['node_modules', '.git', 'lib', 'dist', 'coverage'])
 
 function collectMarkdown(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

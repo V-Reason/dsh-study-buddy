@@ -800,10 +800,10 @@ export async function runChecks(
       'note_library', 'note_expect_get', 'note_list', 'note_get', 'note_search', 'note_overview',
       'note_plan', 'note_write', 'note_update', 'note_toc', 'note_link', 'note_unlink',
       'note_rename', 'note_history', 'note_restore', 'note_lint', 'study_progress', 'study_memory',
-      'study_mode', 'study_course',
+      'study_mode',
     ]
 
-    log('工具面（20 个 note_* / study_*）')
+    log('工具面（19 个 note_* / study_*）')
     await check('工具数量与名字与仓库约定一致', 'toolsRegister', () => {
       const defs = mod.buildToolDefs({})
       const names = defs.map((def) => def.name)
@@ -840,7 +840,7 @@ export async function runChecks(
           return { ok: false, message: `${def.name}: render 返回 ${JSON.stringify(rendered)}（应 [{type:'text',text}]）` }
         }
       }
-      return { note: '20 个工具全部符合' }
+      return { note: '19 个工具全部符合' }
     })
 
     await check('工具定义可无损 JSON 序列化（注册表会快照参数与输出）', 'toolsRegister', () => {
@@ -851,7 +851,7 @@ export async function runChecks(
     })
 
     log('宿主接线（apply → 注册 / 系统提示段 / 预步监听）')
-    await check('apply 注册 20 个工具且 effect 卸载后全部注销', 'toolsRegister', () => {
+    await check('apply 注册 19 个工具且 effect 卸载后全部注销', 'toolsRegister', () => {
       const fake = fakeContext()
       mod.apply(fake.ctx, { vaultRoot: tempVault })
       if (fake.registered.size !== expected.length) {
@@ -859,12 +859,12 @@ export async function runChecks(
       }
       for (const callback of fake.effects) callback()()
       if (fake.registered.size !== 0) return { ok: false, message: 'effect 执行后仍有残留注册（生命周期不可逆）' }
-      return { note: '注册 20 / 注销 20' }
+      return { note: '注册 19 / 注销 19' }
     })
 
     // 负向断言（迁移指南铁律 3）：替身刻意**不提供** settings —— DSH 0.1.7-rc.1 删掉了
     // `ctx.settings.register`，任何"只有 settings 在才工作"的写法会整行未激活。
-    await check('负向：假 ctx 不给 settings（0.1.7 已删 register），apply 仍注册 20 个工具', 'toolsRegister', () => {
+    await check('负向：假 ctx 不给 settings（0.1.7 已删 register），apply 仍注册 19 个工具', 'toolsRegister', () => {
       const fake = fakeContext()
       if (typeof fake.ctx.get('settings') !== 'undefined') return { ok: false, message: '替身意外提供了 settings' }
       mod.apply(fake.ctx, { vaultRoot: tempVault })

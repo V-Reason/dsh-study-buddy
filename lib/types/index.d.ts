@@ -51,8 +51,6 @@ export declare class VaultStore {
     constructor(layout: VaultLayout);
     private stateFile;
     private memoryFile;
-    private courseStateFile;
-    private courseInventoryFile;
     private assertVault;
     /** 当前会话的检索根：vault（可写）优先，随后配置的 searchRoots，最后（可选）会话工作目录（只读） */
     private rootsFor;
@@ -267,26 +265,6 @@ export declare class VaultStore {
         doneWhen?: string;
         lastOutcome?: string;
         parallelLines?: string[];
-    }): Promise<string>;
-    private readCourseState;
-    private readCourseInventory;
-    private loadCourseBlueprint;
-    private courseFreshness;
-    /**
-     * 课程备课门禁：来源清单、蓝图验证、显式激活与当前讲次位置。
-     *
-     * 课程正文保存在可见 Markdown；本方法只维护批准指纹、来源快照和当前位置。
-     */
-    studyCourse(action: string, fields: {
-        courseId?: string;
-        roots?: string[];
-        blueprintRef?: string;
-        run?: string;
-        lesson?: string;
-        previousOutput?: string;
-        mapSlice?: string;
-    }, call?: {
-        sessionCwd?: string;
     }): Promise<string>;
     private learningFile;
     private modeSession;

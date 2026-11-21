@@ -15,7 +15,7 @@
 import { blankOutBlocks, scanCodeFences } from './notemodel.ts'
 
 /** 会话残留：带机器根的路径；仓库相对的 `Assets/...` 源码地图是长期资产，不在此列 */
-export const RESIDUE_PATH_RE = /(?:(?<![A-Za-z])[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/]|file:\/\/|~\/|\/(?:Users|home|mnt|Volumes)\/)/
+export const RESIDUE_PATH_RE = /(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/]|file:\/\/|~\/|\/(?:Users|home|mnt|Volumes)\/)/
 /** 会话残留：源码行号（需紧跟文件名或成 `L35-55` 区间；`L0/L1/L2` 球谐带白名单） */
 export const RESIDUE_LINE_RE = /\bL\d+(?:\s*[-–]\s*L?\d+)?\b/
 /** 会话残留：第二人称 */

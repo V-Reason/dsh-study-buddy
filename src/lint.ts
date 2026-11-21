@@ -277,29 +277,6 @@ export const RULES: Rule[] = [
     },
   },
   {
-    id: 'course-anchor',
-    title: '课程笔记锚点',
-    severity: 'error',
-    run(ctx) {
-      if (!ctx.body.includes('<!-- course-anchor -->')) return []
-      const required = ['运行链', '课程位置', '上一输出', '本步输出']
-      const missing = required.filter((label) => (
-        !new RegExp(`^\\s*[-*]\\s*${label}\\s*[:：]\\s*\\S`, 'm').test(ctx.body)
-      ))
-      if (missing.length === 0) return []
-      return [{
-        rule: 'course-anchor',
-        severity: 'error',
-        title: '课程笔记锚点',
-        message: `课程锚点缺少：${missing.join('、')}`,
-        line: ctx.body.indexOf('<!-- course-anchor -->') >= 0
-          ? lineOfIndex(ctx.body, ctx.body.indexOf('<!-- course-anchor -->'))
-          : 0,
-        suggestion: '补齐运行链、课程位置、上一输出与本步输出，且每项写实际值',
-      }]
-    },
-  },
-  {
     id: 'external-resource',
     title: '外部资源',
     severity: 'info',
