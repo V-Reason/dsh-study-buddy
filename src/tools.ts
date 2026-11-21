@@ -1,11 +1,11 @@
 /**
- * 工具定义注册表（模型可见的 19 个 `note_*` / `study_*` 工具）。
+ * 工具定义注册表（模型可见的 20 个 `note_*` / `study_*` 工具）。
  *
  * 工具 schema 本身是"提示词资产"（描述即文档）：本文件与 VaultStore 业务逻辑分文件，
  * 各自演进更清晰；工具只做参数解析与委派，业务在 VaultStore。
  *
  * 2026-10 重构：`card_*` 整族退场（需求 R18），改为文档式笔记工具面；工具数取
- * v1.3.0 增至 19 个（新增 study_mode）——列目录/看单篇/搜全库/看覆盖度各自独立，
+ * v1.8.0 增至 20 个（新增 study_course）——课程编译与授课门禁独立于局部讲解模式，
  * 模型不必靠参数分支猜语义（需求方定稿："宁可多不要挤"）。
  *
  * 硬门禁（需求 F2/R25）落在 `note_write`：未读期望 / 未确认规划 / 越界路径一律拒绝，
@@ -513,6 +513,46 @@ export function buildToolDefs(store: VaultStore): ToolDef[] {
         key: args.key !== undefined && args.key !== null ? String(args.key) : undefined,
         value: args.value !== undefined && args.value !== null ? String(args.value) : undefined,
       }),
+    },
+    {
+      name: 'study_course',
+      description:
+        '课程编译与授课门禁：inventory=建立全文件来源清单；validate=校验覆盖、依赖与讲次蓝图；'
+        + 'activate=仅在用户明确批准后激活（不推断掌握）；status=检查蓝图/来源是否失效与当前位置；'
+        + 'position=记录当前运行链、讲次、上一输出和地图切片；clear=清除活动课程状态。'
+        + '课程母图必须是 vault 内可见 Markdown；未验证、来源变化或蓝图变化时不得继续按旧路线授课。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['inventory', 'validate', 'activate', 'status', 'position', 'clear'],
+            description: '课程编译动作',
+          },
+          courseId: { type: 'string', description: 'inventory：课程稳定 ID' },
+          roots: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'inventory：来源根；省略时使用 lint.sourceRoots / searchRoots',
+          },
+          blueprintRef: { type: 'string', description: 'validate/activate：课程母图 ID、标题或路径' },
+          run: { type: 'string', description: 'position：运行链 ID，如 R2' },
+          lesson: { type: 'string', description: 'position：讲次 ID，如 R2.3' },
+          previousOutput: { type: 'string', description: 'position：上一节点留下的可观察输出' },
+          mapSlice: { type: 'string', description: 'position：本轮使用的课程总图切片' },
+        },
+        required: ['action'],
+      },
+      output,
+      execute: (args, exec) => store.studyCourse(String(args.action ?? 'status'), {
+        courseId: args.courseId !== undefined ? String(args.courseId) : undefined,
+        roots: stringList(args.roots),
+        blueprintRef: args.blueprintRef !== undefined ? String(args.blueprintRef) : undefined,
+        run: args.run !== undefined ? String(args.run) : undefined,
+        lesson: args.lesson !== undefined ? String(args.lesson) : undefined,
+        previousOutput: args.previousOutput !== undefined ? String(args.previousOutput) : undefined,
+        mapSlice: args.mapSlice !== undefined ? String(args.mapSlice) : undefined,
+      }, { sessionCwd: sessionCwdOf(exec) }),
     },
     {
       name: 'study_mode',

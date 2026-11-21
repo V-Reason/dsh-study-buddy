@@ -28,11 +28,11 @@ describe('lint 规则注册表', () => {
   test('规则集含数据卫生与围栏闭合，模板类规则已彻底退场', () => {
     expect(ruleIds()).toEqual([
       'session-residue', 'fence-balance', 'mermaid-syntax', 'code-language', 'diagram-budget',
-      'engineering-source-map', 'engineering-evidence', 'source-reference', 'external-resource', 'expect-rule',
+      'engineering-source-map', 'engineering-evidence', 'source-reference', 'course-anchor', 'external-resource', 'expect-rule',
     ])
-    expect(RULES).toHaveLength(10)
+    expect(RULES).toHaveLength(11)
     expect(ruleCatalog().map((r) => r.severity)).toEqual([
-      'warn', 'error', 'error', 'warn', 'warn', 'warn', 'warn', 'error', 'info', 'info',
+      'warn', 'error', 'error', 'warn', 'warn', 'warn', 'warn', 'error', 'error', 'info', 'info',
     ])
     expect(ruleTitle('session-residue')).toBe('会话残留')
     expect(ruleTitle('不存在的规则')).toBe('不存在的规则')
@@ -61,6 +61,14 @@ describe('lint 规则注册表', () => {
     expect(off.findings.filter((f) => f.rule === 'session-residue')).toEqual([])
     expect(off.notRun).toContain('会话残留')
     expect(off.passed['session-residue']).toBeUndefined()
+  })
+
+  test('会话残留不把 http/https 外链误报成本机盘符路径', () => {
+    const report = lintNote({
+      title: '外链',
+      body: '[资料](https://example.com/a) 与 [论文](http://example.com/b)',
+    })
+    expect(report.findings.filter((finding) => finding.rule === 'session-residue')).toEqual([])
   })
 
   test('会话残留：residueLevel=error 时严重度升级（但仍不阻塞写盘）', () => {
@@ -160,6 +168,29 @@ describe('lint 规则注册表', () => {
     ].join('\n')
     const report = lintNote({ title: '装配', body })
     expect(report.findings.find((f) => f.rule === 'diagram-budget')?.severity).toBe('warn')
+  })
+
+  test('课程笔记锚点：标记后必须写清运行链、位置、上一输出与本步输出', () => {
+    const missing = lintNote({
+      title: '输入缓冲',
+      body: '<!-- course-anchor -->\n- 运行链：R2\n- 课程位置：R2.3\n',
+    })
+    const hit = missing.findings.find((finding) => finding.rule === 'course-anchor')
+    expect(hit?.severity).toBe('error')
+    expect(hit?.message).toContain('上一输出')
+    expect(hit?.message).toContain('本步输出')
+
+    const valid = lintNote({
+      title: '输入缓冲',
+      body: [
+        '<!-- course-anchor -->',
+        '- 运行链：R2',
+        '- 课程位置：R2.3',
+        '- 上一输出：采样帧留下按下沿',
+        '- 本步输出：缓冲中保留有效时刻',
+      ].join('\n'),
+    })
+    expect(valid.findings.some((finding) => finding.rule === 'course-anchor')).toBe(false)
   })
 
   test('源码地图在已知根下不存在时是 error，未提供根时只提示待验证', () => {
